@@ -262,7 +262,10 @@ def preview(text, width):
 EDIT_HINT = "  Enter save   Esc cancel   ^U clear the line"
 # Only shown when editing a message memory: the tokens mean nothing when the
 # field being edited is the callsign they would be filled in from.
-EDIT_TOKENS_HINT = "  {call} {name} {qth} {grid} {rig} fill in;  \\n starts a new line"
+# 62 characters, against the panel's 66. Adding another token means shortening
+# the tail, not letting it wrap.
+EDIT_TOKENS_HINT = ("  {call} {name} {qth} {grid} {rig} {ant} {power};"
+                    "  \\n new line")
 
 
 def edit_hint(secret=False, revealed=False):
@@ -679,6 +682,295 @@ def wifi_screen(state, networks, width, height, radio="on", selected=0,
     footer = footers.get(
         state, "Esc back  ↑↓ move  Enter join  n name  f forget  s scan  r radio")
     out.append([(" " + footer[:width - 1], "dim")])
+    return out[:height]
+
+
+# Screen row of the first contact on the log screen: the header and the rule
+# under it come first. Kept as a constant for the same reason PAIR_ROW0 is —
+# anything that turns a row number back into a record has to track this
+# function rather than guess at it.
+LOG_ROW0 = 2
+
+
+# On and off, in glyphs the shipped console font is known to have. `■`/`□`
+# are not among them (AGENTS.md); `█` is a filled cell in a console font,
+# which is what a filled square means here, and `·` is the lightest mark that
+# still reads as a place where something could be.
+FIELD_ON, FIELD_OFF = "\u2588", "\u00b7"
+
+
+def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
+                        footer=""):
+    """Which fields an activity uses. `rows` is [(name, label, on), ...].
+
+    One screen for one question. The ordering is asked separately, because
+    answering both at once means every keystroke has to say which it meant.
+    """
+    out = []
+    chosen = sum(1 for _n, _l, on in rows if on)
+    head = f" {title}"
+    right = f"{chosen} of {len(rows)} chosen "
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    for i, (name, label, on) in enumerate(rows):
+        mark = "\u25b8" if i == selected else " "
+        box = FIELD_ON if on else FIELD_OFF
+        help_text = ""
+        try:
+            import activities
+            help_text = activities.FIELD_HELP.get(name, "")
+        except Exception:
+            help_text = ""
+        line = f"{mark} {i + 1}  {box}  {label:<9} {help_text}"
+        out.append([(line[:width].ljust(width),
+                     "bright" if i == selected else "")])
+
+    while len(out) < height - 2:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + (footer or
+                 "Esc cancel   \u2191\u2193 move   Space toggle   "
+                 "Enter order them"))[:width].ljust(width), "dim")])
+    return out[:height]
+
+
+def field_order_screen(order, selected, width, height, title="ORDER FIELDS",
+                       footer="", message=""):
+    """The chosen fields, numbered. `order` is [(n, name, label), ...].
+
+    Typing a number moves the highlighted row to it and renumbers everything,
+    so the list always reads 1..N with no gaps — which is what makes it safe
+    to keep typing numbers until the order looks right.
+    """
+    out = []
+    head = f" {title}"
+    right = "type a number to move a row "
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    for i, (number, _name, label) in enumerate(order):
+        mark = "\u25b8" if i == selected else " "
+        line = f"{mark} {number}.  {label}"
+        out.append([(line[:width].ljust(width),
+                     "bright" if i == selected else "")])
+
+    while len(out) < height - 3:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + message)[:width].ljust(width),
+                 "dim" if message else "")])
+    out.append([((" " + (footer or
+                 "Esc back   \u2191\u2193 move   1-9 renumber   "
+                 "Enter name it"))[:width].ljust(width), "dim")])
+    return out[:height]
+
+
+def form_rows(form, width, columns=2, focus_cursor=True):
+    """The entry form as lines of (text, attr) segments.
+
+    Two columns by default, because one field per row would eat nine of the
+    panel's twenty rows and leave nothing for the contacts already logged —
+    and seeing the last few is what tells an operator the log is working.
+
+    The focused field is drawn in reverse with a block cursor at the insertion
+    point, the same convention the transcript's compose line uses, so there is
+    only one thing on this deck that means "you are typing here".
+    """
+    if form is None:
+        return []
+    label_w = max([len(f.label) for f in form.fields] + [4])
+    cell = max(12, (width - 2) // columns - label_w - 2)
+    rows, line = [], []
+
+    for i, field in enumerate(form.fields):
+        focused = i == form.index
+        text = field.value
+        if focused and focus_cursor:
+            pos = min(form.cursor, len(text))
+            shown = text[:pos] + "\u2588" + text[pos:] if pos >= len(text) \
+                else text
+        else:
+            shown = text
+        shown = shown[:cell]
+        # A sticky field that is set carries a mark, so "why is this still
+        # here" has an answer on the screen rather than in the documentation.
+        mark = "*" if field.sticky and field.value else " "
+        label = f"{field.label:>{label_w}}"
+        value = f"{shown:<{cell}}"
+        line.append((label, "dim"))
+        line.append((" ", ""))
+        line.append((value, "reverse" if focused else ""))
+        line.append((mark, "dim"))
+        if len(line) >= columns * 4:
+            rows.append([(" ", "")] + line)
+            line = []
+    if line:
+        rows.append([(" ", "")] + line)
+    return rows
+
+
+def log_screen(records, entry, width, height, header=None, message="",
+               cursor=None, form=None):
+    """The log screen: what has been worked, and the line being typed.
+
+    Given the whole display rather than a prompt under the transcript, because
+    on SSB the transcript has nothing on it worth reading. The header carries
+    what the operator is about to say out loud — band, mode, frequency — which
+    is exactly what the status line was showing and is no longer visible.
+
+    Every optional field is absent rather than blank when unset: no `my_park`
+    in the header and no park column in the body unless a park is actually in
+    use. A log of ordinary contacts shows no trace of the activity fields.
+
+    A `my_park` in the header reserves the reference column even while the
+    contacts have none. That is the one case where a blank field is the right
+    thing to draw: during an activation the column being there is what makes
+    the list scannable, and a column that appears on the first park-to-park
+    and shifts every row under it is worse than an empty one.
+
+    `records` are oldest first, as they come out of the log file; the newest
+    are shown, because during an activation the question is always "did that
+    last one go in" and never "what did I work an hour ago".
+
+    Pure, like every other screen in this module: a list of lines, each a list
+    of (text, attr) segments, and nothing about curses.
+    """
+    head = header or {}
+    out = []
+
+    # Header. Fields are dropped from the right when the width will not take
+    # them, same contract as status_line: the count is the last thing to go
+    # because it is the one number that says the log is working.
+    # The activity is named on the header so the operator can see which
+    # grammar the entry line is being read with — the one thing that changes
+    # what their typing means (§6b).
+    label = (head.get("activity") or "").upper()
+    left = f" LOG  {label}" if label and label != "GENERAL" else " LOG"
+    for key in ("band", "mode", "freq"):
+        value = head.get(key)
+        if value:
+            left += f"  {value}"
+    # In POTA mode the park slot is drawn whether or not it is set, so that
+    # starting an activation without setting MY_PARK is visible rather than
+    # silently absent from every record of it.
+    if head.get("my_park"):
+        left += f"  {head['my_park']}"
+    elif label and label not in ("", "GENERAL") and head.get("needs_ref"):
+        # An activity that puts a reference on every contact, with none set,
+        # says so rather than leaving the slot out — starting an activation
+        # without setting it would otherwise be invisible on all eighty.
+        left += "  (no reference set)"
+    count = head.get("count")
+    right = ""
+    if count is not None:
+        right = f"{count} QSO{'' if count == 1 else 's'} "
+    if head.get("clock"):
+        right = f"{right} {head['clock']} " if right else f" {head['clock']} "
+    pad = width - len(left) - len(right)
+    if pad < 1:
+        left, pad = left[:max(0, width - len(right) - 1)], 1
+    out.append([(left + " " * pad + right, "reverse")])
+    out.append(rule(width))
+
+    # Contacts. Columns are sized so a callsign never truncates: a log you
+    # cannot read back is not a log. The free text at the end is what gets cut
+    # when the screen is narrow, because it is the one field nobody reads back.
+    #
+    # A column is reserved only when something on screen uses it, so an
+    # ordinary log is not padded out with blank exchange fields it will never
+    # fill — except the park column in POTA mode, where a column appearing on
+    # the first park-to-park would shift every row under it (§6a).
+    # The form takes as many rows as it needs and the contact list gets the
+    # rest. Whatever is left, at least one contact is shown: seeing the last
+    # one land is what tells an operator the log is working.
+    entry_rows = form_rows(form, width) if form is not None else []
+    body_rows = max(1, height - 5 - max(1, len(entry_rows)))
+    shown = records[-body_rows:] if records else []
+
+    used = {field: any(r.get(field) for r in shown)
+            for field in ("serial_tx", "serial_rx", "exchange_rx", "park")}
+    used["park"] = used["park"] or bool(head.get("my_park"))
+
+    for rec in shown:
+        when = (rec.get("when", "") or "")[11:16]
+        line = f" {when}  {rec.get('call', ''):<10}"
+        rst = f"{rec.get('rst_s', '')}/{rec.get('rst_r', '')}"
+        line += f" {rst:<7}"
+        # Sent serial first, then received: the same order they are said on
+        # the air, and the same order they sit in the ADIF record.
+        if used["serial_tx"]:
+            sent = rec.get("serial_tx", "")
+            line += f" {('#' + sent) if sent else '':<5}"
+        if used["serial_rx"]:
+            line += f" {rec.get('serial_rx', ''):<5}"
+        if used["exchange_rx"]:
+            line += f" {rec.get('exchange_rx', ''):<8}"
+        if used["park"]:
+            line += f" {rec.get('park', ''):<9}"
+
+        # One name column, always the same width when a name column exists at
+        # all, so the trailing text lines up down the screen. The earlier
+        # version padded the name only when a QTH followed it, which left the
+        # comment on a name-only contact starting in a different place on
+        # every row.
+        name = rec.get("name", "")
+        trailing = " ".join(p for p in (rec.get("qth", ""),
+                                        rec.get("comment", "")) if p)
+        if name or trailing:
+            line += f" {name:<9}" if trailing else f" {name}"
+            if trailing:
+                line += f" {trailing}"
+        out.append([(line[:width].ljust(width), "")])
+
+    # Padded, not empty. An unpadded blank line leaves whatever the previous
+    # screen drew in those columns, and the log screen is reached from the
+    # transcript, which has text all the way across.
+    while len(out) < height - 3 - max(1, len(entry_rows)):
+        out.append([(" " * width, "")])
+
+    out.append(rule(width))
+
+    if entry_rows:
+        for row in entry_rows:
+            used = sum(len(t) for t, _ in row)
+            if used < width:
+                row = row + [(" " * (width - used), "")]
+            out.append(row)
+        out.append([((" " + message)[:width].ljust(width),
+                     "dim" if message else "")])
+        footer = " Esc back   Tab field   Enter log"
+        if head.get("hint"):
+            footer += f"   {head['hint']}"
+        out.append([(footer[:width].ljust(width), "dim")])
+        return out[:height]
+
+    # The one-line entry, still used by `tools/qso.py` and by the tests that
+    # predate the form. The cursor is drawn as a block rather than left to the
+    # terminal, because this screen hides the compose area and the real cursor
+    # is parked somewhere else entirely.
+    text = entry or ""
+    if cursor is None:
+        cursor = len(text)
+    before, after = text[:cursor], text[cursor:]
+    seg = [(" > ", "dim"), (before, "bright")]
+    seg.append(("█", "bright") if not after else (after[0], "reverse"))
+    if after[1:]:
+        seg.append((after[1:], "bright"))
+    used = sum(len(t) for t, _ in seg)
+    if used < width:
+        seg.append((" " * (width - used), ""))
+    out.append(seg)
+
+    out.append([((" " + message)[:width].ljust(width),
+                 "dim" if message else "")])
+
+    footer = " Esc back   Enter log"
+    if head.get("hint"):
+        footer += f"   {head['hint']}"
+    out.append([(footer[:width].ljust(width), "dim")])
     return out[:height]
 
 

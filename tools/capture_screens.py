@@ -114,6 +114,93 @@ WIFI_NETWORKS = [
 ]
 
 
+# Three states of the log screen, because the whole point of the design is
+# that the same screen shows different fields depending on the activity, and
+# one screenshot cannot show that.
+def _log_records(kind):
+    if kind == "general":
+        return [
+            {"when": "2026-10-11T16:04:00Z", "call": "W3ABC", "rst_s": "59",
+             "rst_r": "57", "name": "Bob", "qth": "Pittsburgh, PA"},
+            {"when": "2026-10-11T16:11:00Z", "call": "K2XYZ", "rst_s": "59",
+             "rst_r": "59", "name": "Jim", "comment": "running 5W to a wire"},
+            {"when": "2026-10-11T16:19:00Z", "call": "OK2CQR", "rst_s": "59",
+             "rst_r": "55", "name": "Petr", "qth": "Neratovice, Czech Rep"},
+            {"when": "2026-10-11T16:26:00Z", "call": "N3QQQ/P", "rst_s": "59",
+             "rst_r": "59", "name": "Dave"},
+        ]
+    if kind == "pota":
+        return [
+            {"when": "2026-10-11T14:02:00Z", "call": "W3ABC", "rst_s": "59",
+             "rst_r": "57", "park": "US-1234", "name": "Bob"},
+            {"when": "2026-10-11T14:06:00Z", "call": "K2XYZ", "rst_s": "59",
+             "rst_r": "59", "name": "Jim", "qth": "Albany, NY"},
+            {"when": "2026-10-11T14:09:00Z", "call": "N3QQQ", "rst_s": "59",
+             "rst_r": "55", "park": "US-0042", "comment": "park to park"},
+            {"when": "2026-10-11T14:14:00Z", "call": "KD8SLG", "rst_s": "59",
+             "rst_r": "59", "name": "Ann"},
+        ]
+    return [
+        {"when": "2026-10-11T18:31:00Z", "call": "W3ABC", "activity": "CONTEST", "rst_s": "59",
+         "rst_r": "59", "serial_tx": "55", "serial_rx": "101",
+         "exchange_rx": "MONT"},
+        {"when": "2026-10-11T18:32:00Z", "call": "K2XYZ", "activity": "CONTEST", "rst_s": "59",
+         "rst_r": "59", "serial_tx": "56", "serial_rx": "17",
+         "exchange_rx": "ALLE"},
+        {"when": "2026-10-11T18:33:00Z", "call": "N3QQQ", "activity": "CONTEST", "rst_s": "59",
+         "rst_r": "59", "serial_tx": "57", "serial_rx": "212",
+         "exchange_rx": "BUCK"},
+        {"when": "2026-10-11T18:34:00Z", "call": "W3YA", "activity": "CONTEST", "rst_s": "59",
+         "rst_r": "59", "serial_tx": "58", "serial_rx": "9",
+         "exchange_rx": "CENT", "comment": "club station"},
+    ]
+
+
+def log_screen(kind="general", width=W, height=H):
+    """One of the log screen's three states, drawn as the deck draws it.
+
+    Built through `logform.LogForm` rather than by hand, so these are the real
+    field order, the real prefills and the real sticky marks — a screenshot
+    assembled separately from the thing it depicts drifts from it silently.
+    """
+    import activities, logform
+
+    setup = {
+        "general": ("GENERAL", "7.185", "SSB", "40m", "1627Z", "W1AW"),
+        "pota":    ("POTA",    "14.285", "SSB", "20m", "1415Z", "W3YA"),
+        "contest": ("CONTEST", "3.820", "SSB", "80m", "1835Z", "K3PP"),
+    }[kind]
+    name, freq, mode, band, clock, typed = setup
+
+    act = activities.get(name, activities.BUILTIN)
+    records = _log_records(kind)
+
+    form = logform.LogForm(act)
+    form.from_radio(freq=freq, mode=mode)
+    form.advance_serial(records, act.serial_start)
+    if form.field("exchange_tx"):
+        form.set("exchange_tx", "CENT")
+    if form.field("my_park"):
+        form.set("my_park", "US-5678")
+    form.set("comment", "5W to a wire")
+    form.focus("call")
+    form.type(typed)
+    # Part-way through a contact, which is what the screen looks like in use:
+    # the callsign taken and the cursor moved on to what they are sending.
+    form.tab()
+    if kind == "contest":
+        form.type("44")
+
+    header = {"band": band, "mode": mode, "freq": freq,
+              "count": len(records), "clock": clock}
+    if act.name != "GENERAL":
+        header["activity"] = act.name
+    if form.value("my_park"):
+        header["my_park"] = form.value("my_park")
+    return render.log_screen(records, "", width, height, header=header,
+                             form=form)
+
+
 def wifi_screen():
     import wifi
     nets = [wifi.Network(*n) for n in WIFI_NETWORKS]

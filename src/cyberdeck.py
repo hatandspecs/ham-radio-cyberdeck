@@ -10,13 +10,17 @@ framebuffer, where the color schemes use the real palette.
 """
 
 import curses
+import datetime
 import json
 import os
 import sys
 import time
 
+import activities
 import colors
 import config as configmod
+import logform
+import qsolog
 import menus
 import render
 import touch as touchmod
@@ -24,6 +28,7 @@ from fldigi_client import Fldigi
 from session import Entry, Session, RX, TX
 
 CHAT, TUNE, PAIR, NOKB, WIFI = "chat", "tune", "pair", "nokb", "wifi"
+LOG, FIELDS, ORDER = "log", "fields", "order"
 
 # Releasing the post-over receive hold. Not configuration: these describe how
 # a decaying transient is told apart from a station answering, which is a
@@ -66,6 +71,25 @@ class Deck:
         self.cfg = settings
         self.scheme = settings["COLOR"]
         self.screen = CHAT
+        # Logging. Off means absent: no file is opened, no form is built and
+        # Ctrl-N falls through to the unhandled-key branch, exactly as an
+        # unused key does (docs/qso_log_design.md §1).
+        self.log_on = str(settings.get("LOGGING", "no")).lower() == "yes"
+        self.log_form = None
+        self.log_records = []
+        self.log_message = ""
+        # Whether tqsl is installed, looked up once: the logging menu asks on
+        # every draw and shelling out for that would be absurd.
+        self._tqsl = None
+        # The activity being built, while it is being built. None except
+        # between "copy this one" and "save it".
+        self.picker = None
+        self.picker_sel = 0
+        self.picker_from = ""
+        self.picker_message = ""
+        # Callsign lookup, created on first use and only when it is on.
+        self._callbook = None
+        self._looked_up = ""
         self.scroll = 0
         # Which menu is open, if any, and where in a paged list. A single
         # value rather than a stack: the tree is two deep by design, and
@@ -97,6 +121,8 @@ class Deck:
         # carrier reached any other way than a menu is still remembered.
         self._saved_mode = None
         self._saved_carrier = None
+        # Created on first use by _power_now, and only if a memory asks.
+        self._rig = None
         self._saved_at = 0.0
         # The remembered mode and carrier, read from the state file but not
         # yet pushed to fldigi. See _apply_radio_startup().
@@ -777,6 +803,500 @@ class Deck:
             self.wifi_radio = self._wifi.radio()
             self._wifi_refresh()
 
+    # -- the contact log --------------------------------------------------
+
+    def _log_rig(self):
+        """The rigctld client, made on first use and only by the log.
+
+        The deck drives the radio through fldigi and has never held one of
+        these; a station that never opens the log should not start a
+        connection to find that out.
+        """
+        if self._rig is None:
+            try:
+                import rigctld_client
+                self._rig = rigctld_client.Rigctld()
+            except Exception:
+                return None
+        return self._rig
+
+    def _log_freq_mhz(self):
+        rig = self._log_rig()
+        if rig is None:
+            return ""
+        try:
+            hz = rig.frequency()
+        except Exception:
+            return ""
+        return f"{hz / 1_000_000:.3f}" if hz else ""
+
+    def _log_freq_hz(self):
+        """Hertz from whatever is in the form, which may have been corrected."""
+        try:
+            return int(round(float(self.log_form.value("freq")) * 1_000_000))
+        except (TypeError, ValueError, AttributeError):
+            return 0
+
+    def _log_mode(self):
+        """The ADIF mode, decided the way `qsolog.resolve_mode` decides it.
+
+        The deck can answer one question `tools/qso.py` cannot: whether it is
+        passing traffic right now. That is what tells `auto` apart a rig
+        sitting in USB for voice from one sitting in USB under fldigi.
+        """
+        rig_mode = ""
+        rig = self._log_rig()
+        if rig is not None:
+            try:
+                rig_mode = rig.mode()[0]
+            except Exception:
+                rig_mode = ""
+        modem = ""
+        try:
+            if self.fldigi.connected:
+                modem = self.fldigi.modem() or ""
+        except Exception:
+            modem = ""
+        mode, _source = qsolog.resolve_mode(
+            self.cfg.get("OPERATING", "auto"), rig_mode=rig_mode,
+            fldigi_modem=modem, fldigi_active=self.session.state == TX)
+        return mode
+
+    def _draw_log(self, h, w):
+        """Contacts already made, and the form for the next one.
+
+        The radio fields are refreshed here rather than on a timer: the draw
+        is happening anyway, and `from_radio` skips any field the operator
+        has corrected.
+        """
+        form = self.log_form
+        header = {"count": len(self.log_records),
+                  "clock": time.strftime("%H%MZ", time.gmtime())}
+        if form is not None:
+            form.from_radio(freq=self._log_freq_mhz(), mode=self._log_mode())
+            if form.activity.name != "GENERAL":
+                header["activity"] = form.activity.name
+            if form.value("my_park"):
+                header["my_park"] = form.value("my_park")
+            band = qsolog.band_for(self._log_freq_hz())
+            if band:
+                header["band"] = band
+            header["mode"] = form.value("mode")
+            header["freq"] = form.value("freq")
+
+        # Said while the callsign is being typed, not at commit: the point of
+        # knowing is to decide whether to work them, and by commit that has
+        # been decided. It never blocks the contact — a duplicate is logged
+        # deliberately often enough that refusing would be wrong.
+        arrived = self._lookup_collect(form)
+        if arrived:
+            self.log_message = arrived
+
+        message = self.log_message
+        if form is not None and not message:
+            note = qsolog.dupe_note(qsolog.find_dupes(
+                self.log_records, form.value("call"),
+                band=header.get("band", ""), mode=form.value("mode"),
+                rule=self.cfg.get("DUPE_CHECK", "band+mode"),
+                activity=("" if form.activity.name == "GENERAL"
+                          else form.activity.name)))
+            if note:
+                message = f"** {note}"
+
+        for i, line in enumerate(render.log_screen(
+                self.log_records, "", w, h, header=header,
+                message=message, form=form)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    # -- building an activity ----------------------------------------------
+
+    def _copy_activity(self, name):
+        """Start a new activity from an existing one.
+
+        Copying rather than starting blank, because every activity an operator
+        wants is a small change to one that already exists — a state QSO party
+        is a contest with a different word for the exchange — and a blank
+        field list is a worse starting point than any of them.
+        """
+        act = activities.get(name, self._activity_table())
+        self.picker = activities.FieldPicker(act.entry)
+        self.picker_from = act.name
+        self.picker_sel = 0
+        self.picker_message = ""
+        self.screen = FIELDS
+        self._close_menu()
+
+    def _draw_fields(self, h, w):
+        for i, line in enumerate(render.field_select_screen(
+                self.picker.rows(), self.picker_sel, w, h,
+                title=f"SELECT FIELDS — from {self.picker_from}")):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_fields(self, ch):
+        rows = self.picker.rows()
+        if ch == 27:
+            self.picker = None
+            self.screen = LOG
+        elif ch == curses.KEY_UP:
+            self.picker_sel = (self.picker_sel - 1) % len(rows)
+        elif ch == curses.KEY_DOWN:
+            self.picker_sel = (self.picker_sel + 1) % len(rows)
+        elif ch in (32, 10, 13, curses.KEY_ENTER) and ch == 32:
+            self.picker.toggle(rows[self.picker_sel][0])
+        elif ch in (10, 13, curses.KEY_ENTER):
+            if not self.picker.entry():
+                # An activity with no fields is a form with nothing but a
+                # callsign on it. Refusing here is kinder than letting it be
+                # saved and discovered mid-contact.
+                self.session.note("choose at least one field")
+                return True
+            self.picker_sel = 0
+            self.screen = ORDER
+        elif 49 <= ch <= 57:                              # 1-9
+            at = ch - 49
+            if at < len(rows):
+                self.picker_sel = at
+                self.picker.toggle(rows[at][0])
+        return True
+
+    def _draw_order(self, h, w):
+        for i, line in enumerate(render.field_order_screen(
+                self.picker.order(), self.picker_sel, w, h,
+                message=self.picker_message)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_order(self, ch):
+        order = self.picker.order()
+        if ch == 27:
+            self.screen = FIELDS
+        elif ch == curses.KEY_UP:
+            self.picker_sel = (self.picker_sel - 1) % max(1, len(order))
+        elif ch == curses.KEY_DOWN:
+            self.picker_sel = (self.picker_sel + 1) % max(1, len(order))
+        elif 49 <= ch <= 57:                              # 1-9
+            name = order[self.picker_sel][1]
+            self.picker.move(name, ch - 48)
+            # Follow the row that moved, so a second number keeps working on
+            # the same field rather than on whatever slid into its place.
+            for i, (_n, f, _l) in enumerate(self.picker.order()):
+                if f == name:
+                    self.picker_sel = i
+                    break
+            self.picker_message = ""
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._open_editor(None, "Name for this activity",
+                              sink=self._save_activity)
+        return True
+
+    def _save_activity(self, name):
+        """Write the built activity out, then select it."""
+        name = "".join(c for c in (name or "").strip().upper()
+                       if c.isalnum() or c in "-_")
+        if not name:
+            self.session.note("an activity needs a name")
+            return
+        if name in ("GENERAL",):
+            self.session.note("GENERAL is the built-in; pick another name")
+            return
+        base = activities.get(self.picker_from, self._activity_table())
+        text = activities.format_activity(
+            name, self.picker.entry(),
+            label=f"{name} (from {base.label})",
+            sig=base.sig, contest_id=base.contest_id,
+            serial=base.serial, serial_start=base.serial_start,
+            labels={f: base.label_for(f) for f in self.picker.entry()
+                    if base.label_for(f) != activities.ENTRY_FIELDS.get(
+                        f, (None, f))[1]})
+        try:
+            path = activities.save(activities.config_path(), name, text)
+        except OSError as exc:
+            self.session.note(f"could not save: {exc}")
+            return
+        self.picker = None
+        self.session.note(f"saved {name} to {path}")
+        self._set_activity(name)
+        self.screen = LOG
+
+    def _lookup_start(self, call):
+        """Ask the callbooks about a callsign, off the interface thread.
+
+        Fired when focus leaves the callsign field rather than on every
+        keystroke: `W`, `W3`, `W3A` are not callsigns, and asking about them
+        sends three useless requests and three partial callsigns to a third
+        party.
+        """
+        if self.cfg.get("CALLBOOK") != "yes":
+            return
+        call = (call or "").strip().upper()
+        if not call or call == self._looked_up or not qsolog.is_callsign(call):
+            return
+        try:
+            import callbook
+            if self._callbook is None:
+                self._callbook = callbook.Background(
+                    cache=callbook.Cache(callbook.cache_path()),
+                    providers=callbook.providers_from(self.cfg))
+            self._callbook.start(call)
+            self._looked_up = call
+        except Exception:
+            # No network, no credentials, no module: the same event as far as
+            # this screen is concerned, and none of them may stop a contact
+            # being logged.
+            pass
+
+    def _lookup_collect(self, form):
+        """Merge any answer that has arrived. Never overwrites what was typed."""
+        if self._callbook is None or form is None:
+            return ""
+        call = form.value("call").strip().upper()
+        if not call:
+            return ""
+        info = self._callbook.take(call)
+        if info is None:
+            return ""
+        if not info:
+            return f"-- {call}: nothing known"
+        for key in ("name", "qth", "grid"):
+            field = form.field(key)
+            if field is not None and info.get(key) and not field.value:
+                form.set(key, info[key])
+        # Reported whether or not a field took it: the grid reaches the record
+        # even on an activity whose form has nowhere to show it.
+        return "-- " + ", ".join(f"{k}={v}" for k, v in info.items())
+
+    def _activity_table(self):
+        """Every activity, built-in and defined. Never raises at the menu.
+
+        A broken activities.conf must not make the menu unopenable — the
+        built-ins are a working set on their own, and the operator finds out
+        from a note rather than from a screen that will not come up.
+        """
+        try:
+            return activities.load()
+        except Exception as exc:
+            self.session.note(f"activities.conf: {exc}")
+            return dict(activities.BUILTIN)
+
+    def _has_tqsl(self):
+        if self._tqsl is None:
+            try:
+                import lotw
+                self._tqsl = lotw.available()
+            except Exception:
+                self._tqsl = False
+        return self._tqsl
+
+    def _set_activity(self, name, table=None):
+        """Switch activity, rebuilding the form because its fields change.
+
+        What this station sends is carried across — own reference, own
+        exchange, the standing comment — because those describe the operating
+        session rather than the activity, and retyping them after changing
+        activity is exactly the kind of thing that makes an operator not
+        change activity.
+        """
+        act = activities.get(name, table or self._activity_table())
+        self.cfg["ACTIVITY"] = "" if act.name == "GENERAL" else act.name
+        carried = {}
+        if self.log_form is not None:
+            carried = {k: self.log_form.value(k)
+                       for k in ("my_park", "exchange_tx", "comment")}
+        self.log_form = logform.LogForm(act)
+        for key, value in carried.items():
+            if value:
+                self.log_form.set(key, value)
+        for key, setting in (("my_park", "MY_PARK"),
+                             ("exchange_tx", "EXCHANGE_TX")):
+            if not self.log_form.value(key) and self.cfg.get(setting):
+                self.log_form.set(key, self.cfg[setting])
+        self.log_form.advance_serial(self.log_records, act.serial_start)
+        self._save_state()
+        self.session.note(f"activity: {act.label}")
+
+    def _set_my_park(self, value):
+        self.cfg["MY_PARK"] = (value or "").strip().upper()
+        if self.log_form is not None:
+            self.log_form.set("my_park", self.cfg["MY_PARK"])
+        self._save_state()
+
+    def _export_adif(self, lotw=False):
+        """Write the whole log beside itself as ADIF, and say where."""
+        path = qsolog.log_path(self.cfg.get("LOG_PATH", ""))
+        records = qsolog.read(path)
+        if not records:
+            self.session.note("nothing logged yet")
+            return
+        out = os.path.splitext(path)[0] + ".adi"
+        try:
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write(qsolog.adif_export(records))
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            self.session.note(f"could not write {out}: {exc}")
+            return
+        self.session.note(f"{len(records)} contacts to {out}")
+        if lotw:
+            # Printed, never run. tqsl needs a callsign certificate and blocks
+            # rather than failing without one, and a signing key does not
+            # belong on a card that travels (qso_log_design.md §11).
+            try:
+                import lotw as lotwmod
+                self.session.note("sign it with: " + lotwmod.quoted_command(
+                    out, location=self.cfg.get("LOTW_LOCATION", ""),
+                    upload=True))
+            except Exception:
+                pass
+
+    def _open_log(self):
+        if not self.log_on:
+            self.session.note("logging is off — switch it on from the menu")
+            return
+        path = qsolog.log_path(self.cfg.get("LOG_PATH", ""))
+        if self.log_form is None:
+            table = activities.load()
+            act = activities.get(self.cfg.get("ACTIVITY", ""), table)
+            self.log_form = logform.LogForm(act)
+            if self.cfg.get("MY_PARK"):
+                self.log_form.set("my_park", self.cfg["MY_PARK"])
+            if self.cfg.get("EXCHANGE_TX"):
+                self.log_form.set("exchange_tx", self.cfg["EXCHANGE_TX"])
+        self.log_records = qsolog.read(path)
+        self.log_form.advance_serial(self.log_records,
+                                     self.log_form.activity.serial_start)
+        self.log_form.focus("call")
+        self.log_message = ""
+        self.screen = LOG
+
+    def _log_commit(self):
+        """Write the contact on the form, then ready it for the next."""
+        form = self.log_form
+        if form is None or not form.ready():
+            self.log_message = "-- a callsign, at least"
+            return
+        values = form.collect()
+        try:
+            # The mode matters here even though only a callsign is parsed: it
+            # picks the default reports. Passing "" logged 599 against an SSB
+            # contact, because an activity whose form has no report fields --
+            # a contest -- has nothing to correct the default afterwards.
+            parsed = qsolog.parse_entry(values.get("call", ""),
+                                        values.get("mode", ""))
+        except qsolog.ParseError as exc:
+            self.log_message = f"-- {exc}"
+            return
+
+        for key in ("rst_s", "rst_r", "name", "qth", "park", "serial_rx",
+                    "exchange_rx", "comment"):
+            if values.get(key):
+                parsed[key] = values[key]
+
+        watts = 0
+        rig = self._log_rig()
+        if rig is not None:
+            try:
+                watts = rig.power(max_watts=self.cfg.get("TX_POWER_MAX", 0))
+            except Exception:
+                watts = 0
+
+        rec = qsolog.make_record(
+            parsed, datetime.datetime.now(datetime.timezone.utc),
+            freq_hz=self._log_freq_hz(), mode=values.get("mode", ""),
+            my_call=self.cfg.get("CALLSIGN", ""),
+            my_grid=self.cfg.get("LOCATOR", ""),
+            my_park=values.get("my_park", ""), activity=form.activity,
+            serial_tx=values.get("serial_tx", ""),
+            exchange_tx=values.get("exchange_tx", ""),
+            my_rig=self.cfg.get("RIG", ""),
+            my_antenna=self.cfg.get("ANTENNA", ""),
+            tx_power=watts or self.cfg.get("TX_POWER", 0))
+
+        try:
+            qsolog.append(qsolog.log_path(self.cfg.get("LOG_PATH", "")), rec)
+        except OSError as exc:
+            # The one failure that must never be quiet: the contact is gone,
+            # and the form is left alone so it can be tried again.
+            self.log_message = f"-- NOT LOGGED: {exc}"
+            return
+
+        self.log_records.append(rec)
+        self._looked_up = ""
+        form.commit()
+        form.advance_serial(self.log_records, form.activity.serial_start)
+        self.log_message = (f"-- logged {rec['call']} {rec.get('band', '')} "
+                            f"{rec.get('mode', '')}").rstrip()
+
+    def _handle_log(self, ch):
+        form = self.log_form
+        if form is None:
+            self.screen = CHAT
+            return True
+
+        if ch == 27:                                    # Esc
+            self.screen = CHAT
+        # The function keys are otherwise dead here, and F1 means "menu"
+        # everywhere else on the deck. It opens the LOGGING menu rather than
+        # the root one, because that is what is being configured from this
+        # screen; the root menu is one Esc away from it.
+        elif ch == curses.KEY_F1:
+            self._open_menu("logging")
+        elif ch == 9:                                   # Tab
+            # Leaving the callsign is the moment it is worth asking about.
+            if form.current is not None and form.current.name == "call":
+                self._lookup_start(form.value("call"))
+            form.tab()
+            self.log_message = ""
+        elif ch in (curses.KEY_BTAB, 353):              # Shift-Tab
+            form.tab(back=True)
+            self.log_message = ""
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._log_commit()
+        # Ctrl-Z is 26 over SSH and KEY_SUSPEND on the panel, because
+        # TERM=linux defines kspd=^Z and ncurses consumes the byte. Matching
+        # only 26 ships dead on the deck — that happened here once already,
+        # with the memory-insert undo.
+        elif ch in (26, curses.KEY_SUSPEND):            # Ctrl-Z
+            self.log_message = ("" if form.restore()
+                                else "-- nothing to put back here")
+        elif ch in (curses.KEY_BACKSPACE, 127, 8):
+            form.backspace()
+        elif ch == curses.KEY_DC:
+            form.delete()
+        elif ch == 21:                                  # Ctrl-U
+            form.kill()
+        elif ch == curses.KEY_LEFT:
+            form.left()
+        elif ch == curses.KEY_RIGHT:
+            form.right()
+        elif ch == curses.KEY_HOME:
+            form.home()
+        elif ch == curses.KEY_END:
+            form.end()
+        elif ch == curses.KEY_UP:
+            form.tab(back=True)
+        elif ch == curses.KEY_DOWN:
+            form.tab()
+        elif 32 <= ch < 127:
+            form.type(chr(ch))
+            # "-- logged W3ABC" is about the contact just finished and goes
+            # stale the moment the next one is started. Clearing it here is
+            # also what lets the duplicate alert be seen: the alert only
+            # fills a message line nobody else is using.
+            self.log_message = ""
+        return True
+
     def _draw_wifi(self, h, w):
         self._wifi_tick += 1
         lines = render.wifi_screen(
@@ -1057,6 +1577,12 @@ class Deck:
             self._draw_pair(h, w)
         elif self.screen == WIFI:
             self._draw_wifi(h, w)
+        elif self.screen == LOG:
+            self._draw_log(h, w)
+        elif self.screen == FIELDS:
+            self._draw_fields(h, w)
+        elif self.screen == ORDER:
+            self._draw_order(h, w)
         elif self.screen == TUNE:
             self._draw_tune(h, w)
         else:
@@ -1155,6 +1681,25 @@ class Deck:
             return menus.station_menu(self.cfg)
         if m == "memories":
             return menus.memories_menu(self.cfg)
+        if m == "logging":
+            act = (self.log_form.activity.name if self.log_form
+                   else self.cfg.get("ACTIVITY", ""))
+            park = (self.log_form.value("my_park") if self.log_form
+                    else self.cfg.get("MY_PARK", ""))
+            return menus.log_menu(
+                self.log_on, count=len(self.log_records), park=park,
+                lookup=self.cfg.get("CALLBOOK") == "yes",
+                has_qrz_key=bool(self.cfg.get("QRZ_API_KEY")),
+                operating=self.cfg.get("OPERATING", "auto"),
+                dupe=self.cfg.get("DUPE_CHECK", "band+mode"),
+                has_tqsl=self._has_tqsl(),
+                activity="" if act == "GENERAL" else act)
+        if m == "activity":
+            table = self._activity_table()
+            current = (self.log_form.activity.name if self.log_form
+                       else self.cfg.get("ACTIVITY", ""))
+            return menus.activity_menu(sorted(table), current,
+                                       {n: table[n].label for n in table})
         if m == "mode":
             return menus.mode_menu(f.modem(), auto=f.rsid())
         if m == "modes_all":
@@ -1223,6 +1768,15 @@ class Deck:
         if self.screen == WIFI:
             return self._handle_wifi(ch)
 
+        if self.screen == LOG:
+            return self._handle_log(ch)
+
+        if self.screen == FIELDS:
+            return self._handle_fields(ch)
+
+        if self.screen == ORDER:
+            return self._handle_order(ch)
+
         if self.screen == TUNE:
             return self._handle_tune(ch)
 
@@ -1283,6 +1837,11 @@ class Deck:
             self._toggle_inhibit()
         elif ch == 24:                       # Ctrl-X
             self._clear_transcript()
+        # Ctrl-N opens the log. Bound only when logging is on: off, this falls
+        # through to the unhandled-key branch exactly as any unused key does,
+        # which is what "absent when off" means in practice.
+        elif ch == 14 and self.log_on:       # Ctrl-N
+            self._open_log()
         # On the conversation screen the arrows edit the line, as they would
         # in any terminal: left and right move the cursor, up and down recall
         # what was sent before.
@@ -1570,7 +2129,7 @@ class Deck:
         if m == "root":
             dest = {"1": "mode", "2": "tuning", "3": "radio",
                     "4": "display", "5": "memories", "6": "station",
-                    "7": "system"}.get(key)
+                    "7": "system", "8": "logging"}.get(key)
             if dest:
                 self._open_menu(dest)
             return True
@@ -1680,6 +2239,66 @@ class Deck:
             if key.isdigit() and 1 <= int(key) <= len(menus.STATION_FIELDS):
                 field_key, label, _token = menus.STATION_FIELDS[int(key) - 1]
                 self._open_editor(field_key, label)
+            return True
+
+        if m == "logging":
+            if key == "l":
+                self.log_on = not self.log_on
+                self.cfg["LOGGING"] = "yes" if self.log_on else "no"
+                self._save_state()
+                self.session.note("logging on — Ctrl-N opens it"
+                                  if self.log_on else "logging off")
+                if not self.log_on and self.screen == LOG:
+                    self.screen = CHAT
+            elif key == "v":
+                self._open_menu("activity")
+            elif key == "n":
+                current = (self.log_form.activity.name if self.log_form
+                           else self.cfg.get("ACTIVITY", "") or "GENERAL")
+                self._copy_activity(current)
+            elif key == "a":
+                self._export_adif()
+                self._close_menu()
+            elif key == "t":
+                self._export_adif(lotw=True)
+                self._close_menu()
+            elif key == "c":
+                on = self.cfg.get("CALLBOOK") != "yes"
+                self.cfg["CALLBOOK"] = "yes" if on else "no"
+                self._save_state()
+                self.session.note(
+                    "callbook lookup on — every call worked goes to a third "
+                    "party" if on else "callbook lookup off")
+            elif key == "d":
+                rules = qsolog.DUPE_RULES
+                now = self.cfg.get("DUPE_CHECK", "band+mode")
+                self.cfg["DUPE_CHECK"] = rules[
+                    (rules.index(now) + 1) % len(rules)] if now in rules \
+                    else qsolog.DUPE_BAND_MODE
+                self._save_state()
+            elif key == "m":
+                order = ("auto", "digital", "voice")
+                now = self.cfg.get("OPERATING", "auto")
+                self.cfg["OPERATING"] = order[
+                    (order.index(now) + 1) % len(order)] if now in order \
+                    else "auto"
+                self._save_state()
+            elif key == "p":
+                self._open_editor("MY_PARK", "My reference",
+                                  sink=self._set_my_park)
+            return True
+
+        if m == "activity":
+            table = self._activity_table()
+            names = [n for n in sorted(table) if n != "GENERAL"]
+            chosen = ""
+            if key == "g":
+                chosen = "GENERAL"
+            elif key.isdigit() and key != "0" and 0 <= int(key) - 1 < len(names):
+                chosen = names[int(key) - 1]
+            if chosen:
+                self._set_activity(chosen, table)
+                self._open_menu("logging")
             return True
 
         if m == "system":
@@ -1851,6 +2470,31 @@ class Deck:
             e["cursor"] += 1
         return True
 
+    def _power_now(self):
+        """Transmit power as a string for a memory: "20 W", or "".
+
+        The radio first, the configuration second, nothing at all third. An
+        empty string is deliberate — a memory that says "RUNNING  TO A WIRE"
+        is odd, but a memory that states a wattage the radio is not using is
+        wrong, and wrong is worse than odd on the air.
+        """
+        watts = 0
+        try:
+            # Imported and connected lazily, and only here. The deck has never
+            # held a rigctld client — it drives the radio through fldigi — and
+            # a memory that nobody has put {power} into should not start one.
+            if self._rig is None:
+                import rigctld_client
+                self._rig = rigctld_client.Rigctld()
+            watts = self._rig.power(max_watts=self.cfg.get("TX_POWER_MAX", 0))
+        except Exception:
+            # No rigctld, no radio, a hamlib that will not convert: all the
+            # same event here, and all fall through to the configuration.
+            watts = 0
+        if not watts:
+            watts = self.cfg.get("TX_POWER", 0) or 0
+        return f"{int(watts)} W" if watts else ""
+
     def _insert_memory(self, slot):
         """Put message memory `slot` in at the cursor.
 
@@ -1880,6 +2524,15 @@ class Deck:
             # was renamed still work rather than inserting a literal brace.
             "locator": self.cfg.get("LOCATOR", ""),
             "rig": self.cfg.get("RIG", ""),
+            "ant": self.cfg.get("ANTENNA", ""),
+            # {antenna} as an alias for the same reason {locator} is one:
+            # whichever an operator reaches for should work.
+            "antenna": self.cfg.get("ANTENNA", ""),
+            # Read from the radio, not from the configuration. A brag line
+            # that says 20 W while the radio sits at 5 is worse than no brag
+            # line; the configured value is the fallback for when the radio
+            # will not answer.
+            "power": self._power_now(),
         }))
         out = self.session.insert(text)
         if out:

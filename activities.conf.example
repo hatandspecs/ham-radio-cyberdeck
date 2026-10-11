@@ -1,0 +1,83 @@
+# Activity types for the contact log.
+#
+# An activity is a named, ordered list of fields. The field list IS the entry
+# grammar: with `entry = serial_rx, exchange_rx`, typing
+#
+#     W3ABC 123 MONT
+#
+# means serial 123 and exchange MONT, and the reports default. The same line
+# in general logging means something else entirely -- which is the point, since
+# 599 is both a valid signal report and a valid serial number and nothing
+# about the token says which.
+#
+# Copy to ~/.config/cyberdeck/activities.conf and edit. Anything defined here
+# overrides the built-in of the same name; everything else is left alone.
+# Select one with ACTIVITY = <name> in cyberdeck.conf, or from the log menu.
+#
+# Fields an `entry` list may name, in any order:
+#
+#   rst_s        signal report sent          (report)
+#   rst_r        signal report received      (report)
+#   serial_rx    their serial number         (number)
+#   exchange_rx  their exchange              (text)
+#   park         their POTA/SOTA reference   (found by shape, any activity)
+#   name         their name                  (text)
+#   qth          their location              (text)
+#
+# A text field takes one token, except in the LAST position where it takes the
+# rest of the line -- which is how "1B EPA" is one Field Day exchange while
+# "Bob Pittsburgh PA" still splits into a name and a QTH.
+#
+# What THIS station sends is not typed per contact: EXCHANGE_TX and MY_PARK are
+# settings in cyberdeck.conf, and the serial increments on its own.
+#
+# Built in: GENERAL, POTA, CONTEST -- and only those three. Everything
+# below is an example to copy and change, which is what `like` is for.
+
+# A state QSO party. `like` starts from a saved activity and overrides only
+# what it restates, so the field list cannot drift from its template.
+[PAQP]
+like = CONTEST
+label = Pennsylvania QSO Party
+contest_id = PA-QSO-PARTY
+label_exchange_rx = County
+
+# Serial numbers that do not start at one -- a second operating period, say.
+[SPRINT]
+label = Sprint, resuming
+like = CONTEST
+serial_start = 250
+
+# Reports and an exchange, no serial. Sweepstakes-shaped.
+[SWEEPSTAKES]
+label = ARRL Sweepstakes
+entry = serial_rx, exchange_rx
+serial = yes
+label_exchange_rx = Prec + Check + Section
+
+# A custom order: exchange first, then the number.
+[MYEVENT]
+label = Exchange before number
+entry = exchange_rx, serial_rx
+
+# Summits on the Air. Same shape as POTA with a different word and SIG value.
+[SOTA]
+like = POTA
+label = Summits on the Air
+sig = SOTA
+label_park = Summit
+
+# World Wide Flora and Fauna.
+[WWFF]
+like = POTA
+label = World Wide Flora and Fauna
+sig = WWFF
+label_park = Reference
+
+# Field Day: a class and a section, no serial. `exchange_rx` is last, so it
+# takes the rest of the line -- "1B EPA" is one exchange, not two fields.
+[FD]
+label = ARRL Field Day
+entry = exchange_rx
+contest_id = ARRL-FIELD-DAY
+label_exchange_rx = Class + Section

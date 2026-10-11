@@ -11,6 +11,25 @@ NAME = Don
 QTH = State College, PA
 LOCATOR = FN10cs
 RIG = FTX-1
+ANTENNA = 40 m EFHW at 30 ft
+
+# The ceiling of whatever configuration you are running, in watts. hamlib
+# reports the power control as a position between 0 and 1, not a wattage, so
+# this is what turns the position into watts:
+#
+#     watts = control position x TX_POWER_MAX
+#
+# It is a setting rather than something looked up because the ceiling is not a
+# property of the radio. On an FTX-1: 6 on the internal battery, 10 on
+# external power, 100 docked in the Optima with the SPA-1 amplifier. Same
+# radio, same control position, three different answers.
+#
+# Works on any rig hamlib can drive. 0 means do not scale.
+TX_POWER_MAX = 0
+
+# Fixed watts, used only when the radio cannot be read at all -- no CAT, or a
+# rig that will not answer. 0 means record nothing rather than guess.
+TX_POWER = 0
 
 # --- Operating defaults ---
 DEFAULT_MODE = BPSK31
@@ -47,3 +66,49 @@ POLL_MS = 200
 # Seconds before an over is aborted. The radio's own time-out timer is the
 # real backstop; this is the software one. 0 disables it.
 TX_TIMEOUT = 180
+
+# --- Logging ---
+# Off by default, and when off the feature does not exist: no key bound, no
+# status field, no file created. docs/qso_log_design.md has the design.
+LOGGING = no
+# Blank means ~/.local/share/cyberdeck/qso.log
+LOG_PATH =
+
+# Where the logged mode comes from:
+#   auto     fldigi's modem when the deck is passing traffic or the rig
+#            reports a data mode; the rig's own mode otherwise. The default.
+#   digital  always fldigi's modem
+#   voice    always the rig, and never fldigi — what to set for an SSB
+#            session on a deck with no CAT control, because `auto` leans
+#            digital when it cannot read the rig
+OPERATING = auto
+
+# Activity type. Blank is general logging. Three are built in -- GENERAL,
+# POTA and CONTEST. Add your own in ~/.config/cyberdeck/activities.conf -- see
+# activities.conf.example. An activity is a named, ordered list of fields, and
+# that list is also the entry grammar: with QSOPARTY selected, typing
+# "W3ABC 123 MONT" means serial 123 and exchange MONT.
+ACTIVITY =
+
+# This station's exchange for the current activity -- a class, a county, a
+# section. The same on every contact of an event, so it is a setting rather
+# than something typed eighty times. This station's serial is not here: it
+# increments, and it is derived from the log.
+EXCHANGE_TX =
+
+# Look up callsigns over the network. Separate from LOGGING because it sends
+# every call worked to a third party. callook.info covers the US and needs no
+# account; HamQTH covers the world and needs one, and is tried only when
+# callook has nothing. HamQTH credentials go in cyberdeck.secrets, and its
+# username is your CALLSIGN, not your email address.
+CALLBOOK = no
+
+# This station's own park or summit reference while activating. Only used by
+# an activity that has a reference field (POTA, SOTA, WWFF). There is no
+# separate POTA setting: POTA is an activity, selected with ACTIVITY above.
+MY_PARK =
+
+# Logbook of The World. The tqsl Station Location name for this station, which
+# tqsl needs to know which callsign signed the log. Signing happens off the
+# deck -- there is deliberately no certificate or passphrase setting here.
+LOTW_LOCATION =

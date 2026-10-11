@@ -58,6 +58,10 @@ ROOT = {
         ("5", "Memories"),
         ("6", "Station"),
         ("7", "System"),
+        # Added together with its handler in cyberdeck.py, which is the rule:
+        # a root entry whose Enter does nothing is worse than no entry, since
+        # being discoverable is the line's only job and it then lies.
+        ("8", "Logging"),
     ],
     "footer": "Esc back to the conversation   ↑↓ move   Enter select",
 }
@@ -156,6 +160,124 @@ def band_menu(supported=None):
     return {"title": "BAND", "items": items,
             "footer": "Esc back   \u2191\u2193 move   Enter select"}
 
+def activity_menu(names, current="", labels=None):
+    """Pick a saved activity. The list comes from activities.load().
+
+    A picker rather than a toggle because the whole point is that an operator
+    defines their own: a list of named templates, chosen by name, is what
+    "save an activity and select it later" means at the panel.
+    """
+    labels = labels or {}
+    items = [("g", "General logging" +
+              ("   *" if not current or current == "GENERAL" else ""))]
+    for i, name in enumerate(n for n in names if n != "GENERAL"):
+        mark = "   *" if name == current else ""
+        label = labels.get(name, name)
+        items.append((str(i + 1)[-1], f"{name:<12} {label[:28]}{mark}"))
+    return {
+        "title": "ACTIVITY",
+        "items": items,
+        "footer": "Esc back   ↑↓ move   Enter select   * = in use",
+    }
+
+
+def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
+             qrz_pending=0, operating="auto", has_tqsl=False,
+             activity="", dupe="band+mode"):
+    """The logging menu. One line in the root menu leads here.
+
+    When logging is off this is a single item, because that is the whole of
+    what the feature is when it is off (docs/qso_log_design.md §1). The rest
+    appears only once there is something for it to act on.
+
+    The items are ordered general first: the log, its export, the mode source
+    and the lookup apply to every contact. POTA mode comes after them, and
+    this station's park reference appears only once POTA mode is on — off, it
+    is not a field waiting to be filled, it is a question that does not apply.
+
+    `Upload to QRZ` is absent without a key rather than present and greyed.
+    An item whose only possible answer is "this is not set up" is worse than
+    no item: it occupies a line, invites a keystroke, and teaches nothing.
+    """
+    if not on:
+        return {
+            "title": "LOGGING",
+            "items": [("l", "Logging                      off")],
+            "footer": "Esc back   Enter select",
+        }
+
+    items = [
+        ("l", f"Logging                      on — {count} "
+              f"QSO{'' if count == 1 else 's'}"),
+        ("a", "Export ADIF"),
+        ("m", f"Mode from                    {_OPERATING_LABEL.get(operating, operating)}"),
+        ("d", f"Duplicates                   {_DUPE_LABEL(dupe)}"),
+        ("c", f"Callbook lookup              {'on' if lookup else 'off'}"),
+        # The activity decides which fields are typed and in what order, so it
+        # is the setting that changes what the entry line means. See §6b.
+        ("v", f"Activity                     "
+              f"{activity or 'general logging'}"),
+        # Copy, change, name, save. Copying rather than starting blank
+        # because every activity an operator wants is a small change to one
+        # that already exists.
+        ("n", "  New, copied from this one"),
+    ]
+    if needs_reference(activity):
+        # Only when the selected activity has a reference field. Otherwise
+        # this station's own park is not an unset field, it is a question that
+        # does not apply to the operating being done.
+        items.append(("p", f"  My reference               {park or 'not set'}"))
+    extra = []
+    if has_qrz_key:
+        extra.append(("u", f"Upload to QRZ                "
+                           f"{qrz_pending} waiting"))
+    if has_tqsl:
+        # Signing needs a callsign certificate and tqsl blocks rather than
+        # failing without one, so this is an export-and-a-command, not a
+        # one-key upload. See docs/qso_log_design.md §11.
+        extra.append(("t", "Sign and upload to LoTW"))
+    items[2:2] = extra
+    return {
+        "title": "LOGGING",
+        "items": items,
+        "footer": "Esc back   ↑↓ move   Enter select   ^N the log screen",
+    }
+
+
+# Short enough to fit the 66-column panel beside its label. What each one
+# actually does is in docs/qso_log_design.md §6; the panel only has room to
+# say which of the three is selected.
+def needs_reference(activity):
+    """Whether an activity puts this station's own reference on every contact.
+
+    Asked of the activity rather than hard-coded, so an operator who defines
+    a WWFF or IOTA activity with a `park` field gets the setting without
+    anyone editing this file.
+    """
+    try:
+        import activities as _acts
+        act = _acts.get(activity, _acts.load())
+        return act.wants("park")
+    except Exception:
+        return str(activity or "").upper() in ("POTA", "SOTA", "WWFF")
+
+
+def _DUPE_LABEL(rule):
+    """What the panel calls a duplicate rule. Short enough for 66 columns."""
+    try:
+        import qsolog
+        return qsolog.DUPE_LABELS.get(rule, rule)
+    except Exception:
+        return rule
+
+
+_OPERATING_LABEL = {
+    "auto": "auto — fldigi on digital",
+    "digital": "fldigi, always",
+    "voice": "the rig, always",
+}
+
+
 SYSTEM = {
     "title": "SYSTEM",
     "items": [
@@ -192,6 +314,9 @@ STATION_FIELDS = (
     ("QTH", "QTH", "{qth}"),
     ("LOCATOR", "Locator", "{grid}"),
     ("RIG", "Rig", "{rig}"),
+    ("ANTENNA", "Antenna", "{ant}"),
+    ("TX_POWER_MAX", "Max power (W)", ""),
+    ("TX_POWER", "Power (W)", "{power}"),
 )
 
 

@@ -7,6 +7,7 @@ and a typo that is ignored becomes a setting that mysteriously does nothing.
 """
 
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -26,16 +27,118 @@ DEFAULT_PATH = next((c for c in _CANDIDATES if os.path.exists(c)), _CANDIDATES[0
 # CYBERDECK_STATE_PATH exists. Nothing on the deck sets it.
 DEFAULT_PATH = os.environ.get("CYBERDECK_CONF") or DEFAULT_PATH
 
+# Secrets live beside the configuration and never in it, for the reason the
+# iGate project keeps igate.secrets separate: cyberdeck.conf describes a
+# station and gets copied, pasted into a message, and read over somebody's
+# shoulder at a club meeting. A key does not belong in a file that travels.
+#
+# Not deck.secrets, which is a different thing — that is consumed by
+# build_deck_image.sh on a laptop and baked into the card, so changing a value
+# in it means building a new card. This one is read at every start by the
+# running deck, which is what a key that can be regenerated needs.
+_SECRET_CANDIDATES = (
+    os.path.join(HERE, "cyberdeck.secrets"),
+    os.path.join(os.path.dirname(HERE), "cyberdeck.secrets"),
+)
+SECRETS_PATH = next((c for c in _SECRET_CANDIDATES if os.path.exists(c)),
+                    _SECRET_CANDIDATES[0])
+SECRETS_PATH = os.environ.get("CYBERDECK_SECRETS") or SECRETS_PATH
+
+# Which settings may appear in the secrets file. Anything else there is an
+# error for the same reason an unknown key in cyberdeck.conf is: a typo that
+# is silently ignored becomes a credential that mysteriously does nothing.
+SECRET_KEYS = ("QRZ_API_KEY", "QRZ_USER", "QRZ_PASSWORD",
+               "HAMQTH_USER", "HAMQTH_PASSWORD")
+
 # key -> (default, converter, description)
 SCHEMA = {
     "CALLSIGN":        ("", str, "this station's callsign"),
     "NAME":            ("", str, "operator name, for macros"),
     "QTH":             ("", str, "location, for macros"),
     "LOCATOR":         ("", str, "Maidenhead grid square"),
-    "RIG":             ("", str, "radio, for memories: {rig}"),
+    "RIG":             ("", str, "radio, for memories: {rig}, and logged as "
+                                 "MY_RIG on every contact"),
+    "ANTENNA":         ("", str, "antenna, for memories: {ant}, and logged as "
+                                 "MY_ANTENNA on every contact"),
+    # The ceiling of whatever configuration is in use. hamlib reports the
+    # power control as a position between 0 and 1, not a wattage, so this is
+    # what turns the position into watts — and it is the one number that
+    # changes when the station changes. On this station: 6 on the internal
+    # battery, 10 on external power, 100 with the amplifier.
+    #
+    # Generic on purpose. Reading watts straight out of the radio needs a
+    # command only that radio has; one setting works on any rig hamlib can
+    # drive. See docs/qso_log_design.md §6c.
+    "TX_POWER_MAX":    (0, int, "maximum transmit power in watts for the "
+                                "current configuration; scales the CAT power "
+                                "reading. 0 means do not scale"),
+    # Watts. The fallback for when the radio cannot be asked at all: `{power}`
+    # and the log prefer a CAT reading and fall back to this.
+    "TX_POWER":        (0, int, "transmit power in watts when the radio "
+                                "cannot be read, for memories: {power}, and "
+                                "logged as TX_PWR"),
     "RIG_BANDS":       ("", str, "bands this radio covers, comma separated, "
                                  "e.g. '80 m, 40 m, 20 m'. Empty means all of "
                                  "them — the FTX-1 covers every band listed"),
+
+    # Logging. Off, and absent when off: no key bound, no status field, no
+    # file created, nothing in the main loop. See docs/qso_log_design.md §1.
+    # This is the value at boot; the menu toggle overrides it in the state
+    # file, the same arrangement REMEMBER_STATE uses for mode and carrier.
+    "LOGGING":         ("no", str, "yes | no — the contact log, off by default"),
+    "LOG_PATH":        ("", str, "contact log file; blank means "
+                                 "~/.local/share/cyberdeck/qso.log"),
+    # There is deliberately no POTA setting. POTA is an activity — ACTIVITY =
+    # POTA — because a toggle and an activity that both mean "show the park
+    # fields" are two controls for one thing, and they drift.
+    "MY_PARK":         ("", str, "this station's POTA or SOTA reference while "
+                                 "activating, e.g. US-5678; blank otherwise"),
+    "OPERATING":       ("auto", str, "auto | digital | voice — where the "
+                                     "logged mode comes from. auto fills it "
+                                     "in from fldigi on digital and leaves "
+                                     "voice alone; see qso_log_design.md §6"),
+    "ACTIVITY":        ("", str, "activity type for logging, e.g. POTA or "
+                                 "PAQP; blank is general logging. See "
+                                 "activities.conf and qso_log_design.md §6b"),
+    "EXCHANGE_TX":     ("", str, "this station's exchange for the current "
+                                 "activity — a class, county or section; the "
+                                 "same on every contact of an event"),
+    # Which earlier contact counts as already worked. The right answer is a
+    # property of the event, not of the logger: a QSO party scores once per
+    # band, Field Day once per band and mode, a park activation not at all.
+    "DUPE_CHECK":      ("band+mode", str, "off | call | band | mode | "
+                                          "band+mode — when to say a station "
+                                          "has been worked before"),
+    "CALLBOOK":        ("no", str, "yes | no — look up callsigns over the "
+                                   "network. Sends every call worked to a "
+                                   "third party, so it is off separately "
+                                   "from logging"),
+
+    # Secrets. These are NOT read from cyberdeck.conf — see SECRETS_PATH below
+    # and the note on `load`. They are listed here so the rest of the program
+    # can read settings["QRZ_API_KEY"] without knowing where it came from.
+    "QRZ_API_KEY":     ("", str, "QRZ logbook API key; read from "
+                                 "cyberdeck.secrets, never from cyberdeck.conf"),
+    # QRZ's XML callsign lookup, which is a DIFFERENT service from the logbook
+    # upload above with a different credential and a different subscription.
+    # An account name and password, not a key.
+    "QRZ_USER":        ("", str, "QRZ account name for XML callsign lookup; "
+                                 "read from cyberdeck.secrets"),
+    "QRZ_PASSWORD":    ("", str, "QRZ account password; read from "
+                                 "cyberdeck.secrets"),
+    # HamQTH covers the world where callook.info covers only the US. It needs
+    # an account, so the credentials are secrets, not configuration.
+    "HAMQTH_USER":     ("", str, "HamQTH account callsign; read from "
+                                 "cyberdeck.secrets"),
+    "HAMQTH_PASSWORD": ("", str, "HamQTH password; read from "
+                                 "cyberdeck.secrets"),
+
+    # LoTW. Signing happens off the deck — see qso_log_design.md §11 — so
+    # there is no certificate and no passphrase here, only the station
+    # location name tqsl was configured with, which the export note quotes
+    # back so the command can be copied and pasted.
+    "LOTW_LOCATION":   ("", str, "tqsl Station Location name for this "
+                                 "station, e.g. 'Home'; blank if unused"),
 
     "WIFI_ON_START":   ("yes", str, "switch the WiFi radio back on at every start"),
     "DEFAULT_MODE":    ("BPSK31", str, "modem selected at startup"),
@@ -75,13 +178,14 @@ SCHEMA = {
                         "where that is kept; delete it to start clean"),
 
     # Message memories, inserted at the cursor by F5-F12. {call}, {name},
-    # {qth}, {grid} and {rig} are replaced from the station settings above, so
+    # {qth}, {grid}, {rig} and {ant} are replaced from the station settings
+    # above, and {power} from the radio itself when it answers, so
     # a memory does not have to be rewritten when the callsign changes.
     # Memories edited on the deck are written to STATE_PATH and override these.
     "MEMORY_5":  ("CQ CQ CQ DE {call} {call} {call} PSE K", str, "F5"),
     "MEMORY_6":  ("DE {call} {call} K", str, "F6"),
     "MEMORY_7":  ("NAME HR IS {name} {name}, QTH {qth} {qth}. HW? BTU", str, "F7"),
-    "MEMORY_8":  ("RIG IS {rig} RUNNING 5 W TO A WIRE. ", str, "F8"),
+    "MEMORY_8":  ("RIG IS {rig} RUNNING {power} TO {ant}. ", str, "F8"),
     "MEMORY_9":  ("TNX FB QSO. 73 ES GD DX. DE {call} SK", str, "F9"),
     "MEMORY_10": ("", str, "F10"),
     "MEMORY_11": ("", str, "F11"),
@@ -89,6 +193,11 @@ SCHEMA = {
 }
 
 COLORS = ("matrix", "deckard", "hal", "tron", "ripley")
+
+# Duplicated from qsolog rather than imported: config.py is loaded before
+# anything else and importing a feature module into it would make the
+# configuration depend on the feature, which is backwards.
+_PARK_RE = re.compile(r"^[A-Z]{1,3}-\d{3,5}$")
 
 
 class ConfigError(Exception):
@@ -104,7 +213,7 @@ ALIASES = {
 }
 
 
-def load(path=None):
+def load(path=None, secrets_path=None):
     """Return a dict of settings. A missing file is not an error: the
     defaults describe a usable station that simply has no callsign yet, and
     refusing to start over a missing file would be unhelpful on a first run."""
@@ -127,6 +236,16 @@ def load(path=None):
             if key not in SCHEMA:
                 unknown.append(f"{path}:{lineno}: unknown setting '{key}'")
                 continue
+            if key in SECRET_KEYS:
+                # Refused, not quietly honored. The whole point of the split is
+                # that cyberdeck.conf is safe to hand over — pasted into a
+                # message, read over a shoulder at a club meeting. A credential
+                # that works from here is a credential that travels, and it
+                # would work silently, which is the worst of both.
+                raise ConfigError(
+                    f"{path}:{lineno}: {key} is a credential and does not "
+                    f"belong in this file, which gets copied around. Put it in "
+                    f"{SECRETS_PATH} instead (mode 600).")
             converter = SCHEMA[key][1]
             try:
                 values[key] = converter(value)
@@ -138,7 +257,44 @@ def load(path=None):
     if unknown:
         raise ConfigError("\n".join(unknown))
 
+    _load_secrets(values, secrets_path)
     validate(values)
+    return values
+
+
+def _load_secrets(values, path=None):
+    """Overlay cyberdeck.secrets, if there is one.
+
+    A missing file is the normal case and not an error — most decks have no
+    credentials at all, and the features that want them are off by default.
+    A key named here that is not in SECRET_KEYS is refused, so a value put in
+    the wrong file is reported rather than ignored.
+    """
+    # The environment is consulted here rather than only at import, so a test
+    # can point this somewhere empty after the module is loaded. Without that
+    # every test calling load() silently picks up the operator's real key.
+    path = path or os.environ.get("CYBERDECK_SECRETS") or SECRETS_PATH
+    if not os.path.exists(path):
+        return values
+
+    unknown = []
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if "=" not in line:
+                raise ConfigError(f"{path}:{lineno}: expected KEY = value")
+            key, _, value = line.partition("=")
+            key, value = key.strip().upper(), value.strip()
+            if key not in SECRET_KEYS:
+                unknown.append(
+                    f"{path}:{lineno}: '{key}' does not belong in a secrets "
+                    f"file (expected one of: {', '.join(SECRET_KEYS)})")
+                continue
+            values[key] = value
+    if unknown:
+        raise ConfigError("\n".join(unknown))
     return values
 
 
@@ -165,4 +321,38 @@ def validate(values):
     if values["TIMESTAMPS"].lower() not in ("yes", "no"):
         raise ConfigError("TIMESTAMPS must be yes or no")
     values["TIMESTAMPS"] = values["TIMESTAMPS"].lower()
+
+    for key in ("LOGGING", "CALLBOOK"):
+        if values[key].lower() not in ("yes", "no"):
+            raise ConfigError(f"{key} must be yes or no")
+        values[key] = values[key].lower()
+
+    for key in ("TX_POWER", "TX_POWER_MAX"):
+        if not 0 <= values[key] <= 2000:
+            raise ConfigError(
+                f"{key} = {values[key]} is not a plausible wattage; "
+                "0 means 'leave it to the radio'")
+
+    import qsolog as _qsolog
+    if values["DUPE_CHECK"].lower() not in _qsolog.DUPE_RULES:
+        raise ConfigError(
+            f"DUPE_CHECK = '{values['DUPE_CHECK']}' must be one of: "
+            f"{', '.join(_qsolog.DUPE_RULES)}")
+    values["DUPE_CHECK"] = values["DUPE_CHECK"].lower()
+
+    if values["OPERATING"].lower() not in ("auto", "digital", "voice"):
+        raise ConfigError(
+            f"OPERATING = '{values['OPERATING']}' must be auto, digital or "
+            "voice")
+    values["OPERATING"] = values["OPERATING"].lower()
+
+    # A park reference typed into the configuration with the wrong shape is
+    # worth refusing at start rather than discovering in an upload that POTA
+    # rejects weeks later.
+    park = values["MY_PARK"].strip().upper()
+    if park and not _PARK_RE.match(park):
+        raise ConfigError(
+            f"MY_PARK = '{values['MY_PARK']}' is not a POTA reference "
+            "(expected something like US-5678)")
+    values["MY_PARK"] = park
     return values

@@ -13,6 +13,11 @@ cyberdeck.conf
 # Credentials baked into the card. Never commit.
 deck.secrets
 
+# Credentials read at runtime by the deck itself — the QRZ logbook key and
+# anything like it. Separate from deck.secrets, which is consumed on a laptop
+# by build_deck_image.sh. Never commit.
+cyberdeck.secrets
+
 # Downloaded and generated images.
 deck-build/
 
