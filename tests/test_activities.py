@@ -34,9 +34,16 @@ import qsolog
 print("the list of possible fields")
 names = [f for f, _l, _k in activities.field_choices()]
 equals("every entry field is offered", set(names), set(activities.ENTRY_FIELDS))
-equals("in a fixed order, so the panel and the docs agree",
-       names, ["rst_s", "rst_r", "serial_rx", "exchange_rx", "park",
-               "name", "qth"])
+# The order is ENTRY_FIELDS' own, declared once there, so the selection
+# screen and this list cannot disagree. It used to be repeated here and in
+# field_choices(); seven fields added to ENTRY_FIELDS were then selectable
+# nowhere, because field_choices is what the panel asks.
+equals("in ENTRY_FIELDS order, so the panel and the docs agree",
+       names, list(activities.ENTRY_FIELDS))
+check("the two reports lead, because nearly every activity wants them",
+      names[:2] == ["rst_s", "rst_r"], str(names[:2]))
+check("and the fields a particular event asks for come last",
+      names[-1] == "precedence", str(names[-3:]))
 check("each has a label and a kind",
       all(l and k for _f, l, k in activities.field_choices()),
       str(activities.field_choices()))
@@ -302,31 +309,119 @@ equals("out-of-order entries still give the highest",
 print("\nthe exchange reaches ADIF in the right fields")
 import datetime
 WHEN = datetime.datetime(2026, 10, 11, 16, 0, 0)
+# An ACTIVITY TYPE is the template; an ACTIVITY is the session using it and
+# carries the operator's own name. make_record takes both, and they are
+# separate arguments because they answer different questions: the type says
+# how to read the fields, the name says which event they belong to.
 rec = qsolog.make_record(
     qsolog.parse_entry("W3ABC 123 MONT", "USB", QP), WHEN,
-    freq_hz=7_040_000, mode="USB", my_call="KD3CCO", activity=QP,
+    freq_hz=7_040_000, mode="USB", my_call="KD3CCO",
+    activity_type=QP, activity="PAQP 2026",
     serial_tx=57, exchange_tx="CENT")
 adif = qsolog.adif_record(rec)
 for field, value in (("STX", "57"), ("SRX", "123"),
                      ("STX_STRING", "CENT"), ("SRX_STRING", "MONT"),
                      ("CONTEST_ID", "PA-QSO-PARTY")):
     check(f"<{field}> is {value}", f"<{field}:{len(value)}>{value}" in adif, adif)
-equals("the activity is recorded so a log can be filtered to one event",
-       rec["activity"], "PAQP")
+equals("the session is recorded under the operator's name for it",
+       rec["activity"], "PAQP 2026")
+equals("and the type beside it, because it says how to read the fields",
+       rec["activity_type"], "PAQP")
+equals("both come back out together",
+       qsolog.activity_of(rec), ("PAQP 2026", "PAQP"))
 check("and the record round trips through storage",
       qsolog.parse_record(qsolog.format_record(rec)) == rec,
       qsolog.format_record(rec))
 
+# A record written before the two were different things has the TYPE in
+# `activity` and no `activity_type`. Reading it as a session of that name
+# using that type is the only reading that loses nothing.
+equals("a pre-split record reads as both",
+       qsolog.activity_of({"activity": "CONTEST"}), ("CONTEST", "CONTEST"))
+equals("but a name that is not a type name stays only a name",
+       qsolog.activity_of({"activity": "Bald Eagle SP"}),
+       ("Bald Eagle SP", ""))
+
 general_rec = qsolog.make_record(
     qsolog.parse_entry("W3ABC 59 57 Bob", "USB", G), WHEN, freq_hz=7_040_000,
-    mode="USB", my_call="KD3CCO", activity=G)
+    mode="USB", my_call="KD3CCO", activity_type=G)
 plain_adif = qsolog.adif_record(general_rec)
 check("an ordinary contact carries no exchange fields at all",
       not any(f"<{f}" in plain_adif
               for f in ("STX", "SRX", "STX_STRING", "SRX_STRING",
                         "CONTEST_ID")),
       plain_adif)
-check("and no activity field in storage",
-      "activity" not in general_rec, str(general_rec))
+check("and nothing about an activity in storage",
+      "activity" not in general_rec and "activity_type" not in general_rec,
+      str(general_rec))
+
+# A contact can belong to a named session while using general logging: an
+# afternoon called "SOTA hike" with no special fields is still one event.
+named_general = qsolog.make_record(
+    qsolog.parse_entry("W3ABC 59 57 Bob", "USB", G), WHEN, freq_hz=7_040_000,
+    mode="USB", my_call="KD3CCO", activity_type=G, activity="SOTA hike")
+equals("the name is kept with no type", named_general["activity"], "SOTA hike")
+check("and no type is invented for it",
+      "activity_type" not in named_general, str(named_general))
+
+print("\nan activity's own log file, dated once")
+equals("named after the activity, stamped with the day",
+       qsolog.activity_log_path("Bald Eagle SP", "/tmp/l/qso.log",
+                                date="2026-10-11"),
+       "/tmp/l/activities/Bald-Eagle-SP_2026-10-11.log")
+equals("the same name on another day is another activation",
+       qsolog.activity_log_path("Bald Eagle SP", "/tmp/l/qso.log",
+                                date="2026-09-14"),
+       "/tmp/l/activities/Bald-Eagle-SP_2026-09-14.log")
+equals("no activity means the default log, not a file named for an event",
+       qsolog.activity_log_path("", "/tmp/l/qso.log"), "/tmp/l/qso.log")
+equals("a name with nothing usable in it is no activity",
+       qsolog.activity_log_path("  --  ", "/tmp/l/qso.log"), "/tmp/l/qso.log")
+equals("the stem reads back to the name and the date",
+       qsolog.split_activity_stem("Bald-Eagle-SP_2026-10-11"),
+       ("Bald Eagle SP", "2026-10-11"))
+equals("an undated file still gives a name",
+       qsolog.split_activity_stem("PAQP"), ("PAQP", ""))
+# The log is key=value text and the export is ADIF. Naming the log .adi would
+# make the file that is not ADIF look like the one that is.
+equals("the export sits beside the log under the same name",
+       qsolog.export_path("/tmp/l/activities/PAQP_2026-10-10.log"),
+       "/tmp/l/activities/PAQP_2026-10-10.adi")
+
+print("\ndeleting an activity type")
+import tempfile as _tf
+with _tf.TemporaryDirectory() as _tmp:
+    _conf = os.path.join(_tmp, "activities.conf")
+    with open(_conf, "w") as fh:
+        fh.write("[PAQP]\nlike = CONTEST\nlabel = Pennsylvania QSO Party\n\n"
+                 "[SPRINT]\nlabel = Keep me\n")
+    ok, detail = activities.delete(_conf, "PAQP")
+    check("a type defined in the file is deleted", ok, detail)
+    body = open(_conf).read()
+    check("its section is gone", "[PAQP]" not in body, body)
+    check("and the rest of the file is untouched",
+          "[SPRINT]" in body and "Keep me" in body, body)
+
+    ok, detail = activities.delete(_conf, "NOPE")
+    check("a type that is not there is refused", not ok, detail)
+    check("and says so", "not in" in detail, detail)
+
+    ok, detail = activities.delete(_conf, "POTA")
+    check("a built-in with no section cannot be deleted", not ok, detail)
+    check("and says it is built in", "built in" in detail, detail)
+    check("POTA is known to be a built-in", activities.is_builtin("POTA"))
+    check("and a saved one is not", not activities.is_builtin("PAQP"))
+
+    # Overriding a built-in and then deleting the override restores the
+    # built-in, which is what an operator who edited one wants back.
+    with open(_conf, "a") as fh:
+        fh.write("\n[POTA]\nlabel = My own POTA\n")
+    equals("the override is in force",
+           activities.load(_conf)["POTA"].label, "My own POTA")
+    ok, detail = activities.delete(_conf, "POTA")
+    check("deleting the override is allowed", ok, detail)
+    check("and it says the built-in is back", "built-in" in detail, detail)
+    equals("because it is", activities.load(_conf)["POTA"].label,
+           "Parks on the Air")
 
 sys.exit(report())

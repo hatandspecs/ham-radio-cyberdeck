@@ -685,11 +685,16 @@ def wifi_screen(state, networks, width, height, radio="on", selected=0,
     return out[:height]
 
 
-# Screen row of the first contact on the log screen: the header and the rule
-# under it come first. Kept as a constant for the same reason PAIR_ROW0 is —
-# anything that turns a row number back into a record has to track this
-# function rather than guess at it.
-LOG_ROW0 = 2
+# Screen row of the first contact on the log screen: the header, the rule
+# under it, and the column heading come first. Kept as a constant for the same
+# reason PAIR_ROW0 is — anything that turns a row number back into a record has
+# to track this function rather than guess at it. It was 2 before the column
+# heading existed, and the heading moving it is exactly the kind of change
+# this constant is here to absorb.
+LOG_ROW0 = 3
+
+# Screen row of the column heading, one above the first contact.
+LOG_HEADING_ROW = LOG_ROW0 - 1
 
 
 # On and off, in glyphs the shipped console font is known to have. `■`/`□`
@@ -697,6 +702,60 @@ LOG_ROW0 = 2
 # which is what a filled square means here, and `·` is the lightest mark that
 # still reads as a place where something could be.
 FIELD_ON, FIELD_OFF = "\u2588", "\u00b7"
+
+
+def confirm_screen(title, lines, width, height, footer=""):
+    """A question that has to be answered before something is destroyed.
+
+    Its own screen rather than a line on another one: deleting a log deletes
+    contacts, and a prompt that shares a screen with the thing being deleted
+    is a prompt that gets answered by reflex. The default is to keep -- Esc
+    and every key but Enter cancel.
+    """
+    out = [[((" " + title).ljust(width)[:width], "reverse")], rule(width)]
+    out.append([(" " * width, "")])
+    for line in lines:
+        out.append([(("  " + line).ljust(width)[:width], "bright")])
+    while len(out) < height - 2:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + (footer or
+                 "Enter delete   Esc keep   (any other key keeps it)"))
+                 .ljust(width)[:width], "dim")])
+    return out[:height]
+
+
+ACTIVITY_ROW0 = 2
+
+
+def activity_screen(rows, selected, width, height, current="", message=""):
+    """Activities on disk: resume one, start one, or delete one.
+
+    `rows` is qsolog.activity_logs() output. The one in use is marked, the
+    contact count is shown because it is what makes a delete consequential,
+    and the date is shown because it is what tells two activations of the
+    same park apart.
+    """
+    out = [[(" ACTIVITIES".ljust(width)[:width], "reverse")], rule(width)]
+    if not rows:
+        out.append([("  nothing logged under an activity yet"
+                     .ljust(width)[:width], "dim")])
+    for i, row in enumerate(rows):
+        mark = "\u25b8" if i == selected else " "
+        star = "*" if row["name"] == current else " "
+        count = f"{row['contacts']} QSO{'' if row['contacts'] == 1 else 's'}"
+        line = (f"{mark}{star} {row['name'][:26]:<26} "
+                f"{row['date'] or '':<10}  {count}")
+        out.append([(line.ljust(width)[:width],
+                     "bright" if i == selected else "")])
+    while len(out) < height - 3:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + message).ljust(width)[:width],
+                 "dim" if message else "")])
+    out.append([((" Esc back   \u2191\u2193 move   Enter resume   "
+                  "n new   d delete").ljust(width)[:width], "dim")])
+    return out[:height]
 
 
 def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
@@ -723,7 +782,13 @@ def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
             help_text = activities.FIELD_HELP.get(name, "")
         except Exception:
             help_text = ""
-        line = f"{mark} {i + 1}  {box}  {label:<9} {help_text}"
+        key = ""
+        try:
+            import activities as _acts
+            key = _acts.pick_key(i)
+        except Exception:
+            key = str(i + 1) if i < 9 else ""
+        line = f"{mark} {key or ' '}  {box}  {label:<9} {help_text}"
         out.append([(line[:width].ljust(width),
                      "bright" if i == selected else "")])
 
@@ -737,12 +802,19 @@ def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
 
 
 def field_order_screen(order, selected, width, height, title="ORDER FIELDS",
-                       footer="", message=""):
+                       footer="", message="", fixed="Call"):
     """The chosen fields, numbered. `order` is [(n, name, label), ...].
 
     Typing a number moves the highlighted row to it and renumbers everything,
     so the list always reads 1..N with no gaps — which is what makes it safe
     to keep typing numbers until the order looks right.
+
+    `fixed` is drawn above them as row 0 and cannot be selected or moved. It
+    is the callsign: it is always the first field on the form, it is not part
+    of any activity's `entry` list, and a screen that numbered the others
+    1..N without it invited the question of where the callsign had gone — or
+    worse, suggested that field 1 is what the operator types first. Passing
+    `fixed=""` leaves it out.
     """
     out = []
     head = f" {title}"
@@ -751,6 +823,11 @@ def field_order_screen(order, selected, width, height, title="ORDER FIELDS",
     out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
     out.append(rule(width))
 
+    if fixed:
+        # Dim, unmarked and unnumbered-past-zero: it has to read as part of
+        # the list to be useful and as something that cannot be moved to be
+        # honest.
+        out.append([(f"  0.  {fixed}".ljust(width)[:width], "dim")])
     for i, (number, _name, label) in enumerate(order):
         mark = "\u25b8" if i == selected else " "
         line = f"{mark} {number}.  {label}"
@@ -812,8 +889,24 @@ def form_rows(form, width, columns=2, focus_cursor=True):
     return rows
 
 
+def log_body_rows(height, form=None, width=66):
+    """How many contacts the list can show, given the form below it.
+
+    Shared with the deck so that clamping a scroll position and drawing it
+    agree. When they did not, the list could be scrolled to an offset that
+    drew nothing and looked like a hang.
+    """
+    entry_rows = len(form_rows(form, width)) if form is not None else 0
+    return max(1, height - 6 - max(1, entry_rows))
+
+
+def log_scroll_max(records, height, form=None, width=66):
+    """The furthest back the list can be scrolled: 0 when it all fits."""
+    return max(0, len(records) - log_body_rows(height, form, width))
+
+
 def log_screen(records, entry, width, height, header=None, message="",
-               cursor=None, form=None):
+               cursor=None, form=None, scroll=0):
     """The log screen: what has been worked, and the line being typed.
 
     Given the whole display rather than a prompt under the transcript, because
@@ -847,8 +940,23 @@ def log_screen(records, entry, width, height, header=None, message="",
     # The activity is named on the header so the operator can see which
     # grammar the entry line is being read with — the one thing that changes
     # what their typing means (§6b).
-    label = (head.get("activity") or "").upper()
-    left = f" LOG  {label}" if label and label != "GENERAL" else " LOG"
+    # The ACTIVITY is what the operator is doing -- this park, this contest
+    # weekend -- and is their own name for it, so it is shown as typed rather
+    # than upper-cased. The TYPE is what the fields on screen mean and comes
+    # after it in parentheses, because it answers a different question and is
+    # the one that is usually already known.
+    left = " LOG"
+    activity = str(head.get("activity") or "").strip()
+    if activity:
+        left += f"  {activity}"
+    kind = str(head.get("activity_type") or "").strip().upper()
+    if kind and kind != "GENERAL":
+        left += f"  ({kind})" if activity else f"  {kind}"
+    # With no activity there is no name to show, so the file is named instead
+    # when it is not the default one -- a deck writing somewhere unexpected
+    # must never do it silently. An activity already names its own file.
+    if not activity and head.get("log_name"):
+        left = f" LOG:{head['log_name']}" + left[len(" LOG"):]
     for key in ("band", "mode", "freq"):
         value = head.get(key)
         if value:
@@ -858,7 +966,7 @@ def log_screen(records, entry, width, height, header=None, message="",
     # silently absent from every record of it.
     if head.get("my_park"):
         left += f"  {head['my_park']}"
-    elif label and label not in ("", "GENERAL") and head.get("needs_ref"):
+    elif kind and kind != "GENERAL" and head.get("needs_ref"):
         # An activity that puts a reference on every contact, with none set,
         # says so rather than leaving the slot out — starting an activation
         # without setting it would otherwise be invisible on all eighty.
@@ -887,12 +995,53 @@ def log_screen(records, entry, width, height, header=None, message="",
     # rest. Whatever is left, at least one contact is shown: seeing the last
     # one land is what tells an operator the log is working.
     entry_rows = form_rows(form, width) if form is not None else []
-    body_rows = max(1, height - 5 - max(1, len(entry_rows)))
-    shown = records[-body_rows:] if records else []
+    # One row less than before: the column heading takes it.
+    body_rows = max(1, height - 6 - max(1, len(entry_rows)))
+    # `scroll` counts rows back from the newest, the same direction and the
+    # same units the transcript uses, so one drag gesture means the same thing
+    # on both screens. Clamped here as well as by the caller: a draw must be
+    # sane whatever it is handed.
+    back = max(0, min(int(scroll or 0), max(0, len(records) - body_rows)))
+    end = len(records) - back
+    shown = records[max(0, end - body_rows):end] if records else []
 
-    used = {field: any(r.get(field) for r in shown)
+    # A column is drawn when a contact on screen uses it OR when the activity
+    # now selected asks for it. The second half is what shows the operator
+    # which columns they are about to fill: a contest started on a fresh log
+    # would otherwise show no serial column until the first contact was in,
+    # and the columns would appear underneath what had already been typed.
+    def _wanted(field):
+        if any(r.get(field) for r in shown):
+            return True
+        if form is None:
+            return False
+        if field == "serial_tx":
+            return bool(form.activity_type.serial)
+        return form.activity_type.wants(field)
+
+    used = {field: _wanted(field)
             for field in ("serial_tx", "serial_rx", "exchange_rx", "park")}
     used["park"] = used["park"] or bool(head.get("my_park"))
+
+    # Column headings, built from the same `used` and the same widths as the
+    # rows below, so a heading can never name a column that is not there.
+    heading = f" {'UTC':<5}  {'CALL':<10} {'RST':<7}"
+    if used["serial_tx"]:
+        heading += f" {'MY#':<5}"
+    if used["serial_rx"]:
+        heading += f" {'NR':<5}"
+    if used["exchange_rx"]:
+        heading += f" {'EXCH':<8}"
+    if used["park"]:
+        heading += f" {'REF':<9}"
+    heading += f" {'NAME':<9} QTH"
+    if back:
+        # Otherwise a scrolled list looks like a log that has stopped taking
+        # contacts -- the one thing this screen exists to disprove.
+        tag = f"-{back} "
+        heading = heading[:max(0, width - len(tag))].ljust(
+            max(0, width - len(tag))) + tag
+    out.append([(heading[:width].ljust(width), "dim")])
 
     for rec in shown:
         when = (rec.get("when", "") or "")[11:16]
@@ -941,7 +1090,11 @@ def log_screen(records, entry, width, height, header=None, message="",
             out.append(row)
         out.append([((" " + message)[:width].ljust(width),
                      "dim" if message else "")])
-        footer = " Esc back   Tab field   Enter log"
+        # F1 is the menu everywhere else on the deck and was unlabeled
+        # here, so the one screen with its own menu was the one screen
+        # that did not say so.
+        footer = (" F1 menu  F2 activity  Tab field  Enter log  ^X clear"
+                  "  Esc back")
         if head.get("hint"):
             footer += f"   {head['hint']}"
         out.append([(footer[:width].ljust(width), "dim")])

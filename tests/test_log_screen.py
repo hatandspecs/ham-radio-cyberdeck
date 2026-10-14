@@ -63,13 +63,29 @@ ord_rows = lines(ORD, "", 66, 10,
 check("no park in the header", "US-" not in ord_rows[0], ord_rows[0])
 check("and the header is otherwise full", "40m" in ord_rows[0]
       and "7.040" in ord_rows[0] and "2 QSOs" in ord_rows[0], ord_rows[0])
-check("the call sits at the same column with no park column reserved",
-      ord_rows[2].index("W3ABC") == ord_rows[2].index("W3ABC"), ord_rows[2])
-equals("the comment is on the row", "QRP 5W" in ord_rows[2], True)
-equals("a comment with no name is too", "first one on 40m" in ord_rows[3], True)
+# Derived from the renderer's own constants rather than written out, so a
+# layout change moves the test with the code instead of breaking it.
+HEADING = render.LOG_HEADING_ROW
+FIRST, SECOND = render.LOG_ROW0, render.LOG_ROW0 + 1
+check("the columns are named", "CALL" in ord_rows[HEADING]
+      and "UTC" in ord_rows[HEADING], ord_rows[HEADING])
+check("and an ordinary log is offered no exchange or serial column",
+      "EXCH" not in ord_rows[HEADING] and "MY#" not in ord_rows[HEADING],
+      ord_rows[HEADING])
+# This replaces an assertion that compared a value to itself and so could
+# never fail. What matters is that the call sits UNDER its heading: a heading
+# naming a column the rows do not use would be worse than no heading.
+equals("the call sits under the CALL heading",
+       ord_rows[FIRST].index("W3ABC"), ord_rows[HEADING].index("CALL"))
+equals("and the report under RST",
+       ord_rows[FIRST].index("59/57"), ord_rows[HEADING].index("RST"))
+equals("the comment is on the row", "QRP 5W" in ord_rows[FIRST], True)
+equals("a comment with no name is too",
+       "first one on 40m" in ord_rows[SECOND], True)
 check("and the two trailing texts line up",
-      ord_rows[2].index("QRP") > 30 and ord_rows[3].index("first") > 30,
-      "\n".join(ord_rows[2:4]))
+      ord_rows[FIRST].index("QRP") > 30
+      and ord_rows[SECOND].index("first") > 30,
+      "\n".join(ord_rows[FIRST:SECOND + 1]))
 
 my_park_absent = lines(ORD, "", 66, 10, header={"count": 2, "my_park": ""})[0]
 check("an empty my_park is dropped, not drawn blank",
@@ -100,7 +116,8 @@ for w in (40, 46, 50, 56):
     check(f"{w}: still says LOG", "LOG" in row, row)
 
 print("\ncontacts")
-body = lines(RECS, "", 66, 20, header=HEAD)[2:6]
+body = lines(RECS, "", 66, 20,
+             header=HEAD)[render.LOG_ROW0:render.LOG_ROW0 + 4]
 check("oldest of those shown first", body[0].strip().startswith("16:04"), body[0])
 check("time as HH:MM", "16:04" in body[0], body[0])
 check("call", "W3ABC" in body[0], body[0])
@@ -163,7 +180,7 @@ check("entry line survives", " > W3ABC" in tiny[-3], tiny[-3])
 check("footer survives", "Esc" in tiny[-1], tiny[-1])
 
 print("\nthe row constant tracks the layout")
-equals("LOG_ROW0 is where the first contact is drawn", render.LOG_ROW0, 2)
+equals("LOG_ROW0 is where the first contact is drawn", render.LOG_ROW0, 3)
 check("and that is where it actually is",
       "16:04" in lines(RECS, "", 66, 20, header=HEAD)[render.LOG_ROW0])
 
@@ -175,25 +192,82 @@ print("\nan activation reserves what general logging omits")
 # that sits empty.
 gen = lines(ORD, "", 66, 10, header={"count": 2})
 act = lines(ORD, "", 66, 10,
-            header={"count": 2, "activity": "POTA", "my_park": "US-5678"})
+            header={"count": 2, "activity_type": "POTA",
+                         "my_park": "US-5678"})
 check("general logging says only LOG", "LOG" in gen[0] and "POTA" not in gen[0],
       gen[0])
 check("the activity is named on the header", "POTA" in act[0], act[0])
 check("and so is the reference", "US-5678" in act[0], act[0])
 check("GENERAL is not printed as though it were an activity",
       "GENERAL" not in lines(ORD, "", 66, 10,
-                             header={"count": 2, "activity": "GENERAL"})[0])
+                             header={"count": 2,
+                                     "activity_type": "GENERAL"})[0])
 check("an activity needing a reference says when none is set",
       "no reference set" in lines(
           ORD, "", 66, 10,
-          header={"count": 2, "activity": "POTA", "needs_ref": True})[0])
+          header={"count": 2, "activity_type": "POTA",
+                  "needs_ref": True})[0])
 check("the reference column is reserved even with no parks logged",
-      act[2].index("Bob") > gen[2].index("Bob"),
-      f"general={gen[2]!r} activation={act[2]!r}")
+      act[render.LOG_ROW0].index("Bob") > gen[render.LOG_ROW0].index("Bob"),
+      f"general={gen[render.LOG_ROW0]!r} "
+      f"activation={act[render.LOG_ROW0]!r}")
 for w, h in ((50, 12), (66, 20), (80, 24)):
     rows = lines(ORD, "W3ABC", w, h,
                  header=dict(HEAD, activity="POTA", my_park="US-5678"))
     bad = [i for i, r in enumerate(rows) if len(r) != w]
     check(f"{w}x{h}: an activation still pads every row", not bad, str(bad[:4]))
+
+print("\nthe question asked before something is destroyed")
+# Its own screen, not a line on another one: deleting a log deletes contacts,
+# and a prompt sharing a screen with the thing it is about gets answered by
+# reflex. The pty tests assert the OUTCOME of answering it; this asserts what
+# it says, because any key but Enter cancels and the harness's own quit key
+# therefore always lands on the screen after the cancel.
+conf = [plain(l) for l in render.confirm_screen(
+    "DELETE ACTIVITY",
+    ["Bald Eagle SP  2026-10-11", "",
+     "12 contacts will be permanently deleted.",
+     "File: Bald-Eagle-SP_2026-10-11.log"], 66, 12)]
+flat = "\n".join(conf)
+check("it is titled by what it will do", "DELETE ACTIVITY" in conf[0], conf[0])
+check("it names the thing", "Bald Eagle SP" in flat, flat)
+check("and the date that tells it from another activation",
+      "2026-10-11" in flat, flat)
+check("it says how much is lost", "12 contacts" in flat, flat)
+check("and that it cannot be undone", "permanently" in flat, flat)
+check("Enter is the one key that does it", "Enter delete" in conf[-1], conf[-1])
+check("Esc keeps it", "Esc keep" in conf[-1], conf[-1])
+check("and so does everything else", "any other key" in conf[-1], conf[-1])
+for row in conf:
+    equals("every row is padded to the width", len(row), 66)
+equals("and it fits the height asked for", len(conf), 12)
+
+one = "\n".join(plain(l) for l in render.confirm_screen(
+    "DELETE ACTIVITY", ["Testpark", "", "1 contact will be permanently "
+                        "deleted."], 66, 12))
+check("one contact is singular", "1 contact will" in one, one)
+
+print("\nactivities, listed to be resumed or deleted")
+ROWS = [{"name": "Bald Eagle SP", "date": "2026-10-11", "contacts": 12,
+         "path": "/x/Bald-Eagle-SP_2026-10-11.log"},
+        {"name": "PAQP", "date": "2026-10-10", "contacts": 1, "path": "/x/p.log"}]
+acts = [plain(l) for l in render.activity_screen(ROWS, 0, 66, 14,
+                                                 current="PAQP")]
+flat = "\n".join(acts)
+check("titled", "ACTIVITIES" in acts[0], acts[0])
+check("both are listed", "Bald Eagle SP" in flat and "PAQP" in flat, flat)
+check("with their dates", "2026-10-11" in flat and "2026-10-10" in flat, flat)
+check("and their counts", "12 QSOs" in flat and "1 QSO" in flat, flat)
+check("the one in use is marked", "* PAQP" in flat, flat)
+check("and the one being pointed at", "\u25b8" in flat, flat)
+check("the footer says what the keys do",
+      all(w in acts[-1] for w in ("Enter resume", "n new", "d delete")),
+      acts[-1])
+for row in acts:
+    equals("every activity row is padded", len(row), 66)
+
+empty = "\n".join(plain(l) for l in render.activity_screen([], 0, 66, 14))
+check("an empty list explains itself rather than looking broken",
+      "nothing logged under an activity" in empty, empty)
 
 sys.exit(report())

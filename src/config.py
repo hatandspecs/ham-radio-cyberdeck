@@ -50,6 +50,18 @@ SECRETS_PATH = os.environ.get("CYBERDECK_SECRETS") or SECRETS_PATH
 SECRET_KEYS = ("QRZ_API_KEY", "QRZ_USER", "QRZ_PASSWORD",
                "HAMQTH_USER", "HAMQTH_PASSWORD")
 
+# Non-fatal problems found by the last load(), in the order found. The deck
+# prints these to stderr at startup so the journal carries them.
+#
+# A secrets file that cannot be READ lands here rather than raising. It once
+# raised, and the result was a deck that crash-looped at 3-second intervals
+# with a bare console on tty1: `sudo cp` into /opt/cyberdeck made the file
+# root-owned, `chmod 600` locked the service user out of it, and load() died
+# before curses started. Credentials are optional on every deck; the panel is
+# the device. An unreadable credentials file costs callbook lookups, and that
+# is all it may cost.
+NOTES = []
+
 # key -> (default, converter, description)
 SCHEMA = {
     "CALLSIGN":        ("", str, "this station's callsign"),
@@ -97,9 +109,18 @@ SCHEMA = {
                                      "logged mode comes from. auto fills it "
                                      "in from fldigi on digital and leaves "
                                      "voice alone; see qso_log_design.md §6"),
-    "ACTIVITY":        ("", str, "activity type for logging, e.g. POTA or "
-                                 "PAQP; blank is general logging. See "
-                                 "activities.conf and qso_log_design.md §6b"),
+    # An ACTIVITY is one operating session the operator names: a park
+    # activation, a weekend of a QSO party. An ACTIVITY_TYPE is the template
+    # it uses -- GENERAL, POTA, CONTEST, or one built on the panel. These were
+    # a single setting holding the type name; a conf that still spells it that
+    # way is read as both, and says so in config.NOTES.
+    "ACTIVITY":        ("", str, "name of the current logging session, e.g. "
+                                 "'Bald Eagle SP'; blank is casual logging. "
+                                 "Each activity gets its own log file"),
+    "ACTIVITY_TYPE":   ("", str, "which activity type the current activity "
+                                 "uses: GENERAL, POTA, CONTEST or one of your "
+                                 "own. See activities.conf and "
+                                 "qso_log_design.md §6b"),
     "EXCHANGE_TX":     ("", str, "this station's exchange for the current "
                                  "activity — a class, county or section; the "
                                  "same on every contact of an event"),
@@ -166,10 +187,15 @@ SCHEMA = {
     "TOUCH_ROW_PIXELS": (24, int, "the console cell height, so a drag of one "
                                   "row moves the transcript by one line"),
     "INHIBIT_ON_START": ("yes", str, "yes | no — start with transmit inhibited"),
-    "RIG_MODE":        ("PKTUSB", str, "rig mode set at startup and on band "
-                                       "change; PKTUSB is the radio's data "
-                                       "mode, USB is plain sideband, blank "
-                                       "leaves the radio alone"),
+    # NOT written to the radio. The deck reports the rig's mode and never
+    # changes it -- see cyberdeck._report_rig_mode. Kept in the schema so an
+    # existing cyberdeck.conf still loads, and because the value records what
+    # this station's data mode is for anyone reading the file.
+    "RIG_MODE":        ("PKTUSB", str, "this station's data mode, for "
+                                       "reference only. The deck reports the "
+                                       "radio's mode and never sets it; "
+                                       "transmit is inhibited while the radio "
+                                       "is not in a data mode"),
     "RSID_ON_START":   ("yes", str, "yes | no — follow other stations' mode "
                                     "identifiers automatically"),
     "REMEMBER_STATE":  ("yes", str, "yes | no — restore mode, carrier, color "
@@ -218,6 +244,7 @@ def load(path=None, secrets_path=None):
     defaults describe a usable station that simply has no callsign yet, and
     refusing to start over a missing file would be unhelpful on a first run."""
     path = path or DEFAULT_PATH
+    del NOTES[:]
     values = {k: v[0] for k, v in SCHEMA.items()}
     if not os.path.exists(path):
         return values
@@ -258,7 +285,31 @@ def load(path=None, secrets_path=None):
         raise ConfigError("\n".join(unknown))
 
     _load_secrets(values, secrets_path)
+    _split_activity(values)
     validate(values)
+    return values
+
+
+def _split_activity(values):
+    """Read an old ACTIVITY that named a type, not a session.
+
+    Before an activity and an activity type were different things, ACTIVITY
+    held the type: `ACTIVITY = POTA`. Such a line is read as both -- a session
+    called POTA using the POTA type -- which is what the deck did then and
+    loses nothing. Anything else in ACTIVITY is a session name and is left
+    alone.
+    """
+    name = str(values.get("ACTIVITY", "") or "").strip()
+    kind = str(values.get("ACTIVITY_TYPE", "") or "").strip()
+    if not name or kind:
+        return values
+    if name.upper() in ("GENERAL", "POTA", "CONTEST"):
+        values["ACTIVITY_TYPE"] = name.upper()
+        NOTES.append(
+            "cyberdeck.conf: ACTIVITY = {0} names an activity TYPE. It is "
+            "being read as an activity called {0} using the {0} type. Set "
+            "ACTIVITY_TYPE = {0} and give ACTIVITY the name of the session "
+            "to silence this.".format(name.upper()))
     return values
 
 
@@ -269,6 +320,8 @@ def _load_secrets(values, path=None):
     credentials at all, and the features that want them are off by default.
     A key named here that is not in SECRET_KEYS is refused, so a value put in
     the wrong file is reported rather than ignored.
+
+    An UNREADABLE file is a note, not an error. See NOTES.
     """
     # The environment is consulted here rather than only at import, so a test
     # can point this somewhere empty after the module is loaded. Without that
@@ -277,22 +330,32 @@ def _load_secrets(values, path=None):
     if not os.path.exists(path):
         return values
 
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError as exc:
+        NOTES.append(
+            f"{path}: cannot be read ({exc.strerror}), so callbook lookups "
+            f"have no credentials. It is most likely owned by root rather "
+            f"than by the user the deck runs as -- chown it to that user and "
+            f"chmod it 600.")
+        return values
+
     unknown = []
-    with open(path, encoding="utf-8") as fh:
-        for lineno, raw in enumerate(fh, 1):
-            line = raw.split("#", 1)[0].strip()
-            if not line:
-                continue
-            if "=" not in line:
-                raise ConfigError(f"{path}:{lineno}: expected KEY = value")
-            key, _, value = line.partition("=")
-            key, value = key.strip().upper(), value.strip()
-            if key not in SECRET_KEYS:
-                unknown.append(
-                    f"{path}:{lineno}: '{key}' does not belong in a secrets "
-                    f"file (expected one of: {', '.join(SECRET_KEYS)})")
-                continue
-            values[key] = value
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            raise ConfigError(f"{path}:{lineno}: expected KEY = value")
+        key, _, value = line.partition("=")
+        key, value = key.strip().upper(), value.strip()
+        if key not in SECRET_KEYS:
+            unknown.append(
+                f"{path}:{lineno}: '{key}' does not belong in a secrets "
+                f"file (expected one of: {', '.join(SECRET_KEYS)})")
+            continue
+        values[key] = value
     if unknown:
         raise ConfigError("\n".join(unknown))
     return values

@@ -13,6 +13,7 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 | `docs/` | Runbook and operating tutorial |
 | `docs/screens/` | Rendered screenshots of every screen |
 | `docs/logging_tutorial.md` | Operating the contact log, with screenshots |
+| `docs/logger_branch_deploy.md` | **Deploying this branch, and the recovery sequence back to `main`.** Read before touching the deck |
 | `slides/cyberdeck-talk.md` | The talk, as Marp markdown; `slides/diagrams/` holds the mermaid sources |
 
 ## Things that cost a lot to rediscover
@@ -234,21 +235,40 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 
 ## Where it stands
 
-1300 checks across 26 files, all passing (one pty check flakes per run; see
-above). The deck has worked real DX on PSK31 and RTTY. A DS3231 real-time
+1518 checks across 24 files, all passing as of 2026-10-11 on the `logger`
+branch. Run them serially and do not edit `src/` or `tests/` while a run is in
+flight: three successive runs during that session each reported a different
+single failure, because what executed was not what was on disk. A clean serial
+run had no flakes. The deck has worked real DX on PSK31 and RTTY. A DS3231 real-time
 clock is fitted and verified across a power cut with NTP disabled. The WiFi
 screen joins networks from the panel.
 
 A general-purpose QSO logger is on the local branch `logger` (2026-10-11),
 uncommitted, and **reachable from the panel**: Ctrl-N opens a tabbed entry
-form, Enter logs, Esc returns. `tests/test_log_panel.py` drives the real
-application through a pty under TERM=linux as well as xterm and checks a
-contact reaches the disk. Not yet wired: the root-menu entry, so logging is
-switched on and the activity chosen in `cyberdeck.conf` only. The pure cores — `src/qsolog.py`, `src/callbook.py`,
-`src/qrzlog.py`, `src/lotw.py`, `render.log_screen`, `menus.log_menu`,
-`tools/qso.py` — are written and tested offline; nothing is wired into
-`cyberdeck.py` yet, so the feature is unreachable from the panel.
+form, Tab moves between fields, Enter logs, Esc returns. F1 on that screen
+opens the logging menu — activity, dupe rule, ADIF export, and building an
+activity by copying one, choosing its fields, ordering them and naming it.
+`tests/test_log_panel.py` drives the real application through a pty under
+TERM=linux as well as xterm and checks a contact reaches the disk. The pure
+cores are `src/qsolog.py`, `src/activities.py`, `src/logform.py`,
+`src/callbook.py`, `src/qrzlog.py`, `src/lotw.py`, `render.log_screen`,
+`menus.log_menu` and `tools/qso.py`.
+
+**Uploading a contact is always a manual action.** Nothing on the deck sends
+anything and nothing on a timer does; `tools/qso.py lotw --upload` on the
+laptop is the only code path that transmits a log to a third party. A deck
+being tested is full of contacts that must not reach a permanent record. This
+is pinned in `tests/test_menus.py` as a property of the source — no `qrzlog`
+import in `cyberdeck.py`, no `upload(` call, no QRZ menu item — because a
+comment does not fail when somebody wires a key to an uploader.
+
 `docs/qso_log_design.md` carries the design and the open decisions.
+**`docs/logger_branch_deploy.md` carries the deploy sequence and the recovery
+sequence back to `main`** — read it before putting this branch on the deck.
+The two most expensive things in it: the conf and the code must move together,
+because `main`'s `config.py` refuses the keys this branch adds; and
+`systemctl is-active` reports `active` for a unit crash-looping every three
+seconds, so `journalctl -u cyberdeck-ui` is the only health check.
 
 It is a **general** log and that is a constraint, not a description. Activity
 types (`src/activities.py`, `activities.conf`) are named, ordered field lists

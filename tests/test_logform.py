@@ -31,6 +31,7 @@ from harness import check, equals, report
 import activities
 import logform
 import render
+import qsolog
 
 CONTEST = activities.parse_file(
     "[PAQP]\nlike = CONTEST\nlabel = PA QSO Party\nlabel_exchange_rx = County\n",
@@ -281,5 +282,136 @@ for w, h in ((50, 12), (66, 20), (80, 24), (100, 30)):
 old = render.log_screen(RECS, "W3ABC 59 57", 66, 20)
 check("the one-line entry still works without a form",
       "W3ABC 59 57" in "\n".join(render.plain(l) for l in old))
+
+print("\na looked-up value lands where the cursor can reach it")
+# Found on the deck 2026-10-11 with a name pulled from HamQTH: the operator
+# was sitting in the Name field when the answer arrived, so the value appeared
+# under a cursor still at 0, and Backspace returned early on `cursor <= 0`.
+# The name could not be deleted.
+f = logform.LogForm(activities.GENERAL)
+f.from_radio(freq="14.285", mode="SSB")
+f.focus("call")
+f.type("W3ABC")
+f.focus("name")
+equals("the empty field puts the cursor at 0", f.cursor, 0)
+f.set("name", "Ryan")
+equals("a value written into the focused field moves the cursor after it",
+       f.cursor, 4)
+f.backspace()
+equals("so Backspace deletes, as it must", f.value("name"), "Rya")
+
+# A write into a field that is NOT focused must not move the cursor.
+f.focus("call")
+f.cursor = 2
+f.set("qth", "Erie, PA")
+equals("a write elsewhere leaves the cursor alone", f.cursor, 2)
+
+print("\nthe callbook details belong to the callsign that fetched them")
+# The second fault from the same session: after backspacing the callsign and
+# typing another, the new lookup arrived and the first station's name stayed
+# on the form, because the merge only filled fields that were EMPTY.
+f = logform.LogForm(activities.GENERAL)
+f.set("name", "Ryan")
+f.set("qth", "Boalsburg, PA")
+check("a callbook name is dropped when the callsign changes",
+      f.forget_lookup())
+equals("the name is gone", f.value("name"), "")
+equals("and the QTH with it", f.value("qth"), "")
+
+# What the operator typed is a correction and outranks any callbook.
+f = logform.LogForm(activities.GENERAL)
+f.focus("name")
+f.type("Ryan")
+f.focus("qth")
+f.set("qth", "Boalsburg, PA")
+equals("a typed name survives", (f.forget_lookup(), f.value("name"))[1], "Ryan")
+equals("while the looked-up QTH goes", f.value("qth"), "")
+check("and it reports having nothing left to drop",
+      not f.forget_lookup())
+
+check("every lookup field is a real field name",
+      all(n in activities.ENTRY_FIELDS for n in logform.LOOKUP),
+      str(logform.LOOKUP))
+
+print("\nCtrl-X throws away the staged contact and keeps the session")
+act = activities.get("POTA", activities.load())
+f = logform.LogForm(act)
+f.from_radio(freq="14.285", mode="SSB")
+f.set("my_park", "US-5678")
+f.set("comment", "5W to a wire")
+f.focus("call")
+f.type("W3ABC")
+f.focus("name")
+f.type("Ryan")
+check("there is something to clear", f.clear())
+equals("the callsign is gone", f.value("call"), "")
+equals("and the name with it", f.value("name"), "")
+# The reports are prefilled from the MODE, not from the station worked, so
+# clearing must not cost the operator the 59 that was already there.
+equals("the report is back to the mode default", f.value("rst_s"), "59")
+equals("this station's reference stays — it is the session, not the contact",
+       f.value("my_park"), "US-5678")
+equals("so does the comment", f.value("comment"), "5W to a wire")
+equals("and the frequency", f.value("freq"), "14.285")
+equals("focus returns to the callsign", f.current.name, "call")
+check("a second clear reports nothing to do", not f.clear())
+
+print("\nevery selectable field has help and an ADIF home")
+import qsolog as _q
+_mapped = {k for k, _a in _q._ADIF_FIELDS}
+for name in activities.ENTRY_FIELDS:
+    check(f"{name}: described for the selection screen",
+          bool(activities.FIELD_HELP.get(name)), name)
+    # `park` is written as POTA_REF/SIG/SIG_INFO rather than through the
+    # table, because one typed reference becomes three ADIF fields.
+    if name != "park":
+        check(f"{name}: survives an export", name in _mapped, name)
+
+print("\nthe row keys reach every field")
+check("there are more fields than digits",
+      len(activities.ENTRY_FIELDS) > 9, str(len(activities.ENTRY_FIELDS)))
+check("and a key for every one of them",
+      all(activities.pick_key(i) for i in range(len(activities.ENTRY_FIELDS))))
+keys = [activities.pick_key(i) for i in range(len(activities.ENTRY_FIELDS))]
+equals("no key is used twice", len(set(keys)), len(keys))
+for i, k in enumerate(keys):
+    equals(f"{k!r} selects row {i}", activities.pick_index(ord(k)), i)
+equals("an upper-case letter works too",
+       activities.pick_index(ord("A")), activities.pick_index(ord("a")))
+equals("and an unbound key selects nothing",
+       activities.pick_index(ord("/")), -1)
+
+print("\nthe callsign is upper case however it is typed")
+# Caps Lock and the Shift key should not be able to produce a lower-case
+# callsign, and the operator should not have to look at the field to find out
+# which they got. A callsign is upper case everywhere it is ever written.
+f = logform.LogForm(activities.get("POTA", activities.load()))
+f.focus("call")
+f.type("kd3cco")
+equals("typed lower, held upper", f.value("call"), "KD3CCO")
+f.focus("park")
+f.type("us-1234")
+equals("and so is a reference", f.value("park"), "US-1234")
+f.set("my_park", "us-5678")
+equals("set programmatically too", f.value("my_park"), "US-5678")
+f.focus("name")
+f.type("Ryan")
+equals("a name is left exactly as typed", f.value("name"), "Ryan")
+# A Maidenhead locator is conventionally mixed case, so upper-casing it would
+# be wrong rather than tidy.
+check("grid is not an upper-case field", "grid" not in logform.UPPER,
+      str(logform.UPPER))
+
+print("\nthe frequency field holds the radio's full resolution")
+f = logform.LogForm(activities.GENERAL)
+f.from_radio(freq="7.185.000", mode="SSB")
+equals("as the radio reads it", f.value("freq"), "7.185.000")
+equals("and parses back to hertz", qsolog.parse_freq(f.value("freq")), 7185000)
+# An operator correcting it by hand types megahertz, which still has to work.
+f.focus("freq")
+f.kill()
+f.type("14.0706")
+equals("a hand-typed megahertz value is read as megahertz",
+       qsolog.parse_freq(f.value("freq")), 14070600)
 
 sys.exit(report())

@@ -189,4 +189,47 @@ check("no LoTW passphrase is a setting",
 check("and no certificate path either",
       not any("LOTW" in k and "CERT" in k for k in config.SCHEMA), "")
 
+print("\nan unreadable secrets file costs credentials, not the deck")
+# Measured on the deck, 2026-10-11: `sudo cp` into /opt/cyberdeck made the
+# file root-owned, the documented `chmod 600` then locked the service user
+# out, and load() raised PermissionError before curses started. systemd
+# reported the unit active while it crash-looped every three seconds, and the
+# panel showed a dead frame with the operator's keystrokes echoing over it.
+# Credentials are optional on every deck. The panel is the device.
+with tempfile.TemporaryDirectory() as tmp:
+    cpath = os.path.join(tmp, "cyberdeck.conf")
+    spath = os.path.join(tmp, "cyberdeck.secrets")
+    with open(cpath, "w") as fh:
+        fh.write("CALLSIGN = KD3CCO\nCALLBOOK = yes\n")
+    with open(spath, "w") as fh:
+        fh.write("HAMQTH_USER = KD3CCO\nHAMQTH_PASSWORD = secret\n")
+
+    values = config.load(cpath, spath)
+    equals("readable: the credential is there", values["HAMQTH_USER"], "KD3CCO")
+    equals("and nothing to report", config.NOTES, [])
+
+    os.chmod(spath, 0)
+    try:
+        values = config.load(cpath, spath)
+    except Exception as exc:                       # noqa: BLE001
+        check("unreadable: load does not raise", False, repr(exc))
+    else:
+        check("unreadable: load does not raise", True, "")
+        equals("the credential is simply absent", values["HAMQTH_USER"], "")
+        equals("the deck still has its callsign", values["CALLSIGN"], "KD3CCO")
+        equals("and one note was recorded", len(config.NOTES), 1)
+        note = config.NOTES[0]
+        check("naming the file", spath in note, note)
+        check("saying what it costs", "callbook" in note, note)
+        # "Permission denied" sends the operator to the file. "cannot be read"
+        # alone sends them to the network.
+        check("and why", "Permission denied" in note, note)
+        check("with the fix", "chown" in note and "600" in note, note)
+
+    os.chmod(spath, 0o600)
+    values = config.load(cpath, spath)
+    equals("fixed: the credential is back", values["HAMQTH_USER"], "KD3CCO")
+    # Per load, not cumulative: a stale note would outlive the problem.
+    equals("and the note is gone", config.NOTES, [])
+
 sys.exit(report())

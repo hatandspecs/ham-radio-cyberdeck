@@ -45,6 +45,14 @@ import re
 # general logging, while `name qth` still splits on the first space.
 TEXT, NUMBER, REPORT, REF = "text", "number", "report", "ref"
 
+# Every field an activity may put on the form, in the order the selection
+# screen lists them: the two reports first because almost every activity wants
+# them, then the contest exchange, then the reference, then who and where they
+# are, then the fields a particular event asks for.
+#
+# Each one has an ADIF home in qsolog._ADIF_FIELDS. A field with nowhere to go
+# in an export is a field that quietly does not survive the log, so adding one
+# here means adding it there.
 ENTRY_FIELDS = {
     "rst_s":       (REPORT, "Sent"),
     "rst_r":       (REPORT, "Rcvd"),
@@ -53,7 +61,40 @@ ENTRY_FIELDS = {
     "park":        (REF,    "Ref"),
     "name":        (TEXT,   "Name"),
     "qth":         (TEXT,   "QTH"),
+    # Their grid. The callbook fills it when there is a network, and VHF
+    # contests exchange it on the air.
+    "grid":        (TEXT,   "Grid"),
+    # State and county. A state QSO party is scored by county, so for the
+    # Pennsylvania QSO Party this is the exchange rather than a detail.
+    "state":       (TEXT,   "State"),
+    "county":      (TEXT,   "County"),
+    # CQ zone, exchanged in the CQ contests alongside the report.
+    "cq_zone":     (NUMBER, "CQ zn"),
+    # Their power, exchanged in QRP events.
+    "power_rx":    (NUMBER, "Their W"),
+    # ARRL Sweepstakes exchanges a check (the year first licensed) and a
+    # precedence alongside the serial and the section. Both or neither.
+    "check":       (NUMBER, "Check"),
+    "precedence":  (TEXT,   "Prec"),
 }
+
+# The keys that jump to a row on the selection screen, in row order. Digits
+# alone stopped reaching every field once the list grew past nine, and a row
+# only the arrow keys can get to is a row most operators will not find.
+PICK_KEYS = "123456789abcdefgh"
+
+
+def pick_index(ch):
+    """Row number for a typed character, or -1. Case is folded."""
+    try:
+        return PICK_KEYS.index(chr(ch).lower())
+    except (ValueError, TypeError):
+        return -1
+
+
+def pick_key(i):
+    """The character that jumps to row `i`, or "" past the end of the keys."""
+    return PICK_KEYS[i] if 0 <= i < len(PICK_KEYS) else ""
 
 # Settings an activity can draw on, each the same for every contact of an event.
 STATION_FIELDS = ("my_park", "exchange_tx")
@@ -63,26 +104,34 @@ STATION_FIELDS = ("my_park", "exchange_tx")
 # on the selection screen, where the question is "do I want this one" and
 # `exchange_rx` does not answer it.
 FIELD_HELP = {
-    "rst_s": "report you sent",
-    "rst_r": "report they sent",
+    "rst_s": "report sent",
+    "rst_r": "report received",
     "serial_rx": "their serial number",
-    "exchange_rx": "their exchange — class, county, section",
-    "park": "their park or summit reference",
+    "exchange_rx": "their exchange — class, section",
+    "park": "their park or summit ref",
     "name": "their name",
     "qth": "where they are",
+    "grid": "their grid square",
+    "state": "their state or province",
+    "county": "their county — state QSO parties",
+    "cq_zone": "their CQ zone",
+    "power_rx": "their power in watts",
+    "check": "their check — ARRL Sweepstakes",
+    "precedence": "their precedence — ARRL SS",
 }
 
 
 def field_choices():
     """Every field an `entry` list may name, with its label and kind.
 
-    This is the menu of possible fields. Returned in a fixed, sensible order
-    rather than a dict's order so the chooser on the panel and the listing in
-    the documentation agree.
+    This is the menu of possible fields, in ENTRY_FIELDS order -- which is
+    chosen deliberately there and is what the selection screen draws.
+
+    It used to repeat that order as a tuple of its own. Adding seven fields
+    to ENTRY_FIELDS then left them selectable nowhere, because this function
+    is what the panel asks. The order lives in one place now.
     """
-    order = ("rst_s", "rst_r", "serial_rx", "exchange_rx", "park",
-             "name", "qth")
-    return [(f, ENTRY_FIELDS[f][1], ENTRY_FIELDS[f][0]) for f in order]
+    return [(f, ENTRY_FIELDS[f][1], ENTRY_FIELDS[f][0]) for f in ENTRY_FIELDS]
 
 DEFAULT_PATH = "~/.config/cyberdeck/activities.conf"
 
@@ -91,8 +140,15 @@ class ActivityError(Exception):
     """A malformed activity definition. Refused at load, not at log time."""
 
 
-class Activity:
-    """One activity type. Immutable once built."""
+class ActivityType:
+    """One activity TYPE: a named, ordered field list.
+
+    A *type* is the template -- General, POTA, Contest, or one the operator
+    built. An *activity* is a logging session that chooses a type and has a
+    name of its own ("Bald Eagle SP", "PAQP 2026"); that lives in cyberdeck.py
+    and in the log, not here. The two were one word until they were not: a
+    type is edited once and reused, an activity happens once.
+    """
 
     def __init__(self, name, label="", entry=(), sig="", contest_id="",
                  serial=False, serial_start=1, labels=None):
@@ -127,14 +183,14 @@ class Activity:
 # The general activity: what the logger is when no activity is chosen. Its
 # grammar is the one the log has always had, so choosing nothing changes
 # nothing.
-GENERAL = Activity("GENERAL", label="General logging",
+GENERAL = ActivityType("GENERAL", label="General logging",
                    entry=("rst_s", "rst_r", "name", "qth"))
 
 BUILTIN = {
     "GENERAL": GENERAL,
     # Hunting is typed; this station's own reference is a setting. Reports
     # first, because a park contact is still a signal report.
-    "POTA": Activity("POTA", label="Parks on the Air",
+    "POTA": ActivityType("POTA", label="Parks on the Air",
                      entry=("rst_s", "rst_r", "park", "name"),
                      sig="POTA", labels={"park": "Park"}),
     # A serial-and-exchange event, both directions. Reports are deliberately
@@ -142,7 +198,7 @@ BUILTIN = {
     # is wasted motion, and leaving them out is what frees the numeric slot
     # for the serial. This station's own serial increments; its own exchange
     # is EXCHANGE_TX, because it is the same on every contact.
-    "CONTEST": Activity("CONTEST", label="Contest or QSO party",
+    "CONTEST": ActivityType("CONTEST", label="Contest or QSO party",
                         entry=("serial_rx", "exchange_rx"),
                         serial=True, labels={"exchange_rx": "Exchange"}),
 }
@@ -296,6 +352,64 @@ def save(path, name, text):
     return path
 
 
+def delete(path, name):
+    """Remove one activity type's section from `path`.
+
+    Returns (ok, message). The rest of the file is preserved byte for byte,
+    the same as `save`, because it may hold definitions this program has
+    never seen and comments explaining them.
+
+    A built-in cannot be deleted: GENERAL, POTA and CONTEST live in this
+    module rather than in the file, so removing a section of that name would
+    appear to work and change nothing -- which is worse than a refusal. An
+    override of a built-in IS removable, and deleting it restores the
+    built-in, which is what an operator who edited one and wants the original
+    back is actually asking for.
+    """
+    import os
+    want = str(name or "").strip().upper()
+    if not want:
+        return False, "no activity type named"
+    path = os.path.expanduser(path)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines(keepends=True)
+    except OSError:
+        lines = []
+
+    out, skipping, found = [], False, False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            skipping = stripped[1:-1].strip().upper() == want
+            found = found or skipping
+        if not skipping:
+            out.append(line)
+
+    if not found:
+        if want in BUILTIN:
+            return False, f"{want} is built in and cannot be deleted"
+        return False, f"{want} is not in {os.path.basename(path)}"
+
+    body = "".join(out).rstrip()
+    whole = body + "\n" if body else ""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(whole)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    if want in BUILTIN:
+        return True, f"{want} reset to the built-in definition"
+    return True, f"{want} deleted"
+
+
+def is_builtin(name):
+    """Whether a type lives in this module rather than in the file."""
+    return str(name or "").strip().upper() in BUILTIN
+
+
 def _split_list(text):
     return [p.strip() for p in re.split(r"[,\s]+", (text or "").strip()) if p.strip()]
 
@@ -401,7 +515,7 @@ def parse_file(text, name="", inherit_from=None):
         labels.update({k.lower()[6:]: v for k, v in sec.items()
                        if k.lower().startswith("label_")})
 
-        out[key] = Activity(
+        out[key] = ActivityType(
             key,
             label=sec.get("label", base.label if base is not None else ""),
             entry=entry,

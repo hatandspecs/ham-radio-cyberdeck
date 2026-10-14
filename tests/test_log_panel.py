@@ -22,28 +22,61 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "src"))
 
 from harness import check, equals, report
 from test_screen import run, show
+import activities
+import menus
 
 STATION = ("CALLSIGN = KD3CCO\nLOCATOR = FN10cs\nRIG = FTX-1\n"
            "ANTENNA = EFHW\n")
 
 
-def deck(keys, conf_extra, settle=2.2, term="linux", label=""):
+def deck(keys, conf_extra, settle=2.2, term="linux", label="",
+         log_name="qso.log", log_body="", activity_log=""):
     """Run the application with a configuration of our own. Returns (body, log).
 
     The log path is a temporary file, so a test can never append to the
-    operator's real contact log.
+    operator's real contact log. `log_name` names that file, because "qso.log"
+    is the default the header deliberately does not print; `log_body` seeds it
+    with contacts already made.
+
+    LOG_PATH is written last, after `conf_extra`, so a test cannot set it by
+    hand and silently have it overridden -- which is what happened when this
+    was first written.
     """
     with tempfile.TemporaryDirectory() as tmp:
-        log_path = os.path.join(tmp, "qso.log")
+        log_path = os.path.join(tmp, log_name)
+        # `activity_log` seeds an ACTIVITY's own file instead of the default
+        # one, which is where a named activity's contacts actually live. The
+        # date has to match what the deck will derive, so it is taken from
+        # the same clock the deck reads.
+        if activity_log:
+            import datetime as _dt
+            stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+            adir = os.path.join(tmp, "activities")
+            os.makedirs(adir, exist_ok=True)
+            with open(os.path.join(adir, f"{activity_log}_{stamp}.log"),
+                      "w") as fh:
+                fh.write(log_body)
+        elif log_body:
+            with open(log_path, "w") as fh:
+                fh.write(log_body)
         conf_path = os.path.join(tmp, "cyberdeck.conf")
         with open(conf_path, "w") as fh:
             fh.write(STATION + conf_extra + f"LOG_PATH = {log_path}\n")
         body = show(label or "deck", run(keys=keys, settle=settle, term=term,
                                          conf=conf_path))
+        # Contacts may be in the default log or in an activity's own file,
+        # depending on whether an activity is named -- so collect both. A
+        # harness that only read the default log reported "nothing was
+        # logged" for a contact that was logged correctly somewhere else.
         written = []
-        if os.path.exists(log_path):
-            with open(log_path) as fh:
-                written = [l.strip() for l in fh if l.strip()]
+        for candidate in [log_path] + sorted(
+                os.path.join(tmp, "activities", f)
+                for f in (os.listdir(os.path.join(tmp, "activities"))
+                          if os.path.isdir(os.path.join(tmp, "activities"))
+                          else [])):
+            if os.path.exists(candidate):
+                with open(candidate) as fh:
+                    written += [l.strip() for l in fh if l.strip()]
         return body, written
 
 
@@ -62,7 +95,7 @@ for term in ("xterm", "linux"):
 
 print("\nlogging on: Ctrl-N opens the log screen")
 for term in ("xterm", "linux"):
-    body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY = CONTEST\n"
+    body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n"
                    "EXCHANGE_TX = CENT\n", term=term,
                    label=f"Ctrl-N with logging on ({term})")
     check(f"{term}: the log screen is drawn", "LOG" in body, body[:120])
@@ -77,12 +110,12 @@ for term in ("xterm", "linux"):
 print("\na contact typed on the panel reaches the disk")
 keys = (["\x0e"] + list("W3ABC") + ["\t"] + list("101") + ["\t"]
         + list("MONT") + ["\r"])
-body, written = deck(keys, "LOGGING = yes\nACTIVITY = CONTEST\n"
+body, written = deck(keys, "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n"
                      "EXCHANGE_TX = CENT\n", label="log a contact")
 equals("exactly one line was written", len(written), 1)
 line = written[0] if written else ""
 for want in ("call=W3ABC", "serial_rx=101", "exchange_rx=MONT",
-             "exchange_tx=CENT", "activity=CONTEST", "my_call=KD3CCO"):
+             "exchange_tx=CENT", "activity_type=CONTEST", "my_call=KD3CCO"):
     check(f"the record carries {want}", want in line, line)
 # Rig and antenna come from the Station menu rather than being typed, so a
 # contact logged without touching them still says what made it.
@@ -102,7 +135,7 @@ print("\nthe reports default from the MODE, not from nothing")
 # Found on the deck: an SSB contest contact logged rst 599, because the commit
 # passed an empty mode to parse_entry and a contest form has no report fields
 # to correct it afterwards. 599 is the digital default.
-body, written = deck(keys, "LOGGING = yes\nACTIVITY = CONTEST\n"
+body, written = deck(keys, "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n"
                      "EXCHANGE_TX = CENT\nOPERATING = voice\n",
                      label="voice contest contact")
 line = written[0] if written else ""
@@ -129,7 +162,7 @@ F1 = {"xterm": "\x1bOP", "linux": "\x1b[[A"}
 
 for term in ("xterm", "linux"):
     body, _ = deck(["\x0e", F1[term]],
-                   "LOGGING = yes\nACTIVITY = CONTEST\nEXCHANGE_TX = CENT\n",
+                   "LOGGING = yes\nACTIVITY_TYPE = CONTEST\nEXCHANGE_TX = CENT\n",
                    term=term, label=f"Ctrl-N then F1 ({term})")
     check(f"{term}: the LOGGING menu opens", "LOGGING" in body, body[:120])
     check(f"{term}: it offers the activity", "Activity" in body, body[:400])
@@ -140,7 +173,7 @@ for term in ("xterm", "linux"):
 
 for term in ("xterm", "linux"):
     body, _ = deck(["\x0e", F1[term], "v"],
-                   "LOGGING = yes\nACTIVITY = CONTEST\n", term=term,
+                   "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n", term=term,
                    label=f"into the activity picker ({term})")
     check(f"{term}: the picker opens", "ACTIVITY" in body, body[:120])
     check(f"{term}: general logging is offered first",
@@ -154,7 +187,7 @@ print("\nchoosing an activity changes the form")
 # Esc from the logging menu goes UP to the root menu rather than out, so
 # leaving takes two of them before Ctrl-N can reach the log screen again.
 body, _ = deck(["\x0e", F1["linux"], "v", "g", "\x1b", "\x1b", "\x0e"],
-               "LOGGING = yes\nACTIVITY = CONTEST\n",
+               "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n",
                label="switch to general logging")
 check("the form now has reports", "Sent" in body and "Rcvd" in body,
       body[-400:])
@@ -176,7 +209,7 @@ def build(keys, label):
         log_path = os.path.join(tmp, "qso.log")
         conf_path = os.path.join(tmp, "cyberdeck.conf")
         with open(conf_path, "w") as fh:
-            fh.write(STATION + "LOGGING = yes\nACTIVITY = CONTEST\n"
+            fh.write(STATION + "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n"
                      + f"LOG_PATH = {log_path}\n")
         os.environ["CYBERDECK_ACTIVITIES"] = acts
         try:
@@ -225,6 +258,283 @@ try:
            _acts.config_path(), "/tmp/somewhere/activities.conf")
 finally:
     os.environ.pop("CYBERDECK_ACTIVITIES", None)
+
+print("\nthe log screen says F1 opens its menu")
+# The function keys were dead on this screen, so F1 was given the logging
+# menu -- and then the one screen on the deck with a menu of its own was the
+# one screen whose footer did not mention F1.
+body, _ = deck(["\x0e"], "LOGGING = yes\n", label="the footer names F1")
+check("F1 is named in the footer", "F1 menu" in body, body[-140:])
+check("and so is the clear key", "^X clear" in body, body[-140:])
+
+print("\nCtrl-X clears the staged contact on the panel")
+# Byte 24. The linux console's terminfo captures control bytes as keys in
+# exactly one place -- kspd=^Z -- so ^X arrives as 24 under both terminals;
+# it is already the transcript's clear key on this panel. Checked under both
+# anyway, because that is the assumption that was wrong last time.
+for term in ("xterm", "linux"):
+    keys = (["\x0e"] + list("W3ABC") + ["\t"] + list("101") + ["\x18"])
+    body, written = deck(keys, "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n"
+                         "EXCHANGE_TX = CENT\n", term=term,
+                         label=f"type then Ctrl-X ({term})")
+    check(f"{term}: it says the entry was cleared",
+          "entry cleared" in body, body[-200:])
+    check(f"{term}: the callsign is gone from the form",
+          "W3ABC" not in body, body[-400:])
+    equals(f"{term}: and nothing was logged", written, [])
+    # Sticky fields describe the session, not the station, and survive it.
+    check(f"{term}: this station's exchange stayed", "CENT" in body,
+          body[-400:])
+
+# Pressed on a form holding nothing, it says so rather than looking dead.
+body, _ = deck(["\x0e", "\x18"], "LOGGING = yes\n",
+               label="Ctrl-X on an empty form")
+check("nothing staged is reported, not ignored",
+      "nothing staged" in body, body[-200:])
+
+print("\nthe log file is named, and switching it switches the log")
+SEEDED = ("when=2026-10-11T14:00:00Z call=W1AW band=40m mode=SSB "
+          "rst_s=59 rst_r=59 my_call=KD3CCO\n"
+          "when=2026-10-11T14:01:00Z call=K2XYZ band=40m mode=SSB "
+          "rst_s=59 rst_r=57 my_call=KD3CCO\n")
+
+body, _ = deck(["\x0e"], "LOGGING = yes\n", log_name="paqp.log",
+               log_body=SEEDED, label="a named log is named on the header")
+check("the header names the log", "LOG:paqp.log" in body, body[:120])
+check("and the contacts in it are listed",
+      "W1AW" in body and "K2XYZ" in body, body[:400])
+check("with the count", "2 QSO" in body, body[:120])
+
+# The default log is NOT named, so an ordinary deck's header is unchanged.
+body, _ = deck(["\x0e"], "LOGGING = yes\n", label="the default log is unnamed")
+check("the default log name is left off the header",
+      "LOG:" not in body, body[:120])
+check("the header is still the log screen", "LOG" in body, body[:120])
+
+print("\nthe logging menu offers the log file, and no uploader")
+body, _ = deck(["\x0e", F1["linux"]], "LOGGING = yes\n", term="linux",
+               label="the logging menu")
+check("the default log is offered", "Default log" in body, body[:400])
+check("and no QRZ upload", "QRZ" not in body, body[:400])
+check("and nothing claims contacts are waiting to be sent",
+      "waiting" not in body, body[:400])
+
+print("\nthe list is this activity's contacts, under named columns")
+# One deck keeps one log file. Switching to a contest and still seeing the
+# morning's ordinary contacts put rows with no serial under a serial column,
+# and made the header count answer a question nobody asked.
+MIXED = ("when=2026-10-11T14:00:00Z call=W1AW band=40m mode=SSB "
+         "rst_s=59 rst_r=59 my_call=KD3CCO\n"
+         "when=2026-10-11T18:31:00Z call=K3PP band=40m mode=SSB rst_s=59 "
+         "rst_r=59 serial_tx=55 serial_rx=101 exchange_rx=MONT "
+         "activity=CONTEST my_call=KD3CCO\n")
+
+# A legacy ACTIVITY = CONTEST is a session named CONTEST, and the mixed log
+# below holds one contact in it and one belonging to no activity.
+body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY = CONTEST\n",
+               log_body=MIXED, activity_log="CONTEST",
+               label="a named activity lists its own contacts")
+check("the contact in that activity is listed", "K3PP" in body, body[:400])
+check("the one outside it is not", "W1AW" not in body, body[:400])
+check("and the count is this activity's", "1 QSO" in body, body[:120])
+
+body, _ = deck(["\x0e"], "LOGGING = yes\n", log_body=MIXED,
+               label="a general form lists general contacts")
+check("casual logging lists the contact belonging to no activity",
+      "W1AW" in body, body[:400])
+check("and not the one inside an activity", "K3PP" not in body, body[:400])
+
+print("\nthe columns say what is being filled in")
+body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n",
+               log_body=MIXED, label="contest column headings")
+for want in ("UTC", "CALL", "RST", "NR", "EXCH"):
+    check(f"the {want} column is named", want in body, body[:300])
+
+# On an EMPTY log the columns still have to appear, or the operator cannot see
+# which fields they are about to fill until the first contact is already in.
+body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n",
+               label="contest columns on an empty log")
+check("the serial column is there before the first contact",
+      "NR" in body, body[:300])
+check("and the exchange column with it", "EXCH" in body, body[:300])
+
+# A general activity has no serial and no exchange, so naming those columns
+# would be naming fields that do not exist on its form.
+body, _ = deck(["\x0e"], "LOGGING = yes\n", label="general column headings")
+check("general logging names a name column", "NAME" in body, body[:300])
+check("and no exchange column", "EXCH" not in body, body[:300])
+check("and no serial column", "MY#" not in body, body[:300])
+
+print("\nthe callsign goes in upper case")
+body, written = deck(["\x0e"] + list("w3abc") + ["\r"], "LOGGING = yes\n",
+                     label="lower-case callsign typed")
+check("the form shows it upper", "W3ABC" in body, body[-400:])
+check("and never lower", "w3abc" not in body, body[-400:])
+line = written[0] if written else ""
+check("and the log records it upper", "call=W3ABC" in line, line)
+
+print("\nan activity has a name, a type and a log file of its own")
+body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY = Bald Eagle SP\n"
+               "ACTIVITY_TYPE = POTA\n", label="a named activity")
+check("the header names the activity", "Bald Eagle SP" in body, body[:120])
+check("and the type it uses", "POTA" in body, body[:120])
+check("the reference column is reserved", "REF" in body, body[:300])
+
+# ACTIVITY naming a TYPE is how it was spelled before the two were different
+# things. It is read as both rather than refused.
+body, _ = deck(["\x0e"], "LOGGING = yes\nACTIVITY = POTA\n",
+               label="the old spelling still works")
+check("an old ACTIVITY = POTA still gives a POTA form",
+      "Park" in body or "Ref" in body, body[-400:])
+
+print("\nF2 opens the activities list")
+F2 = {"xterm": "\x1bOQ", "linux": "\x1b[[B"}
+for term in ("xterm", "linux"):
+    body, _ = deck(["\x0e", F2[term]], "LOGGING = yes\n", term=term,
+                   label=f"Ctrl-N then F2 ({term})")
+    check(f"{term}: the activities screen opens", "ACTIVITIES" in body,
+          body[:120])
+    check(f"{term}: it says how to start one", "n new" in body, body[-120:])
+    check(f"{term}: and how to delete one", "d delete" in body, body[-120:])
+
+# With nothing logged under an activity the screen says so rather than
+# showing an empty list that looks broken.
+body, _ = deck(["\x0e", F2["linux"]], "LOGGING = yes\n",
+               label="no activities yet")
+check("an empty list explains itself", "nothing logged under an activity"
+      in body, body[:200])
+
+print("\ndeleting an activity asks first, then does it")
+#
+# These assert OUTCOMES, not the final screen. The harness ends every run
+# with Ctrl-Q, and the confirmation is cancelled by any key except Enter --
+# deliberately, since the operator who hit `d` by accident is who it is for.
+# So the last screen is always the screen AFTER cancelling, and a test that
+# looked for "DELETE ACTIVITY" on it could never pass. What the confirmation
+# SAYS is checked against render.confirm_screen in test_log_screen.py.
+SEED = ("when=2026-10-11T14:00:00Z call=W1AW band=40m mode=SSB rst_s=59 "
+        "rst_r=59 my_call=KD3CCO activity=Testpark activity_type=POTA\n")
+
+
+def with_activity(keys, label, settle=3.0):
+    """Run with one activity already on disk. Returns (body, files left)."""
+    import datetime as _dt
+    with tempfile.TemporaryDirectory() as tmp:
+        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        adir = os.path.join(tmp, "activities")
+        os.makedirs(adir)
+        with open(os.path.join(adir, f"Testpark_{stamp}.log"), "w") as fh:
+            fh.write(SEED)
+        conf_path = os.path.join(tmp, "cyberdeck.conf")
+        with open(conf_path, "w") as fh:
+            fh.write(STATION + "LOGGING = yes\n"
+                     + f"LOG_PATH = {os.path.join(tmp, 'qso.log')}\n")
+        body = show(label, run(keys=keys, settle=settle, term="linux",
+                               conf=conf_path))
+        return body, sorted(os.listdir(adir))
+
+
+body, left = with_activity(["\x0e", F2["linux"]], "the activity is listed")
+check("it appears in the list", "Testpark" in body, body[:300])
+check("with its contact count", "1 QSO" in body, body[:300])
+check("and is marked as the one in use only when it is",
+      "* Testpark" not in body, body[:300])
+
+body, left = with_activity(["\x0e", F2["linux"], "d"], "d alone deletes nothing")
+check("the question alone destroys nothing",
+      any("Testpark" in f for f in left), str(left))
+
+body, left = with_activity(["\x0e", F2["linux"], "d", "\x1b"], "Esc keeps it")
+check("Esc keeps the activity", any("Testpark" in f for f in left), str(left))
+check("and the list comes back", "ACTIVITIES" in body, body[:200])
+
+body, left = with_activity(["\x0e", F2["linux"], "d", "x"],
+                           "another key keeps it")
+check("an unrelated key keeps it too — the default is to keep",
+      any("Testpark" in f for f in left), str(left))
+
+body, left = with_activity(["\x0e", F2["linux"], "d", "\r"],
+                           "Enter deletes it")
+equals("Enter deletes the file", left, [])
+check("and it says so", "deleted" in body, body)
+
+print("\ndeleting an activity type asks first, then does it")
+
+
+def with_type(keys, label, settle=3.4):
+    """Run with two saved activity types. Returns (body, activities.conf)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        acts = os.path.join(tmp, "activities.conf")
+        with open(acts, "w") as fh:
+            fh.write("[PAQP]\nlike = CONTEST\nlabel = Pennsylvania QSO "
+                     "Party\n\n[KEEPME]\nlabel = Not this one\n")
+        conf_path = os.path.join(tmp, "cyberdeck.conf")
+        with open(conf_path, "w") as fh:
+            fh.write(STATION + "LOGGING = yes\n"
+                     + f"LOG_PATH = {os.path.join(tmp, 'qso.log')}\n")
+        os.environ["CYBERDECK_ACTIVITIES"] = acts
+        try:
+            body = show(label, run(keys=keys, settle=settle, term="linux",
+                                   conf=conf_path))
+        finally:
+            os.environ.pop("CYBERDECK_ACTIVITIES", None)
+        return body, open(acts).read()
+
+
+# The picker numbers EVERY type, the built-ins included, so the number for a
+# saved one is not its position among the saved ones. Derived from the menu
+# rather than counted by hand: hard-coding "2" picked KEEPME and the delete
+# worked perfectly on the wrong type, which is a mistake worth making only
+# once.
+def type_key(name):
+    table = dict(activities.BUILTIN)
+    table["PAQP"] = table["CONTEST"]
+    table["KEEPME"] = table["GENERAL"]
+    menu = menus.activity_type_menu(sorted(table), "")
+    for key, label in menu["items"]:
+        if label.split()[0] == name:
+            return key
+    raise AssertionError(f"{name} is not in {menu['items']}")
+
+
+PAQP_KEY = type_key("PAQP")
+equals("the picker numbers built-ins too, so PAQP is not number 2",
+       PAQP_KEY, "3")
+
+body, text = with_type(["\x0e", F1["linux"], "v"], "the types are listed")
+check("the saved type is offered", "PAQP" in body, body[:400])
+check("and the other one", "KEEPME" in body, body[:400])
+
+body, text = with_type(["\x0e", F1["linux"], "v", "d", PAQP_KEY],
+                       "d then a number asks")
+check("the question alone deletes nothing", "[PAQP]" in text, text)
+
+body, text = with_type(["\x0e", F1["linux"], "v", "d", PAQP_KEY, "\x1b"],
+                       "Esc keeps the type")
+check("Esc keeps it", "[PAQP]" in text, text)
+
+body, text = with_type(["\x0e", F1["linux"], "v", "d", PAQP_KEY, "\r"],
+                       "Enter deletes the type")
+check("the type is gone from the file", "[PAQP]" not in text, text)
+check("and the one beside it is untouched",
+      "[KEEPME]" in text and "Not this one" in text, text)
+
+# A built-in has no section to remove. Nothing is written and nothing else is
+# disturbed -- the file is the property worth asserting, because the note that
+# explains it goes to the transcript, which a menu is covering.
+body, text = with_type(["\x0e", F1["linux"], "v", "d", "g", "\r"],
+                       "a built-in cannot be deleted")
+check("the file is untouched", "[PAQP]" in text and "[KEEPME]" in text, text)
+
+# Selecting a type after pressing `d` and changing your mind must SELECT it,
+# not delete it: the pending flag has to clear.
+# Esc from the picker goes UP to the root menu, so getting back in is
+# 8 (Logging) then v.
+body, text = with_type(["\x0e", F1["linux"], "v", "d", "\x1b",
+                        "8", "v", PAQP_KEY],
+                       "d then Esc then a number selects")
+check("the type still exists", "[PAQP]" in text, text)
+check("and was selected", "PAQP" in body, body[:200])
 
 print("\nEsc returns to the conversation")
 body, _ = deck(["\x0e", "\x1b"], "LOGGING = yes\n", label="Ctrl-N then Esc")

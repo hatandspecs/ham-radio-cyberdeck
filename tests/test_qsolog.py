@@ -359,7 +359,7 @@ equals("and with no fldigi it does NOT leak into the log",
 equals("same for RTTY as a rig mode with nothing driving it",
        rm("auto", "RTTY", ""), ("SSB", "default"))
 check("no data mode ever reaches ADIF as itself",
-      all(rm(op, data, "")[0] not in qsolog._RIG_DATA_MODES
+      all(rm(op, data, "")[0] not in qsolog.RIG_DATA_MODES
           for op in qsolog.OPERATING
           for data in ("PKTUSB", "PKTLSB", "DATA-U", "RTTY")),
       "a hamlib mode string reached the MODE field")
@@ -512,5 +512,66 @@ check("and an ordinary contact has neither spelling",
 check("the header version is the one that defines these fields",
       "<ADIF_VER:5>3.1.4" in qsolog.adif_header(),
       qsolog.adif_header())
+
+print("\nfrequencies, at the radio's own resolution")
+# The log screen shows 7.185.000 rather than 7.185: rounding to three decimals
+# throws away the tens of hertz, which is the part that matters inside a 31 Hz
+# signal and the part that lets the reading be checked against the radio. That
+# means the field holds a string float() cannot read.
+for text, hz in (("7.185.000", 7_185_000),
+                 ("14.070.589", 14_070_589),
+                 ("7.185", 7_185_000),
+                 ("7.1853", 7_185_300),
+                 ("7", 7_000_000),
+                 ("7185000", 7_185_000),
+                 ("", 0),
+                 ("junk", 0),
+                 ("0", 0)):
+    equals(f"{text!r} is {hz} Hz", qsolog.parse_freq(text), hz)
+equals("and the band comes out of it",
+       qsolog.band_for(qsolog.parse_freq("14.070.589")), "20m")
+# Round trip against the renderer, which is what writes the field.
+import render as _render
+equals("what render.frequency writes, parse_freq reads",
+       qsolog.parse_freq(_render.frequency(7_185_000)), 7_185_000)
+
+print("\nactivities listed out of the log")
+RECS = [{"activity": "Bald Eagle SP", "activity_type": "POTA",
+         "when": "2026-10-11T14:00:00Z"},
+        {"activity": "Bald Eagle SP", "activity_type": "POTA",
+         "when": "2026-10-11T14:05:00Z"},
+        {"activity": "PAQP 2026", "activity_type": "CONTEST",
+         "when": "2026-10-10T18:00:00Z"},
+        {"call": "W1AW", "when": "2026-10-12T00:00:00Z"}]
+found = qsolog.activities_in(RECS)
+equals("one entry per activity, not per contact", len(found), 2)
+equals("newest first by last contact", found[0]["name"], "Bald Eagle SP")
+equals("with its type", found[0]["type"], "POTA")
+equals("and how many contacts it holds", found[0]["count"], 2)
+check("a contact belonging to no activity is not one",
+      all(e["name"] for e in found), str(found))
+
+equals("filtering to an activity takes only its contacts",
+       len(qsolog.for_activity(RECS, "Bald Eagle SP")), 2)
+equals("an empty name means the ones belonging to no activity",
+       len(qsolog.for_activity(RECS, "")), 1)
+
+print("\nserials are scoped to the activity, not to the type")
+# Two weekends of the same QSO party are two activities, and each counts from
+# one. Scoping to the type would have the second continue the first.
+SER = [{"activity": "PAQP 2026", "activity_type": "CONTEST", "serial_tx": "4"},
+       {"activity": "PAQP 2025", "activity_type": "CONTEST", "serial_tx": "88"}]
+equals("this year's next serial", qsolog.next_serial(SER, "PAQP 2026"), 5)
+equals("last year's is a different sequence",
+       qsolog.next_serial(SER, "PAQP 2025"), 89)
+equals("and a new activity starts at one",
+       qsolog.next_serial(SER, "PAQP 2027"), 1)
+
+print("\nthe rig modes digital transmit can use are public")
+check("PKTUSB is one", "PKTUSB" in qsolog.RIG_DATA_MODES)
+check("and USB is not — it is plain sideband",
+      "USB" not in qsolog.RIG_DATA_MODES)
+check("nor is LSB", "LSB" not in qsolog.RIG_DATA_MODES)
+check("nor FM", "FM" not in qsolog.RIG_DATA_MODES)
 
 sys.exit(report())

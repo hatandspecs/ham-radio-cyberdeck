@@ -112,7 +112,10 @@ _CALL = re.compile(r"^[A-Z0-9]{1,3}[0-9][A-Z0-9]*(/[A-Z0-9]+)*$")
 # has up. Plain USB and LSB are NOT here: on this station the rig sits in USB
 # for both voice and digital, which is the whole reason `resolve_mode` needs a
 # second input.
-_RIG_DATA_MODES = frozenset((
+# The rig modes digital work can use. Public, because the transmit interlock
+# in cyberdeck.py asks the same question this module asks when deciding where
+# a logged mode came from, and two lists would drift.
+RIG_DATA_MODES = frozenset((
     "PKTUSB", "PKTLSB", "PKTFM", "PKT", "DATA", "DATA-U", "DATA-L",
     "DIGU", "DIGL", "RTTY", "RTTYR", "FSK", "USB-D", "LSB-D",
 ))
@@ -163,7 +166,7 @@ def resolve_mode(operating=OPERATING_AUTO, rig_mode="", fldigi_modem="",
     # which emission. `PKTUSB` is a hamlib string, not an ADIF mode, and
     # writing it into MODE produces a record LoTW will not take. So a data
     # mode is never used as the answer — only as evidence that fldigi's is.
-    if rig in _RIG_DATA_MODES:
+    if rig in RIG_DATA_MODES:
         rig_adif = ""
 
     if operating == OPERATING_VOICE:
@@ -179,7 +182,7 @@ def resolve_mode(operating=OPERATING_AUTO, rig_mode="", fldigi_modem="",
         return (mode, source) if mode else ("SSB", "default")
 
     # auto
-    if rig in _RIG_DATA_MODES or fldigi_active:
+    if rig in RIG_DATA_MODES or fldigi_active:
         mode, source = from_fldigi()
         if mode:
             return mode, source
@@ -457,6 +460,237 @@ def dupe_note(matches):
     return f"{last.get('call', '')} worked{tail} at {when}{times}".strip()
 
 
+def activity_slug(name):
+    """A filename stem for an activity name, or "" if nothing is left.
+
+    The operator types what the event is called -- "Bald Eagle SP", "PAQP
+    2026" -- and that has to become a filename without surprising them. Case
+    is kept, because a log named BaldEagle-SP.log is recognizable in a
+    directory listing and baldeagle-sp.log is less so; everything that is not
+    a letter, a digit, a dot, a dash or an underscore becomes a dash, and runs
+    of dashes collapse.
+    """
+    out = []
+    for ch in str(name or "").strip():
+        out.append(ch if (ch.isalnum() or ch in "._-") else "-")
+    slug = "".join(out).strip("-.")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug
+
+
+# An activity's file is <slug>_<YYYY-MM-DD>.log. The date is stamped ONCE,
+# when the activity is created, from the deck's clock -- which is backed by a
+# DS3231 and is right with no network, so this works at a picnic table.
+#
+# It is deliberately not re-derived afterwards. A contest weekend is one
+# activity across two UTC days, Field Day crosses UTC midnight, and an evening
+# POTA activation in EDT starts after 00:00Z. Recomputing "name + today" each
+# time the activity was opened would put Sunday's contacts in a second file
+# and fork the very thing the date is meant to keep distinct. The path is
+# stored with the activity instead; see cyberdeck._set_activity_session.
+#
+# The same name on a LATER day is a different activation and gets its own
+# file. The same name on the SAME day is the same activation resumed after a
+# break, and appends.
+_ACTIVITY_DATE = re.compile(r"^(?P<slug>.+)_(?P<date>\d{4}-\d{2}-\d{2})$")
+
+
+def activity_dir(base=""):
+    """The directory an activity's own logs live in, beside the default log."""
+    return os.path.join(os.path.dirname(log_path(base)), "activities")
+
+
+def activity_log_path(activity, base="", date=""):
+    """The log file for one activity, dated. `base` is the default log path.
+
+    Each activity gets its own file, so a park activation and a contest
+    weekend are separate files that can be exported, mailed and uploaded one
+    at a time with nothing filtered out of them first.
+
+    No activity means the default log: casual contacts are not an event and
+    do not deserve a file named after one.
+
+    `date` is the stamp to use, YYYY-MM-DD; today in UTC when not given. Pass
+    it explicitly to reproduce a path that was created earlier.
+    """
+    base = log_path(base)
+    slug = activity_slug(activity)
+    if not slug:
+        return base
+    stamp = str(date or "").strip() or _utc_today()
+    return os.path.join(activity_dir(base), f"{slug}_{stamp}.log")
+
+
+def _utc_today():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def split_activity_stem(stem):
+    """(name, date) from an activity log's filename stem, date possibly "".
+
+    The name comes back with dashes turned to spaces, so an activity typed as
+    "Bald Eagle SP" and stored as Bald-Eagle-SP_2026-10-11 is offered for
+    resuming as "Bald Eagle SP" rather than as its filename.
+    """
+    m = _ACTIVITY_DATE.match(str(stem or "").strip())
+    if not m:
+        return str(stem or "").replace("-", " ").strip(), ""
+    return m.group("slug").replace("-", " ").strip(), m.group("date")
+
+
+def activity_logs(base=""):
+    """Every activity log on disk, newest first.
+
+    Each entry is {name, date, path, contacts}. Listed from the directory
+    rather than from a register kept beside it, for the reason serials are
+    read from the log: a list of what happened cannot drift from what
+    happened, and nothing has to be written to keep it true.
+    """
+    directory = activity_dir(base)
+    out = []
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return out
+    for entry in names:
+        if not entry.endswith(".log"):
+            continue
+        path = os.path.join(directory, entry)
+        name, date = split_activity_stem(entry[:-len(".log")])
+        if not name:
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                contacts = sum(1 for line in fh if line.strip())
+        except OSError:
+            contacts = 0
+        out.append({"name": name, "date": date, "path": path,
+                    "contacts": contacts})
+    # By date then name, newest first. An activity with no date in its
+    # filename sorts last, which is where a file nobody recognizes belongs.
+    return sorted(out, key=lambda e: (e["date"], e["name"]), reverse=True)
+
+
+def resolve_activity_log(activity, base=""):
+    """The file an activity should be appended to right now.
+
+    The newest existing file for that name if there is one, and today's
+    otherwise. For callers with nowhere to store the path they were given --
+    `tools/qso.py` runs once and exits, so it cannot remember anything.
+
+    Resuming the newest rather than stamping today is what keeps a multi-day
+    activity in one file: a contest that began on Saturday is still the same
+    contest when a contact is logged on Sunday. The deck stores the path
+    instead, which is stronger, and uses this only as a fallback for an
+    activity named in cyberdeck.conf that it has never opened.
+    """
+    slug = activity_slug(activity)
+    if not slug:
+        return log_path(base)
+    want = slug.strip().upper()
+    existing = [e for e in activity_logs(base)
+                if activity_slug(e["name"]).strip().upper() == want]
+    if existing:
+        return existing[0]["path"]
+    return activity_log_path(activity, base)
+
+
+def export_path(log_file):
+    """The ADIF file for a log file: same directory, same stem, .adi.
+
+    The log is append-only `key=value` text and the export is ADIF; naming
+    the log `.adi` would make the file that is not ADIF look like the one
+    that is.
+    """
+    return os.path.splitext(str(log_file))[0] + ".adi"
+
+
+def parse_freq(text):
+    """Hertz from whatever an operator or a screen put in a frequency field.
+
+    The log screen shows the radio's full resolution -- 7.185.000, the same
+    grouping `render.frequency` uses and the same thing the radio's own
+    display reads -- because rounding to three decimals throws away the part
+    that matters inside a 31 Hz-wide signal.
+
+    That means the field holds a string `float()` cannot read, so all the
+    spellings an operator might reasonably type are accepted:
+
+        "7.185.000"  -> 7185000   megahertz.kilohertz.hertz
+        "7.185"      -> 7185000   megahertz, as typed on the air
+        "7.1853"     -> 7185300   megahertz, more precisely
+        "7185000"    -> 7185000   hertz, because nobody means 7 MHz by it
+        "7"          -> 7000000   megahertz
+
+    Returns 0 for anything unreadable, which is what an absent frequency is.
+    """
+    raw = str(text or "").strip().replace(" ", "")
+    if not raw:
+        return 0
+    try:
+        if raw.count(".") >= 2:
+            mhz, khz, hz = (raw.split(".") + ["0", "0"])[:3]
+            return (int(mhz or 0) * 1_000_000 + int((khz or "0").ljust(3, "0"))
+                    * 1_000 + int((hz or "0").ljust(3, "0")))
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0
+    # No dot and big enough that megahertz would be absurd: it is hertz.
+    if "." not in raw and value >= 1000:
+        return int(round(value))
+    return int(round(value * 1_000_000))
+
+
+# The built-in type names, for reading a record written before an activity
+# and an activity type were different things.
+_LEGACY_TYPES = frozenset(("GENERAL", "POTA", "CONTEST"))
+
+
+def for_activity(records, activity):
+    """The contacts of one named activity. Oldest first, as given.
+
+    Each activity gets its own log file, so this is rarely what separates
+    them -- the file does. It stays because a file can hold more than one:
+    the log in use before activities were named, and any log an operator
+    points two activities at on purpose.
+
+    An empty `activity` means the contacts belonging to no named activity,
+    not every contact.
+    """
+    want = (activity or "").strip().upper()
+    out = []
+    for rec in records:
+        name, _kind = activity_of(rec)
+        if name.strip().upper() == want:
+            out.append(rec)
+    return out
+
+
+def activities_in(records):
+    """Every activity named in a log, newest first by last contact.
+
+    Derived from the log rather than kept in a list beside it, for the reason
+    serials are: a file that records what happened cannot drift from what
+    happened, and a power cut cannot lose it.
+    """
+    seen = {}
+    for rec in records:
+        name, kind = activity_of(rec)
+        if not name:
+            continue
+        entry = seen.setdefault(name, {"name": name, "type": kind,
+                                       "count": 0, "last": ""})
+        entry["count"] += 1
+        when = str(rec.get("when", "") or "")
+        if when > entry["last"]:
+            entry["last"] = when
+        if kind and not entry["type"]:
+            entry["type"] = kind
+    return sorted(seen.values(), key=lambda e: e["last"], reverse=True)
+
+
 def next_serial(records, activity="", start=1):
     """The serial to send on the next contact of an event.
 
@@ -469,10 +703,10 @@ def next_serial(records, activity="", start=1):
     Scoped to the activity, so a QSO party on Saturday and another on Sunday
     each count from their own start.
     """
-    want = str(activity or "").upper()
+    want = str(activity or "").strip().upper()
     highest = 0
     for rec in records:
-        if want and str(rec.get("activity", "")).upper() != want:
+        if want and activity_of(rec)[0].strip().upper() != want:
             continue
         try:
             highest = max(highest, int(rec.get("serial_tx") or 0))
@@ -482,8 +716,9 @@ def next_serial(records, activity="", start=1):
 
 
 def make_record(parsed, when, freq_hz=None, mode="", my_call="", my_grid="",
-                my_park="", activity=None, serial_tx="", exchange_tx="",
-                my_rig="", my_antenna="", tx_power=0, tx_backend=""):
+                my_park="", activity_type=None, activity="", serial_tx="",
+                exchange_tx="", my_rig="", my_antenna="", tx_power=0,
+                tx_backend=""):
     """Assemble a complete record from a parsed entry and the deck's context.
 
     `when` is a datetime, which the caller supplies so this module needs no
@@ -544,13 +779,40 @@ def make_record(parsed, when, freq_hz=None, mode="", my_call="", my_grid="",
     if tx_backend:
         rec["tx_backend"] = str(tx_backend)
 
-    # The activity is recorded so a log can be filtered back to one event, and
-    # so an importer can be told which contest these serials belong to.
-    if activity is not None and getattr(activity, "name", "") not in ("", "GENERAL"):
-        rec["activity"] = activity.name
-        if activity.contest_id:
-            rec["contest_id"] = activity.contest_id
+    # An ACTIVITY is the operating session -- a park activation, one weekend
+    # of a QSO party -- and is named by the operator. An ACTIVITY TYPE is the
+    # template it uses. Both are recorded: the name is what a log is filtered
+    # back to, and the type is what says how to read the fields in it.
+    #
+    # These were one field holding the type name. A record written then has
+    # `activity=CONTEST` and no `activity_type`; `activity_of` reads it as a
+    # session called CONTEST that used the CONTEST type, which is both true
+    # and the only reading that loses nothing.
+    if activity:
+        rec["activity"] = str(activity)
+    type_name = getattr(activity_type, "name", "") or ""
+    if type_name and type_name != "GENERAL":
+        rec["activity_type"] = type_name
+        if activity_type.contest_id:
+            rec["contest_id"] = activity_type.contest_id
     return {k: v for k, v in rec.items() if v != ""}
+
+
+def activity_of(rec):
+    """(activity name, activity type name) for one record.
+
+    Either may be empty: a contact made outside any named activity has no
+    name, and one using general logging has no type worth storing.
+
+    A record from before the split carries the TYPE in `activity` and no
+    `activity_type`. It is read as a session of that name using that type,
+    so an old log still groups and still exports with its contest id.
+    """
+    name = str(rec.get("activity", "") or "").strip()
+    kind = str(rec.get("activity_type", "") or "").strip()
+    if name and not kind and name.upper() in _LEGACY_TYPES:
+        return name, name.upper()
+    return name, kind
 
 
 # Field order in the stored line. Fixed rather than dict order so a file is
@@ -560,7 +822,8 @@ _FIELD_ORDER = ("when", "call", "freq", "band", "mode",
                 "rst_s", "rst_r", "serial_rx", "exchange_rx",
                 "park", "name", "qth", "grid",
                 "my_call", "my_grid", "my_park",
-                "serial_tx", "exchange_tx", "activity", "contest_id",
+                "serial_tx", "exchange_tx", "activity", "activity_type",
+                "contest_id",
                 "my_rig", "my_antenna", "tx_power", "tx_backend", "comment")
 
 _NEEDS_QUOTES = re.compile(r'[\s"]')
@@ -627,6 +890,20 @@ _ADIF_FIELDS = (
     ("name", "NAME"),
     ("qth", "QTH"),
     ("grid", "GRIDSQUARE"),
+    # The rest of what an activity may ask about the station worked. Each is
+    # a standard ADIF field; `activities.ENTRY_FIELDS` is the list an operator
+    # picks from, and a field there with no entry here would be typed, shown,
+    # logged, and then lost at export.
+    ("state", "STATE"),
+    # ADIF calls a county a secondary administrative subdivision and expects
+    # it spelled the way the ADIF enumeration spells it. It is written as
+    # typed: the operator copies what the other station said, and a county
+    # silently rewritten is worse in a QSO party than one spelled oddly.
+    ("county", "CNTY"),
+    ("cq_zone", "CQZ"),
+    ("power_rx", "RX_PWR"),
+    ("check", "CHECK"),
+    ("precedence", "PRECEDENCE"),
     ("comment", "COMMENT"),
     ("my_call", "STATION_CALLSIGN"),
     ("my_grid", "MY_GRIDSQUARE"),

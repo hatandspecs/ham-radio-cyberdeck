@@ -137,10 +137,12 @@ def cmd_log(args, cfg, path):
         freq = int(float(args.freq) * (1000 if args.freq.find(".") >= 0 else 1))
 
     table = activity_mod.load()
-    act = activity_mod.get(args.activity or cfg.get("ACTIVITY", ""), table)
-    if args.activity and act.name == "GENERAL" and \
-            args.activity.strip().upper() != "GENERAL":
-        notes.append(f"no activity named {args.activity!r}; logging generally "
+    wanted_type = args.activity_type or cfg.get("ACTIVITY_TYPE", "")
+    act = activity_mod.get(wanted_type, table)
+    if wanted_type and act.name == "GENERAL" and \
+            wanted_type.strip().upper() != "GENERAL":
+        notes.append(f"no activity type named {wanted_type!r}; logging "
+                     f"generally "
                      f"(known: {', '.join(sorted(table))})")
 
     try:
@@ -154,16 +156,21 @@ def cmd_log(args, cfg, path):
     if args.comment and not parsed.get("comment"):
         parsed["comment"] = args.comment.strip()
 
-    # POTA mode decides whether this station's own park goes on the record.
-    # Off — the default — a general log gets no MY_SIG fields even if MY_PARK
-    # is still sitting in the configuration from the last activation.
-    pota = args.pota or cfg.get("POTA") == "yes"
+    # Whether this station's own reference goes on the record is a property
+    # of the activity TYPE: a type with a reference field is one where every
+    # contact has one. `--pota` forces it for a type that has no such field.
+    #
+    # It used to read `cfg.get("POTA")`, a setting that stopped existing when
+    # POTA became an activity type -- so the type POTA recorded no reference
+    # and only the flag worked.
+    wants_ref = args.pota or act.wants("park")
     my_park = ""
-    if pota:
+    if wants_ref:
         my_park = (args.my_park or cfg.get("MY_PARK")
                    or os.environ.get("CYBERDECK_MY_PARK", ""))
     elif args.my_park:
-        notes.append("--my-park ignored: POTA mode is off; add --pota")
+        notes.append(f"--my-park ignored: the {act.name} type has no "
+                     f"reference field; use --activity-type POTA or --pota")
 
     # Printed here, after every note has been collected. Printing them where
     # radio_state returned meant the POTA note below was appended to a list
@@ -175,8 +182,9 @@ def cmd_log(args, cfg, path):
     # survives a power pull and cannot disagree with what was actually sent.
     serial_tx = ""
     if act.serial:
-        serial_tx = qsolog.next_serial(qsolog.read(path), act.name,
-                                       act.serial_start)
+        serial_tx = qsolog.next_serial(
+            qsolog.read(path), args.activity or cfg.get("ACTIVITY", ""),
+            act.serial_start)
 
     exchange_tx = args.exchange_tx or cfg.get("EXCHANGE_TX", "")
 
@@ -184,7 +192,12 @@ def cmd_log(args, cfg, path):
         parsed, datetime.datetime.now(datetime.timezone.utc),
         freq_hz=freq, mode=mode,
         my_call=cfg.get("CALLSIGN", ""), my_grid=cfg.get("LOCATOR", ""),
-        my_park=my_park, activity=act, serial_tx=serial_tx,
+        # The TYPE says how to read the fields; the ACTIVITY names the
+        # session they belong to. Passing the type object as `activity` wrote
+        # its repr into the record.
+        my_park=my_park, activity_type=act,
+        activity=(args.activity or cfg.get("ACTIVITY", "")),
+        serial_tx=serial_tx,
         exchange_tx=exchange_tx,
         my_rig=cfg.get("RIG", ""), my_antenna=cfg.get("ANTENNA", ""),
         # The radio's actual power when it answered, the configured wattage
@@ -430,8 +443,13 @@ def main(argv=None):
     p.add_argument("--pota", action="store_true", help="POTA mode for this entry")
     p.add_argument("--operating", default="", choices=("", "auto", "digital", "voice"),
                    help="where the mode comes from; overrides OPERATING")
+    p.add_argument("--activity-type", dest="activity_type", default="",
+                   help="which activity TYPE to use: GENERAL, POTA, CONTEST "
+                        "or one from activities.conf")
     p.add_argument("--activity", default="",
-                   help="activity type, e.g. POTA or PAQP; overrides ACTIVITY")
+                   help="name of the operating session, e.g. 'Bald Eagle SP'; "
+                        "overrides ACTIVITY. Scopes the serial and the "
+                        "duplicate check")
     p.add_argument("--exchange-tx", default="",
                    help="this station's exchange; overrides EXCHANGE_TX")
     p.add_argument("--power", default="", help="transmit watts; overrides CAT and TX_POWER")
@@ -468,7 +486,13 @@ def main(argv=None):
 
     args = ap.parse_args(argv)
     cfg = settings()
-    path = qsolog.log_path(args.file)
+    # An activity writes to its own file, the same one the panel appends to.
+    # Without this the CLI and the deck logged the same activity to two
+    # different places.
+    path = (qsolog.log_path(args.file) if args.file
+            else qsolog.resolve_activity_log(
+                getattr(args, "activity", "") or cfg.get("ACTIVITY", ""),
+                cfg.get("LOG_PATH", "")))
     return args.func(args, cfg, path)
 
 

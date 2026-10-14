@@ -160,12 +160,16 @@ def band_menu(supported=None):
     return {"title": "BAND", "items": items,
             "footer": "Esc back   \u2191\u2193 move   Enter select"}
 
-def activity_menu(names, current="", labels=None):
-    """Pick a saved activity. The list comes from activities.load().
+def activity_type_menu(names, current="", labels=None):
+    """Pick a saved activity TYPE. The list comes from activities.load().
 
     A picker rather than a toggle because the whole point is that an operator
     defines their own: a list of named templates, chosen by name, is what
-    "save an activity and select it later" means at the panel.
+    "save an activity type and select it later" means at the panel.
+
+    A *type* is the template of fields. An *activity* is a session that uses
+    one and has a name and a log file of its own -- that is the ACTIVITIES
+    screen, not this.
     """
     labels = labels or {}
     items = [("g", "General logging" +
@@ -175,15 +179,23 @@ def activity_menu(names, current="", labels=None):
         label = labels.get(name, name)
         items.append((str(i + 1)[-1], f"{name:<12} {label[:28]}{mark}"))
     return {
-        "title": "ACTIVITY",
+        "title": "ACTIVITY TYPE",
         "items": items,
-        "footer": "Esc back   ↑↓ move   Enter select   * = in use",
+        # `d` then a number deletes one, and then asks: two keystrokes and
+        # a confirmation, because a type an operator spent a contest getting
+        # right should not go on one.
+        "footer": "Esc back   Enter select   d+number deletes   * in use",
     }
 
 
 def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
              qrz_pending=0, operating="auto", has_tqsl=False,
-             activity="", dupe="band+mode"):
+             activity="", dupe="band+mode", log_name="",
+             activity_type=""):
+    # has_qrz_key and qrz_pending are accepted and ignored. They fed the
+    # removed QRZ upload item; the parameters stay so that a caller passing
+    # them is not a TypeError, and so that reinstating an upload item is a
+    # deliberate edit here rather than a side effect somewhere else.
     """The logging menu. One line in the root menu leads here.
 
     When logging is off this is a single item, because that is the whole of
@@ -195,9 +207,20 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
     this station's park reference appears only once POTA mode is on — off, it
     is not a field waiting to be filled, it is a question that does not apply.
 
-    `Upload to QRZ` is absent without a key rather than present and greyed.
-    An item whose only possible answer is "this is not set up" is worse than
-    no item: it occupies a line, invites a keystroke, and teaches nothing.
+    **Nothing here uploads a contact anywhere.** `Export ADIF` writes a file
+    beside the log and `Sign and upload to LoTW` writes that file and prints
+    the tqsl command for it -- the command is never run, because signing needs
+    a callsign certificate that does not belong on a card that travels. The
+    only code in this project that transmits a log to a third party is
+    `tools/qso.py lotw --upload`, which is a flag, on a subcommand, typed by
+    hand on the laptop. There is deliberately no panel key that does it and
+    nothing on any timer that does it: a deck full of test contacts must not
+    be one keystroke from someone's permanent record.
+
+    There was a `Upload to QRZ  n waiting` item here. It was removed: no
+    handler was ever bound to it, so the line did nothing, and "n waiting"
+    described a queue that drains, which is exactly the impression this
+    feature must not give.
     """
     if not on:
         return {
@@ -209,33 +232,45 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
     items = [
         ("l", f"Logging                      on — {count} "
               f"QSO{'' if count == 1 else 's'}"),
+        # The DEFAULT log, which is also the directory the per-activity logs
+        # sit beside. It is not the file in use unless logging is casual --
+        # an activity has its own, named after it. Which file is actually
+        # open is on the log screen's header, where it is read while typing
+        # into it rather than two keystrokes away.
+        ("f", f"Default log                  {log_name or 'qso.log'}"),
         ("a", "Export ADIF"),
         ("m", f"Mode from                    {_OPERATING_LABEL.get(operating, operating)}"),
         ("d", f"Duplicates                   {_DUPE_LABEL(dupe)}"),
         ("c", f"Callbook lookup              {'on' if lookup else 'off'}"),
-        # The activity decides which fields are typed and in what order, so it
-        # is the setting that changes what the entry line means. See §6b.
-        ("v", f"Activity                     "
-              f"{activity or 'general logging'}"),
+        # Two lines, because these are two things. The ACTIVITY is the
+        # session being logged -- this park, this contest weekend -- and it
+        # carries the operator's name for it and a log file of its own. The
+        # ACTIVITY TYPE is the template of fields it uses, edited once and
+        # reused by every activity that wants it.
+        #
+        # They were one setting called "Activity". That let the operator
+        # choose POTA but not say which activation it was, and made two
+        # weekends of the same QSO party share one serial sequence.
+        ("e", f"Activity                     "
+              f"{activity or 'casual logging'}"),
+        ("v", f"  Activity type              "
+              f"{activity_type or 'general logging'}"),
         # Copy, change, name, save. Copying rather than starting blank
-        # because every activity an operator wants is a small change to one
+        # because every type an operator wants is a small change to one
         # that already exists.
-        ("n", "  New, copied from this one"),
+        ("n", "    New type, copied from this one"),
     ]
-    if needs_reference(activity):
+    if needs_reference(activity_type):
         # Only when the selected activity has a reference field. Otherwise
         # this station's own park is not an unset field, it is a question that
         # does not apply to the operating being done.
-        items.append(("p", f"  My reference               {park or 'not set'}"))
+        items.append(("p", f"    My reference             {park or 'not set'}"))
     extra = []
-    if has_qrz_key:
-        extra.append(("u", f"Upload to QRZ                "
-                           f"{qrz_pending} waiting"))
     if has_tqsl:
         # Signing needs a callsign certificate and tqsl blocks rather than
         # failing without one, so this is an export-and-a-command, not a
-        # one-key upload. See docs/qso_log_design.md §11.
-        extra.append(("t", "Sign and upload to LoTW"))
+        # one-key upload. The label says so: nothing is sent from here.
+        extra.append(("t", "Export + print the LoTW command"))
     items[2:2] = extra
     return {
         "title": "LOGGING",
@@ -247,19 +282,19 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
 # Short enough to fit the 66-column panel beside its label. What each one
 # actually does is in docs/qso_log_design.md §6; the panel only has room to
 # say which of the three is selected.
-def needs_reference(activity):
-    """Whether an activity puts this station's own reference on every contact.
+def needs_reference(activity_type):
+    """Whether an activity TYPE puts this station's reference on every contact.
 
-    Asked of the activity rather than hard-coded, so an operator who defines
-    a WWFF or IOTA activity with a `park` field gets the setting without
-    anyone editing this file.
+    Asked of the type rather than hard-coded, so an operator who defines a
+    WWFF or IOTA type with a `park` field gets the setting without anyone
+    editing this file.
     """
     try:
         import activities as _acts
-        act = _acts.get(activity, _acts.load())
+        act = _acts.get(activity_type, _acts.load())
         return act.wants("park")
     except Exception:
-        return str(activity or "").upper() in ("POTA", "SOTA", "WWFF")
+        return str(activity_type or "").upper() in ("POTA", "SOTA", "WWFF")
 
 
 def _DUPE_LABEL(rule):

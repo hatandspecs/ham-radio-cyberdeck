@@ -29,6 +29,11 @@ from session import Entry, Session, RX, TX
 
 CHAT, TUNE, PAIR, NOKB, WIFI = "chat", "tune", "pair", "nokb", "wifi"
 LOG, FIELDS, ORDER = "log", "fields", "order"
+# Activities on disk, and the question asked before anything is
+# destroyed. The confirmation is a screen of its own because deleting a
+# log deletes contacts, and a prompt sharing a screen with the thing it
+# is about gets answered by reflex.
+ACTS, CONFIRM = "activities", "confirm"
 
 # Releasing the post-over receive hold. Not configuration: these describe how
 # a decaying transient is told apart from a station answering, which is a
@@ -91,6 +96,23 @@ class Deck:
         self._callbook = None
         self._looked_up = ""
         self.scroll = 0
+        # The file the current activity writes to, stamped with the date it
+        # was created and then LEFT ALONE. Re-deriving it would fork a
+        # multi-day activity across UTC midnight; see
+        # qsolog.activity_log_path.
+        self.activity_path = ""
+        # Rows the ACTIVITIES screen last drew, where the cursor is, and the
+        # pending question: {"title", "lines", "action", "back"}.
+        self.acts_sel = 0
+        self.acts_message = ""
+        self.confirm = None
+        # Set by `d` on the activity-type picker: the next number typed names
+        # the type to delete rather than the one to select.
+        self._pending_type_delete = False
+        # How far back the contact list is scrolled, in rows, counted from
+        # the newest. Separate from `scroll`: the two screens are scrolled
+        # independently and leaving one scrolled must not move the other.
+        self.log_scroll = 0
         # Which menu is open, if any, and where in a paged list. A single
         # value rather than a stack: the tree is two deep by design, and
         # Esc from anywhere returns to the conversation.
@@ -429,6 +451,15 @@ class Deck:
             return
         if self.menu or self.edit is not None:
             return
+        if self.screen == LOG:
+            # The same gesture on the same kind of content. A drag on the
+            # contact list scrolls it; a tap still means nothing, because
+            # nothing on this screen is selectable.
+            rows = self.touch.poll()
+            self.touch.taps()
+            if rows:
+                self._log_scroll_by(rows)
+            return
         if self.screen != CHAT:
             self.touch.poll()
             self.touch.taps()          # discarded: a tap means nothing here
@@ -628,7 +659,7 @@ class Deck:
         self._saved_carrier = f.carrier()
         self._saved_at = time.monotonic()
 
-        self._set_rig_mode()
+        self._report_rig_mode()
         if settings["RSID_ON_START"] == "yes" and not f.rsid():
             f.set_rsid(True)
             self.session.note("RSID on — will follow other stations' modes")
@@ -821,6 +852,14 @@ class Deck:
         return self._rig
 
     def _log_freq_mhz(self):
+        """The radio's frequency at its own resolution: 7.185.000.
+
+        Grouped the way `render.frequency` groups it on the transcript screen
+        and the way the radio's own display reads, rather than rounded to
+        three decimals -- the rounding threw away the tens of hertz, which is
+        the part that matters inside a 31 Hz-wide signal and the part that
+        lets this reading be checked against the radio.
+        """
         rig = self._log_rig()
         if rig is None:
             return ""
@@ -828,13 +867,17 @@ class Deck:
             hz = rig.frequency()
         except Exception:
             return ""
-        return f"{hz / 1_000_000:.3f}" if hz else ""
+        return render.frequency(hz) if hz else ""
 
     def _log_freq_hz(self):
-        """Hertz from whatever is in the form, which may have been corrected."""
+        """Hertz from whatever is in the form, which may have been corrected.
+
+        Parsed by `qsolog.parse_freq`, which reads the grouped form the field
+        now shows as well as the plain megahertz an operator might type.
+        """
         try:
-            return int(round(float(self.log_form.value("freq")) * 1_000_000))
-        except (TypeError, ValueError, AttributeError):
+            return qsolog.parse_freq(self.log_form.value("freq"))
+        except AttributeError:
             return 0
 
     def _log_mode(self):
@@ -870,12 +913,32 @@ class Deck:
         has corrected.
         """
         form = self.log_form
-        header = {"count": len(self.log_records),
+        # Only this activity's contacts, scoped by the activity NAME rather
+        # than by its type. Each activity has its own file, so the file is
+        # normally the whole scope and this does nothing; it earns its keep
+        # on a file holding more than one activity -- the log that was in use
+        # before activities were named.
+        #
+        # Scoping by TYPE was wrong in both directions: it hid every contact
+        # whose type matched nothing, and it showed contacts from a different
+        # session that happened to use the same type. The count follows the
+        # list, because a count that disagrees with the screen is worse than
+        # no count.
+        shown = (qsolog.for_activity(self.log_records, self._activity_name())
+                 if form is not None else self.log_records)
+        header = {"count": len(shown),
+                  # Only matters when there is no activity to name; an
+                  # activity's file is named after the activity.
+                  "log_name": self._log_name(),
                   "clock": time.strftime("%H%MZ", time.gmtime())}
         if form is not None:
             form.from_radio(freq=self._log_freq_mhz(), mode=self._log_mode())
-            if form.activity.name != "GENERAL":
-                header["activity"] = form.activity.name
+            # The activity is what the operator is doing and goes first; the
+            # type is what the fields on screen mean and follows it. With one
+            # setting there was only ever one of them to show.
+            header["activity"] = self._activity_name()
+            if form.activity_type.name != "GENERAL":
+                header["activity_type"] = form.activity_type.name
             if form.value("my_park"):
                 header["my_park"] = form.value("my_park")
             band = qsolog.band_for(self._log_freq_hz())
@@ -898,13 +961,16 @@ class Deck:
                 self.log_records, form.value("call"),
                 band=header.get("band", ""), mode=form.value("mode"),
                 rule=self.cfg.get("DUPE_CHECK", "band+mode"),
-                activity=("" if form.activity.name == "GENERAL"
-                          else form.activity.name)))
+                activity=self._activity_name()))
             if note:
                 message = f"** {note}"
 
+        # Clamped on the way in: contacts arriving while the list is
+        # scrolled back must not leave it pointing past the end.
+        self.log_scroll = max(0, min(
+            self.log_scroll, render.log_scroll_max(shown, h, form, w)))
         for i, line in enumerate(render.log_screen(
-                self.log_records, "", w, h, header=header,
+                shown, "", w, h, header=header, scroll=self.log_scroll,
                 message=message, form=form)):
             self._put(i, 0, line, w)
         try:
@@ -960,9 +1026,13 @@ class Deck:
                 return True
             self.picker_sel = 0
             self.screen = ORDER
-        elif 49 <= ch <= 57:                              # 1-9
-            at = ch - 49
-            if at < len(rows):
+        else:
+            # 1-9 then a-e. Digits alone stopped reaching every field once
+            # the list grew past nine, and a row only the arrows can get to
+            # is a row most operators never find. The screen prints the key
+            # beside each row, so the two cannot drift apart.
+            at = activities.pick_index(ch)
+            if 0 <= at < len(rows):
                 self.picker_sel = at
                 self.picker.toggle(rows[at][0])
         return True
@@ -985,6 +1055,11 @@ class Deck:
             self.picker_sel = (self.picker_sel - 1) % max(1, len(order))
         elif ch == curses.KEY_DOWN:
             self.picker_sel = (self.picker_sel + 1) % max(1, len(order))
+        elif ch == 48:                                    # 0
+            # Row 0 is the callsign and is not in `order`. Typing 0 would
+            # otherwise do nothing at all, which reads as a broken key rather
+            # than as a row that cannot be moved.
+            self.picker_message = "the callsign is always first"
         elif 49 <= ch <= 57:                              # 1-9
             name = order[self.picker_sel][1]
             self.picker.move(name, ch - 48)
@@ -1026,7 +1101,7 @@ class Deck:
             return
         self.picker = None
         self.session.note(f"saved {name} to {path}")
-        self._set_activity(name)
+        self._set_activity_type(name)
         self.screen = LOG
 
     def _lookup_start(self, call):
@@ -1037,9 +1112,15 @@ class Deck:
         sends three useless requests and three partial callsigns to a third
         party.
         """
+        call = (call or "").strip().upper()
+        # Done before the CALLBOOK guard and before the callsign is judged
+        # valid: whatever is in the name and QTH fields describes the station
+        # the callsign used to be, and that is true whether or not a new
+        # lookup is going to happen. A cleared callsign leaves no name behind.
+        if self.log_form is not None and call != self._looked_up:
+            self.log_form.forget_lookup()
         if self.cfg.get("CALLBOOK") != "yes":
             return
-        call = (call or "").strip().upper()
         if not call or call == self._looked_up or not qsolog.is_callsign(call):
             return
         try:
@@ -1068,13 +1149,36 @@ class Deck:
             return ""
         if not info:
             return f"-- {call}: nothing known"
-        for key in ("name", "qth", "grid"):
+        # `not touched` rather than `not value`: an answer for the callsign now
+        # on the form has to be able to replace the previous station's name,
+        # which is not empty. What it may never replace is a value the
+        # operator typed -- that is a correction, and it outranks a callbook.
+        for key in logform.LOOKUP:
             field = form.field(key)
-            if field is not None and info.get(key) and not field.value:
+            if field is not None and info.get(key) and not field.touched:
                 form.set(key, info[key])
         # Reported whether or not a field took it: the grid reaches the record
         # even on an activity whose form has nowhere to show it.
         return "-- " + ", ".join(f"{k}={v}" for k, v in info.items())
+
+    def _file_types(self):
+        """Type names defined in activities.conf, as opposed to in code.
+
+        Only these can be deleted. A built-in with no section in the file has
+        nothing to remove, and saying so is better than appearing to delete
+        something that comes straight back on the next load.
+        """
+        try:
+            with open(activities.config_path(), encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            return set()
+        out = set()
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                out.add(line[1:-1].strip().upper())
+        return out
 
     def _activity_table(self):
         """Every activity, built-in and defined. Never raises at the menu.
@@ -1098,17 +1202,20 @@ class Deck:
                 self._tqsl = False
         return self._tqsl
 
-    def _set_activity(self, name, table=None):
-        """Switch activity, rebuilding the form because its fields change.
+    def _set_activity_type(self, name, table=None):
+        """Switch activity TYPE, rebuilding the form because its fields change.
 
         What this station sends is carried across — own reference, own
         exchange, the standing comment — because those describe the operating
-        session rather than the activity, and retyping them after changing
-        activity is exactly the kind of thing that makes an operator not
-        change activity.
+        session rather than the type, and retyping them after changing type is
+        exactly the kind of thing that makes an operator not change type.
+
+        The activity itself does not change here, and neither does the log
+        file: changing the type is a correction to how this session is being
+        logged, not the start of a different session.
         """
         act = activities.get(name, table or self._activity_table())
-        self.cfg["ACTIVITY"] = "" if act.name == "GENERAL" else act.name
+        self.cfg["ACTIVITY_TYPE"] = "" if act.name == "GENERAL" else act.name
         carried = {}
         if self.log_form is not None:
             carried = {k: self.log_form.value(k)
@@ -1121,7 +1228,8 @@ class Deck:
                              ("exchange_tx", "EXCHANGE_TX")):
             if not self.log_form.value(key) and self.cfg.get(setting):
                 self.log_form.set(key, self.cfg[setting])
-        self.log_form.advance_serial(self.log_records, act.serial_start)
+        self.log_form.advance_serial(self.log_records, act.serial_start,
+                                     activity=self._activity_name())
         self._save_state()
         self.session.note(f"activity: {act.label}")
 
@@ -1133,12 +1241,12 @@ class Deck:
 
     def _export_adif(self, lotw=False):
         """Write the whole log beside itself as ADIF, and say where."""
-        path = qsolog.log_path(self.cfg.get("LOG_PATH", ""))
+        path = self._log_path()
         records = qsolog.read(path)
         if not records:
             self.session.note("nothing logged yet")
             return
-        out = os.path.splitext(path)[0] + ".adi"
+        out = qsolog.export_path(path)
         try:
             with open(out, "w", encoding="utf-8") as fh:
                 fh.write(qsolog.adif_export(records))
@@ -1160,22 +1268,287 @@ class Deck:
             except Exception:
                 pass
 
+    def _screen_size(self):
+        """(height, width), or the panel's own size when curses cannot say.
+
+        The fallback is the deck's real geometry rather than a guess: this is
+        called from key handling and from the touch poll, neither of which is
+        handed the dimensions the way a draw is.
+        """
+        try:
+            return self.scr.getmaxyx()
+        except (AttributeError, curses.error):
+            return 20, 66
+
+    def _log_scroll_by(self, rows):
+        """Move the contact list, clamped to what there is to show.
+
+        Clamped against the same row count the renderer uses, so the list can
+        never be scrolled to an offset that draws nothing -- which reads as a
+        hang rather than as the end of the log.
+        """
+        form = self.log_form
+        shown = (qsolog.for_activity(self.log_records, self._activity_name())
+                 if form is not None else self.log_records)
+        h, w = self._screen_size()
+        top = render.log_scroll_max(shown, h, form, w)
+        self.log_scroll = max(0, min(self.log_scroll + int(rows), top))
+        return self.log_scroll
+
+    def _activity_name(self):
+        """The current activity: the session being logged, or "".
+
+        An ACTIVITY is what the operator is doing -- this park, this contest
+        weekend -- and it has a name they chose. An ACTIVITY TYPE is the
+        template of fields it uses. Blank means casual logging, which is not
+        an event and gets the default log file.
+        """
+        return str(self.cfg.get("ACTIVITY", "") or "").strip()
+
+    def _log_path(self):
+        """The file this activity writes to.
+
+        Each activity gets its own, so a park activation and a contest
+        weekend are separate files that can be exported one at a time with
+        nothing filtered out of them. LOG_PATH is the default log and the
+        base the activity directory sits beside.
+
+        The path is whatever was stored when the activity was created, not a
+        fresh derivation: a contest weekend crosses UTC midnight and must not
+        acquire a second file halfway through.
+        """
+        name = self._activity_name()
+        if not name:
+            return qsolog.log_path(self.cfg.get("LOG_PATH", ""))
+        if self.activity_path:
+            return self.activity_path
+        # No stored path -- an activity named in cyberdeck.conf rather than
+        # started on the panel. Resume the newest file of that name if there
+        # is one, so a conf-named activity does not get a second file every
+        # day, and keep whatever comes back.
+        self.activity_path = qsolog.resolve_activity_log(
+            name, self.cfg.get("LOG_PATH", ""))
+        return self.activity_path
+
+    def _set_activity_session(self, name, path=""):
+        """Start a named activity, or resume one, and open its log.
+
+        The file is stamped with today's date from the deck's clock -- a
+        DS3231 that is right with no network, which is the whole point at a
+        picnic table. Stamped ONCE: the path is stored here and read back by
+        `_log_path` rather than recomputed, so a contest weekend that crosses
+        UTC midnight stays one file.
+
+        The same name on the same day resumes -- that is one activation after
+        a break. The same name on a later day is a different activation and
+        gets its own file. `path` is passed when resuming one chosen from the
+        list, and is then used exactly as given.
+        """
+        name = str(name or "").strip()
+        if name and not qsolog.activity_slug(name):
+            self.session.note("that name needs a letter or a digit in it")
+            return
+        self.cfg["ACTIVITY"] = name
+        if not name:
+            self.activity_path = ""
+        elif path:
+            self.activity_path = path
+        else:
+            self.activity_path = qsolog.activity_log_path(
+                name, self.cfg.get("LOG_PATH", ""))
+        self._save_state()
+        self._switch_log()
+        where = os.path.basename(self._log_path())
+        if not name:
+            self.session.note(f"casual logging — {where}")
+        elif self.log_records:
+            self.session.note(f"{name} resumed — {where}, "
+                              f"{len(self.log_records)} contact"
+                              f"{'' if len(self.log_records) == 1 else 's'}")
+        else:
+            self.session.note(f"{name} started — {where}")
+
+    def _ask_confirm(self, title, lines, action, back=None):
+        """Put a destructive action behind one deliberate keystroke.
+
+        Enter does it; Esc and every other key keep things as they are. The
+        default is always to keep: the operator who hit the key by accident
+        is the one this exists for.
+        """
+        destination = back or self.screen
+        # The menu has to go, not just be covered. `draw` tests `self.menu`
+        # before it tests `self.screen`, and so does the key dispatch -- so a
+        # confirmation raised from inside a menu was never drawn AND its Enter
+        # went to the menu handler instead of here. The question was invisible
+        # and unanswerable, which is exactly how "delete does nothing" looks.
+        self._close_menu()
+        self.confirm = {"title": title, "lines": list(lines),
+                        "action": action, "back": destination}
+        self.screen = CONFIRM
+
+    def _draw_confirm(self, h, w):
+        c = self.confirm or {}
+        for i, line in enumerate(render.confirm_screen(
+                c.get("title", "CONFIRM"), c.get("lines", ()), w, h)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_confirm(self, ch):
+        c = self.confirm or {}
+        self.confirm = None
+        self.screen = c.get("back") or CHAT
+        if ch in (10, 13, curses.KEY_ENTER):
+            action = c.get("action")
+            if callable(action):
+                action()
+        return True
+
+    def _activity_choices(self):
+        """Activities on disk that can be resumed, newest first."""
+        return qsolog.activity_logs(self.cfg.get("LOG_PATH", ""))
+
+    def _resume_activity(self, index):
+        """Resume the activity at `index` in the list the menu showed."""
+        rows = self._activity_choices()
+        if not 0 <= index < len(rows):
+            return
+        row = rows[index]
+        self._set_activity_session(row["name"], path=row["path"])
+
+    def _open_activities(self):
+        self.acts_sel = 0
+        self.acts_message = ""
+        self.screen = ACTS
+
+    def _draw_activities(self, h, w):
+        rows = self._activity_choices()
+        if rows:
+            self.acts_sel = max(0, min(self.acts_sel, len(rows) - 1))
+        for i, line in enumerate(render.activity_screen(
+                rows, self.acts_sel, w, h, current=self._activity_name(),
+                message=self.acts_message)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_activities(self, ch):
+        rows = self._activity_choices()
+        if ch == 27:
+            self.screen = LOG if self.log_on else CHAT
+        elif ch == curses.KEY_UP and rows:
+            self.acts_sel = (self.acts_sel - 1) % len(rows)
+        elif ch == curses.KEY_DOWN and rows:
+            self.acts_sel = (self.acts_sel + 1) % len(rows)
+        elif ch in (10, 13, curses.KEY_ENTER) and rows:
+            self._resume_activity(self.acts_sel)
+            self.screen = LOG if self.log_on else CHAT
+        elif ch in (ord("n"), ord("N")):
+            self._open_editor(None, "Activity name",
+                              sink=self._start_named_activity)
+        elif ch in (ord("d"), ord("D")) and rows:
+            row = rows[self.acts_sel]
+            count = row["contacts"]
+            self._ask_confirm(
+                "DELETE ACTIVITY",
+                [f"{row['name']}  {row['date'] or ''}".strip(),
+                 "",
+                 f"{count} contact{'' if count == 1 else 's'} will be "
+                 f"permanently deleted.",
+                 f"File: {os.path.basename(row['path'])}"],
+                lambda path=row["path"], name=row["name"]:
+                    self._delete_activity(path, name),
+                back=ACTS)
+        return True
+
+    def _start_named_activity(self, name):
+        """Name a new activity from the activities screen, then open its log."""
+        self._set_activity_session(name)
+        self.screen = LOG if self.log_on else CHAT
+
+    def _delete_activity(self, path, name):
+        """Remove one activity's log file. Confirmed before it gets here."""
+        try:
+            os.remove(path)
+        except OSError as exc:
+            self.acts_message = f"could not delete: {exc}"
+            self.session.note(f"could not delete {name}: {exc}")
+            return
+        self.acts_message = f"{name} deleted"
+        self.session.note(f"activity {name} deleted")
+        # If that was the activity in use, there is nothing to log into any
+        # more: fall back to casual logging rather than to a file that is
+        # gone, which would be recreated empty on the next contact.
+        if name == self._activity_name():
+            self._set_activity_session("")
+        self.acts_sel = 0
+
+    def _delete_activity_type(self, name):
+        """Remove one activity type from activities.conf."""
+        ok, detail = activities.delete(activities.config_path(), name)
+        self.session.note(detail)
+        if not ok:
+            return
+        # The form may be built on the type that just went.
+        table = self._activity_table()
+        if self.log_form is not None and \
+                self.log_form.activity_type.name == name.upper() and \
+                name.upper() not in table:
+            self._set_activity_type("GENERAL", table)
+
+    def _log_name(self):
+        """The log file's name, or "" when it is the default.
+
+        Empty for the default so the header can leave it out: a name shown on
+        every ordinary deck teaches nothing, and one shown only when it is
+        unusual cannot be missed.
+        """
+        name = os.path.basename(self._log_path())
+        return "" if name == "qso.log" else name
+
+    def _switch_log(self):
+        """Reopen the log after the file has changed underneath it."""
+        path = self._log_path()
+        try:
+            self.log_records = qsolog.read(path)
+        except OSError as exc:
+            # A log that cannot be read must not take the screen with it: the
+            # name is wrong, and the operator needs to be told and left able
+            # to type another.
+            self.log_records = []
+            self.session.note(f"could not read {os.path.basename(path)}: {exc}")
+            return
+        self._looked_up = ""
+        self.log_scroll = 0
+        if self.log_form is not None:
+            self.log_form.advance_serial(
+                self.log_records, self.log_form.activity_type.serial_start,
+                activity=self._activity_name())
+        self.session.note(f"{os.path.basename(path)} — "
+                          f"{len(self.log_records)} contact"
+                          f"{'' if len(self.log_records) == 1 else 's'}")
+
     def _open_log(self):
         if not self.log_on:
             self.session.note("logging is off — switch it on from the menu")
             return
-        path = qsolog.log_path(self.cfg.get("LOG_PATH", ""))
+        path = self._log_path()
         if self.log_form is None:
             table = activities.load()
-            act = activities.get(self.cfg.get("ACTIVITY", ""), table)
+            act = activities.get(self.cfg.get("ACTIVITY_TYPE", ""), table)
             self.log_form = logform.LogForm(act)
             if self.cfg.get("MY_PARK"):
                 self.log_form.set("my_park", self.cfg["MY_PARK"])
             if self.cfg.get("EXCHANGE_TX"):
                 self.log_form.set("exchange_tx", self.cfg["EXCHANGE_TX"])
         self.log_records = qsolog.read(path)
-        self.log_form.advance_serial(self.log_records,
-                                     self.log_form.activity.serial_start)
+        self.log_form.advance_serial(
+            self.log_records, self.log_form.activity_type.serial_start,
+            activity=self._activity_name())
         self.log_form.focus("call")
         self.log_message = ""
         self.screen = LOG
@@ -1216,7 +1589,8 @@ class Deck:
             freq_hz=self._log_freq_hz(), mode=values.get("mode", ""),
             my_call=self.cfg.get("CALLSIGN", ""),
             my_grid=self.cfg.get("LOCATOR", ""),
-            my_park=values.get("my_park", ""), activity=form.activity,
+            my_park=values.get("my_park", ""), activity_type=form.activity_type,
+            activity=self._activity_name(),
             serial_tx=values.get("serial_tx", ""),
             exchange_tx=values.get("exchange_tx", ""),
             my_rig=self.cfg.get("RIG", ""),
@@ -1224,7 +1598,14 @@ class Deck:
             tx_power=watts or self.cfg.get("TX_POWER", 0))
 
         try:
-            qsolog.append(qsolog.log_path(self.cfg.get("LOG_PATH", "")), rec)
+            path = self._log_path()
+            # An activity's log lives in a directory of its own that may not
+            # exist yet. Created here rather than when the activity is named,
+            # so naming one and never working a contact leaves nothing behind.
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            qsolog.append(path, rec)
         except OSError as exc:
             # The one failure that must never be quiet: the contact is gone,
             # and the form is left alone so it can be tried again.
@@ -1234,7 +1615,9 @@ class Deck:
         self.log_records.append(rec)
         self._looked_up = ""
         form.commit()
-        form.advance_serial(self.log_records, form.activity.serial_start)
+        form.advance_serial(self.log_records,
+                            form.activity_type.serial_start,
+                            activity=self._activity_name())
         self.log_message = (f"-- logged {rec['call']} {rec.get('band', '')} "
                             f"{rec.get('mode', '')}").rstrip()
 
@@ -1252,6 +1635,12 @@ class Deck:
         # screen; the root menu is one Esc away from it.
         elif ch == curses.KEY_F1:
             self._open_menu("logging")
+        # F2 is the activities list: start one, resume one, delete one. On
+        # this screen the function keys were dead and F1 was given the menu;
+        # the activity is the thing changed often enough to deserve the next
+        # one rather than two keystrokes through a menu.
+        elif ch == curses.KEY_F2:
+            self._open_activities()
         elif ch == 9:                                   # Tab
             # Leaving the callsign is the moment it is worth asking about.
             if form.current is not None and form.current.name == "call":
@@ -1276,6 +1665,16 @@ class Deck:
             form.delete()
         elif ch == 21:                                  # Ctrl-U
             form.kill()
+        # Ctrl-X means "clear what is on this screen" on the conversation
+        # screen too, where it empties the transcript. Here it throws away the
+        # staged contact and keeps the park, exchange, comment and frequency,
+        # which describe the session rather than the station.
+        elif ch == 24:                                  # Ctrl-X
+            if form.clear():
+                self._looked_up = ""
+                self.log_message = "-- entry cleared"
+            else:
+                self.log_message = "-- nothing staged to clear"
         elif ch == curses.KEY_LEFT:
             form.left()
         elif ch == curses.KEY_RIGHT:
@@ -1288,6 +1687,13 @@ class Deck:
             form.tab(back=True)
         elif ch == curses.KEY_DOWN:
             form.tab()
+        # The list, not the form. The arrows move between fields, so paging
+        # is what is left -- and a touchscreen gesture should not be the only
+        # way to reach a contact from an hour ago.
+        elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            h, w = self._screen_size()
+            page = max(1, render.log_body_rows(h, form, w) - 1)
+            self._log_scroll_by(page if ch == curses.KEY_PPAGE else -page)
         elif 32 <= ch < 127:
             form.type(chr(ch))
             # "-- logged W3ABC" is about the contact just finished and goes
@@ -1583,6 +1989,10 @@ class Deck:
             self._draw_fields(h, w)
         elif self.screen == ORDER:
             self._draw_order(h, w)
+        elif self.screen == ACTS:
+            self._draw_activities(h, w)
+        elif self.screen == CONFIRM:
+            self._draw_confirm(h, w)
         elif self.screen == TUNE:
             self._draw_tune(h, w)
         else:
@@ -1682,8 +2092,8 @@ class Deck:
         if m == "memories":
             return menus.memories_menu(self.cfg)
         if m == "logging":
-            act = (self.log_form.activity.name if self.log_form
-                   else self.cfg.get("ACTIVITY", ""))
+            act = (self.log_form.activity_type.name if self.log_form
+                   else self.cfg.get("ACTIVITY_TYPE", ""))
             park = (self.log_form.value("my_park") if self.log_form
                     else self.cfg.get("MY_PARK", ""))
             return menus.log_menu(
@@ -1693,13 +2103,16 @@ class Deck:
                 operating=self.cfg.get("OPERATING", "auto"),
                 dupe=self.cfg.get("DUPE_CHECK", "band+mode"),
                 has_tqsl=self._has_tqsl(),
-                activity="" if act == "GENERAL" else act)
+                log_name=os.path.basename(
+                    qsolog.log_path(self.cfg.get("LOG_PATH", ""))),
+                activity=self._activity_name(),
+                activity_type="" if act == "GENERAL" else act)
         if m == "activity":
             table = self._activity_table()
-            current = (self.log_form.activity.name if self.log_form
-                       else self.cfg.get("ACTIVITY", ""))
-            return menus.activity_menu(sorted(table), current,
-                                       {n: table[n].label for n in table})
+            current = (self.log_form.activity_type.name if self.log_form
+                       else self.cfg.get("ACTIVITY_TYPE", ""))
+            return menus.activity_type_menu(
+                sorted(table), current, {n: table[n].label for n in table})
         if m == "mode":
             return menus.mode_menu(f.modem(), auto=f.rsid())
         if m == "modes_all":
@@ -1776,6 +2189,14 @@ class Deck:
 
         if self.screen == ORDER:
             return self._handle_order(ch)
+
+        # Before every other screen: a question that has to be answered is
+        # the only thing a keystroke can mean while it is on screen.
+        if self.screen == CONFIRM:
+            return self._handle_confirm(ch)
+
+        if self.screen == ACTS:
+            return self._handle_activities(ch)
 
         if self.screen == TUNE:
             return self._handle_tune(ch)
@@ -1947,6 +2368,22 @@ class Deck:
             if field in known:
                 self.cfg[field] = value
         self.session.callsign = self.cfg.get("CALLSIGN") or "LOCAL"
+        # A log chosen on the panel outlives a restart, the same as a mode or
+        # a memory. Otherwise a power cut during an activation silently sends
+        # the rest of it to the default file.
+        chosen = state.get("log_path")
+        if isinstance(chosen, str) and chosen:
+            self.cfg["LOG_PATH"] = chosen
+        # An activity outlives a restart, file and all: a flat battery during
+        # an activation must resume it rather than start a second one.
+        for key, field in (("activity", "ACTIVITY"),
+                           ("activity_type", "ACTIVITY_TYPE")):
+            value = state.get(key)
+            if isinstance(value, str) and value:
+                self.cfg[field] = value
+        saved_path = state.get("activity_path")
+        if isinstance(saved_path, str) and saved_path:
+            self.activity_path = saved_path
         for key, field in (("rx_hold_ms", "RX_HOLD_MS"),
                            ("rx_hold_max_ms", "RX_HOLD_MAX_MS")):
             hold = state.get(key)
@@ -1987,6 +2424,13 @@ class Deck:
                          for n in range(5, 13)},
             "station": {k: self.cfg.get(k, "")
                         for k, _label, _token in menus.STATION_FIELDS},
+            "log_path": self.cfg.get("LOG_PATH", ""),
+            # The activity and the exact file it is writing to. Both, because
+            # re-deriving the file from the name would land on today's date
+            # and a contest weekend resumed on Sunday would fork.
+            "activity": self.cfg.get("ACTIVITY", ""),
+            "activity_type": self.cfg.get("ACTIVITY_TYPE", ""),
+            "activity_path": self.activity_path,
             "rx_hold_ms": self.cfg.get("RX_HOLD_MS", 0),
             "rx_hold_max_ms": self.cfg.get("RX_HOLD_MAX_MS", 0),
         }
@@ -2050,6 +2494,11 @@ class Deck:
         self._save_state()
 
     def _open_menu(self, which):
+        # Arriving at any menu cancels a pending type delete. Without this,
+        # `d` then Esc left the flag set, and the next number typed in the
+        # picker deleted that type instead of selecting it -- a destructive
+        # action still armed by a keystroke the operator had backed out of.
+        self._pending_type_delete = False
         self.menu = which
         self.menu_page = 0
         self.menu_sel = self._first_selectable(which)
@@ -2225,7 +2674,9 @@ class Deck:
                     self.session.note(f"{label} is not supported by this radio")
                 else:
                     self._set_vfo(hz, label=render.frequency(hz))
-                    self._set_rig_mode()
+                    # Reported, not set: a band change is not consent to
+                    # change the radio's mode.
+                    self._report_rig_mode()
                 self._close_menu()
             return True
 
@@ -2250,12 +2701,17 @@ class Deck:
                                   if self.log_on else "logging off")
                 if not self.log_on and self.screen == LOG:
                     self.screen = CHAT
+            elif key == "e":
+                self._close_menu()
+                self._open_activities()
             elif key == "v":
                 self._open_menu("activity")
             elif key == "n":
-                current = (self.log_form.activity.name if self.log_form
-                           else self.cfg.get("ACTIVITY", "") or "GENERAL")
+                current = (self.log_form.activity_type.name if self.log_form
+                           else self.cfg.get("ACTIVITY_TYPE", "") or "GENERAL")
                 self._copy_activity(current)
+            elif key == "f":
+                self._open_editor("LOG_PATH", "Log file")
             elif key == "a":
                 self._export_adif()
                 self._close_menu()
@@ -2291,13 +2747,40 @@ class Deck:
         if m == "activity":
             table = self._activity_table()
             names = [n for n in sorted(table) if n != "GENERAL"]
+            # `d` then a number deletes that type instead of selecting it.
+            # Two keystrokes and then a confirmation, because a type an
+            # operator spent a contest getting right is worth more than the
+            # single keystroke that would remove it.
+            if key == "d":
+                self._pending_type_delete = True
+                self.session.note("press the number of the type to delete")
+                return True
             chosen = ""
             if key == "g":
                 chosen = "GENERAL"
             elif key.isdigit() and key != "0" and 0 <= int(key) - 1 < len(names):
                 chosen = names[int(key) - 1]
+            if chosen and self._pending_type_delete:
+                self._pending_type_delete = False
+                in_file = chosen in self._file_types()
+                if not in_file:
+                    self.session.note(f"{chosen} is built in — nothing in "
+                                      f"activities.conf to delete")
+                    return True
+                reset = activities.is_builtin(chosen)
+                self._ask_confirm(
+                    "RESET ACTIVITY TYPE" if reset else "DELETE ACTIVITY TYPE",
+                    [chosen, "",
+                     (f"Your changes to {chosen} will be removed and the "
+                      f"built-in definition restored.") if reset else
+                     f"The {chosen} type will be deleted from activities.conf.",
+                     "Contacts already logged are not touched."],
+                    lambda n=chosen: self._delete_activity_type(n),
+                    back=self.screen)
+                return True
+            self._pending_type_delete = False
             if chosen:
-                self._set_activity(chosen, table)
+                self._set_activity_type(chosen, table)
                 self._open_menu("logging")
             return True
 
@@ -2357,6 +2840,14 @@ class Deck:
         it says so rather than leaving the operator to infer it from a radio
         that stays keyed.
         """
+        # Arming transmit is the half that can be refused. Inhibiting is
+        # always allowed: a safety control that can fail to engage is not one.
+        if self.session.inhibited and not self._rig_mode_ok():
+            mode = (self.fldigi.rig_mode() or "?").strip()
+            self.session.note(
+                f"transmit stays inhibited — the radio is in {mode}, not a "
+                f"data mode. Change it on the radio, then Ctrl-I again.")
+            return
         self.session.inhibit(not self.session.inhibited)
         self.fldigi.receive_only(self.session.inhibited)
         if self.session.inhibited and self._fldigi_sending:
@@ -2375,7 +2866,7 @@ class Deck:
         self.scroll = 0
         self.session.note("transcript cleared")
 
-    def _open_editor(self, key, title, secret=False, sink=None):
+    def _open_editor(self, key, title, secret=False, sink=None, text=None):
         """Edit a config field, or — with `sink` — anything else.
 
         `sink` exists for the WiFi passphrase, which must not take the normal
@@ -2384,7 +2875,11 @@ class Deck:
         `secret` stops it being drawn, because the deck's screen is a panel
         someone else can be standing behind.
         """
-        text = "" if key is None else (self.cfg.get(key, "") or "")
+        # A sink edit has no config key to read, so `text` is how it starts
+        # with the value being changed rather than with an empty line -- an
+        # activity being renamed should not have to be retyped.
+        if text is None:
+            text = "" if key is None else (self.cfg.get(key, "") or "")
         # `reveal` is deliberately not remembered between editors. Showing a
         # passphrase is a decision about the room the deck is in at that
         # moment, and it should have to be made again rather than carried in
@@ -2437,6 +2932,12 @@ class Deck:
                 e["sink"](text)
                 return True
             self.cfg[e["key"]] = text
+            if e["key"] == "LOG_PATH":
+                # Reopening rather than only remembering the new name: the
+                # contact list, the duplicate check and the next serial are
+                # all read from the file, so a switch that did not reload
+                # would show one log while writing to another.
+                self._switch_log()
             if e["key"] == "CALLSIGN":
                 # The transcript attributes our own overs by callsign, so the
                 # session has to be told rather than reading it once at start.
@@ -2572,30 +3073,42 @@ class Deck:
             return None
         return {part.strip() for part in raw.split(",") if part.strip()}
 
-    def _set_rig_mode(self):
-        """Put the radio into the sideband digital work needs.
+    def _report_rig_mode(self):
+        """Say what mode the radio is in. Never change it.
 
-        Digital modes are upper sideband on every band, including 40 and 80
-        where voice is lower — so this is not something to leave to the
-        operator's memory at the moment they change bands. PKTUSB is the
-        alternative when the radio's own data mode is wanted; which one is
-        right depends on how the FTX-1 is configured to route USB audio.
+        **The deck does not set the radio's mode.** It used to, at startup and
+        on every band change, on the reasoning that digital work is upper
+        sideband on every band and that is easy to forget. The reasoning was
+        right about the radio and wrong about whose decision it is: a deck
+        used purely as a logbook beside a microphone would put the radio into
+        a data mode the operator had not asked for, mid-session, and a
+        deliberate choice would be reverted with a band change.
+
+        So the mode is the operator's, and the deck's side of the bargain is
+        the transmit interlock: it reports what it reads, and it refuses to
+        arm transmit while the radio is in a mode digital work cannot use.
+        See `_toggle_inhibit` and `_rig_mode_ok`.
         """
-        want = (self.cfg.get("RIG_MODE") or "").strip()
-        if not want:
-            return
-        current = self.fldigi.rig_mode()
-        if current == want:
-            return
-        available = self.fldigi.rig_modes()
-        if available and want not in available:
-            self.session.note(f"rig will not take mode {want}; left as {current}")
-            return
-        self.fldigi.set_rig_mode(want)
-        # Say so. Silently changing the radio's mode out from under the
-        # operator is how a deck ends up transmitting through the speech
-        # processor, or reverts a deliberate choice with no trace.
-        self.session.note(f"rig mode {current or '?'} -> {want}")
+        current = (self.fldigi.rig_mode() or "").strip()
+        if not current:
+            return ""
+        if not self._rig_mode_ok():
+            self.session.note(f"rig in {current} — not a data mode, "
+                              f"transmit stays inhibited")
+        return current
+
+    def _rig_mode_ok(self):
+        """Whether the radio is in a mode digital transmit can use.
+
+        True when the mode cannot be read at all. Refusing on an absence of
+        evidence would take transmit away from every deck without CAT control,
+        which is a worse failure than the one being prevented — so this
+        refuses only on a positive reading of a mode that will not work.
+        """
+        current = (self.fldigi.rig_mode() or "").strip().upper()
+        if not current:
+            return True
+        return current in qsolog.RIG_DATA_MODES
 
     def _set_mode(self, name):
         """Change modem, keeping the carrier where it is.
@@ -2765,6 +3278,10 @@ def run():
     except configmod.ConfigError as exc:
         print(f"cyberdeck.conf: {exc}", file=sys.stderr)
         return 1
+    # Non-fatal configuration problems. stderr goes to the journal rather than
+    # to tty1, so these are readable after the panel has taken the screen.
+    for note in configmod.NOTES:
+        print(f"cyberdeck: {note}", file=sys.stderr)
     curses.wrapper(main, settings)
     return 0
 

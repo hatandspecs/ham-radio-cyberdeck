@@ -126,13 +126,13 @@ if __name__ == "__main__":
         made.append(draw(cap.log_screen(kind), "matrix",
                          f"{OUT}/log-{kind}.png"))
     made.append(draw(menus.render(
-        menus.log_menu(True, count=14, lookup=True, activity="POTA",
+        menus.log_menu(True, count=14, lookup=True, activity_type="POTA",
                        park="US-5678", operating="auto", has_tqsl=True),
         COLS, ROWS, selected=0), "matrix", f"{OUT}/log-menu.png"))
     import activities as _acts
     _t = _acts.load(os.path.join(_PROJECT, "activities.conf.example"))
     made.append(draw(menus.render(
-        menus.activity_menu(sorted(_t), "PAQP",
+        menus.activity_type_menu(sorted(_t), "PAQP",
                             {n: _t[n].label for n in _t}),
         COLS, ROWS, selected=3), "matrix", f"{OUT}/log-activity.png"))
 

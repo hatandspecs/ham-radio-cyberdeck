@@ -38,6 +38,18 @@ import activities
 CALL = ("call", "Call", False)
 COMMENT = ("comment", "Comment", True)
 
+# Fields held in upper case however they are typed. A callsign is upper case
+# everywhere it is ever written -- on the air, in ADIF, in every log -- so
+# Caps Lock and the Shift key should not be able to produce a lower-case one,
+# and the operator should not have to look at the field to find out which they
+# got. A reference is the same: `activities._PARK` only matches upper case and
+# `qsolog.make_record` upper-cases it on the way to the record, so showing it
+# any other way would show something different from what gets logged.
+#
+# `grid` is deliberately NOT here: a Maidenhead locator is conventionally
+# mixed case (FN10cs), and upper-casing it would be wrong rather than tidy.
+UPPER = ("call", "park", "my_park")
+
 # This station's own side of the contact. Shown and editable, but placed after
 # the per-contact fields so the common path — call, reports, Enter — does not
 # tab through them. Sticky, every one.
@@ -49,6 +61,12 @@ STATION = (
 # Prefilled from the radio and refreshed until touched.
 RADIO = ("freq", "mode")
 
+# Filled from a callbook answer about the station being worked. They belong to
+# that callsign and to no other, so changing the callsign drops them -- see
+# `forget_lookup`. `grid` is here even though no built-in activity shows it,
+# because an activity may.
+LOOKUP = ("name", "qth", "grid")
+
 
 class Field:
     """One field: a label, a value, and what happens to it on commit."""
@@ -56,6 +74,7 @@ class Field:
     def __init__(self, name, label, sticky=False, value="", from_radio=False):
         self.name = name
         self.label = label
+        self.upper = name in UPPER
         self.sticky = sticky
         self.value = value
         self.from_radio = from_radio
@@ -80,8 +99,8 @@ class Field:
 class LogForm:
     """The fields for one activity, and which of them has focus."""
 
-    def __init__(self, activity=None, show_radio=True):
-        self.activity = activity or activities.GENERAL
+    def __init__(self, activity_type=None, show_radio=True):
+        self.activity_type = activity_type or activities.GENERAL
         self.fields = []
         self._build(show_radio)
         self.index = 0
@@ -100,7 +119,7 @@ class LogForm:
         meant tabbing off the callsign landed on the frequency and the
         exchange was typed into it.
         """
-        act = self.activity
+        act = self.activity_type
         order = [Field(*CALL)]
 
         # 1. Typed for this contact, in the activity's own order.
@@ -154,13 +173,26 @@ class LogForm:
         f = self.field(name)
         if f is None:
             return False
-        f.value = str(value)
+        f.value = str(value).upper() if f.upper else str(value)
         if prefill:
             f.prefill = f.value
             f.displaced = None
         if touch:
             f.touched = True
+        self._wrote(f)
         return True
+
+    def _wrote(self, f):
+        """Put the cursor after a value written into the focused field.
+
+        A lookup answer arrives while the operator is sitting in the field it
+        fills. Without this the cursor stays where it was -- at 0, on an empty
+        field that is no longer empty -- and Backspace returns early on
+        `cursor <= 0`, so the name that appeared cannot be deleted. Found on
+        the deck 2026-10-11 against a name pulled from HamQTH.
+        """
+        if f is self.current:
+            self.cursor = len(f.value)
 
     def restore(self):
         """Ctrl-Z: put the prefill back into the focused field.
@@ -234,6 +266,8 @@ class LogForm:
             return
         f.touched = True
         for ch in str(text):
+            if f.upper:
+                ch = ch.upper()
             f.value = f.value[:self.cursor] + ch + f.value[self.cursor:]
             self.cursor += 1
         if f.from_radio:
@@ -299,6 +333,7 @@ class LogForm:
             if f is not None and not f.touched and value:
                 f.value = str(value)
                 f.prefill = f.value
+                self._wrote(f)
 
         if mode:
             import qsolog
@@ -308,6 +343,7 @@ class LogForm:
                 if f is not None and not f.touched:
                     f.value = default
                     f.prefill = default
+                    self._wrote(f)
 
     # -- committing -------------------------------------------------------
 
@@ -340,7 +376,66 @@ class LogForm:
         self.focus("call")
         return out
 
-    def advance_serial(self, records, start=1):
+    def forget_lookup(self):
+        """Drop the callbook details, keeping anything the operator typed.
+
+        Called when the callsign changes, because the name and QTH on the
+        form describe the station that callsign used to be. Two separate
+        faults on the deck, 2026-10-11, were both this: the first station's
+        name stayed on the form for the second, and a second lookup could not
+        displace it because the merge only filled fields that were empty.
+
+        `touched` is the whole distinction. A name the operator typed is a
+        correction and outranks any callbook; a name the callbook supplied is
+        provisional and goes when its callsign does.
+        """
+        dropped = False
+        for name in LOOKUP:
+            f = self.field(name)
+            if f is None or f.touched or not f.value:
+                continue
+            f.value = ""
+            f.prefill = ""
+            f.displaced = None
+            self._wrote(f)
+            dropped = True
+        return dropped
+
+    def clear(self):
+        """Throw away the staged contact. Sticky and radio fields are kept.
+
+        For the wrong callsign typed, the station that turned out to be
+        someone else, the half-entered contact that never completed. What is
+        discarded is this *contact*; the park, the exchange, the comment and
+        the frequency describe the operating session and survive it -- the
+        same division `commit` makes, because "clear" and "logged" should
+        leave the form in the same shape.
+
+        A sticky field is still cleared one at a time with Ctrl-U, which is
+        how sticky is turned off.
+
+        Returns whether anything was actually discarded, so a key pressed on
+        an already-empty form can say so rather than look broken.
+        """
+        staged = [(f, f.value) for f in self.fields
+                  if not f.sticky and not f.from_radio]
+        for f, _was in staged:
+            f.value = ""
+            f.touched = False
+            f.prefill = ""
+            f.displaced = None
+        # The reports are prefilled from the MODE and not from the station
+        # worked, so a cleared form gets them back. Without this, clearing
+        # costs the operator the 59 that was there before they typed.
+        self.from_radio(mode=self.value("mode"))
+        self.focus("call")
+        # Compared against the cleared form rather than against emptiness: a
+        # report sitting at the mode's default is not something the operator
+        # staged, so clearing a form that holds only defaults has done
+        # nothing and should say so.
+        return any(was != f.value for f, was in staged)
+
+    def advance_serial(self, records, start=1, activity=""):
         """Put this station's next serial on the form, if it sends one.
 
         Derived from the log rather than counted in memory, so it survives a
@@ -352,9 +447,13 @@ class LogForm:
         made. Editing it is for fixing the *current* contact, not for setting
         a counter.
         """
-        if not self.activity.serial:
+        if not self.activity_type.serial:
             return 0
         import qsolog
-        nxt = qsolog.next_serial(records, self.activity.name, start)
+        # Scoped to the ACTIVITY, not to the type: two weekends of the same
+        # QSO party are two activities and each counts from one. Passed in by
+        # the caller because the form knows its type and not which session
+        # it is being used for.
+        nxt = qsolog.next_serial(records, activity, start)
         self.set("serial_tx", str(nxt))
         return nxt

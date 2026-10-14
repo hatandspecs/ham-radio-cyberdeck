@@ -74,17 +74,48 @@ keys = [k for k, _ in on["items"]]
 # General items only, and in that order. Everything here applies to every
 # contact; the activity is last because it is the one that changes what the
 # other items mean.
-equals("on opens the rest", keys, ["l", "a", "m", "d", "c", "v", "n"])
+# `e` is the ACTIVITY -- the session being logged -- and `v` the TYPE it
+# uses. Two lines because they are two things: an operator could previously
+# choose POTA but not say which activation it was.
+equals("on opens the rest", keys,
+       ["l", "f", "a", "m", "d", "c", "e", "v", "n"])
+equals("the activity comes before its type",
+       keys.index("e") < keys.index("v"), True)
+# The log file sits directly under the toggle: which file is being written is
+# the first thing to know about a log, and switching it has to be a named
+# action rather than a restart with a different configuration.
+equals("the log file is second", keys[1], "f")
+check("and names the default when none is set",
+      "qso.log" in dict(on["items"])["f"], dict(on["items"])["f"])
+check("or the one in use",
+      "paqp.log" in dict(menus.log_menu(on=True, log_name="paqp.log")
+                         ["items"])["f"], "")
 check("the count is on the toggle",
       "14 QSOs" in on["items"][0][1], on["items"][0][1])
 check("lookup state is shown",
       "on" in dict(on["items"])["c"], dict(on["items"])["c"])
 
-activating = menus.log_menu(on=True, count=14, lookup=True, activity="POTA",
+# The reference follows the TYPE, not the activity's name: whether this
+# station puts a reference on every contact is a property of the template.
+activating = menus.log_menu(on=True, count=14, lookup=True,
+                            activity="Bald Eagle SP", activity_type="POTA",
                             park="US-5678")
-check("the reference is shown once an activity needs one",
+check("the reference is shown once the type needs one",
       "US-5678" in dict(activating["items"])["p"],
       dict(activating["items"])["p"])
+check("the activity's own name is shown too",
+      "Bald Eagle SP" in dict(activating["items"])["e"],
+      dict(activating["items"])["e"])
+check("and the type beside it",
+      "POTA" in dict(activating["items"])["v"],
+      dict(activating["items"])["v"])
+# A named activity whose type wants no reference is not asked for one.
+# Not named `plain`: that is render.plain, imported at the top, and
+# shadowing it broke the width checks further down with a TypeError.
+no_ref = menus.log_menu(on=True, count=14, activity="Morning on 40",
+                        activity_type="")
+check("a general type is asked for no reference",
+      "p" not in dict(no_ref["items"]), str(no_ref["items"]))
 
 one = menus.log_menu(on=True, count=1)
 check("one contact is singular", "1 QSO" in one["items"][0][1]
@@ -95,14 +126,17 @@ check("no activity reads as general logging",
       and "—" not in dict(one["items"])["v"],
       dict(one["items"])["v"])
 
-# An item whose only possible answer is "this is not set up" occupies a line,
-# invites a keystroke and teaches nothing. Absent is better than greyed.
+# There is no QRZ upload item, with a key or without one. Uploading is a
+# manual action taken on the laptop; see the end of this file for why that is
+# pinned rather than merely intended.
 check("no QRZ item without a key",
       "u" not in [k for k, _ in menus.log_menu(on=True)["items"]])
 withkey = menus.log_menu(on=True, has_qrz_key=True, qrz_pending=14)
-check("and one with a key", "u" in [k for k, _ in withkey["items"]])
-check("carrying the backlog",
-      any("14 waiting" in label for _, label in withkey["items"]),
+check("and none with one either",
+      "u" not in [k for k, _ in withkey["items"]],
+      str(withkey["items"]))
+check("and no backlog is advertised",
+      not any("waiting" in label for _, label in withkey["items"]),
       str(withkey["items"]))
 
 print("\nit is reachable from the root menu")
@@ -136,24 +170,25 @@ check("and no item mentions a POTA mode",
       not any("POTA mode" in l for _, l in plain_menu["items"]),
       str(plain_menu["items"]))
 
-on_pota = menus.log_menu(on=True, count=5, activity="POTA", park="US-5678")
+on_pota = menus.log_menu(on=True, count=5, activity_type="POTA",
+                         park="US-5678")
 check("an activity with a reference adds the item",
       "p" in [k for k, _ in on_pota["items"]], str(on_pota["items"]))
 check("showing the reference",
       any("US-5678" in l for _, l in on_pota["items"]), str(on_pota["items"]))
 check("an unset reference reads 'not set' — the activity is selected",
       any("not set" in l for _, l in
-          menus.log_menu(on=True, activity="POTA")["items"]),
-      str(menus.log_menu(on=True, activity="POTA")["items"]))
+          menus.log_menu(on=True, activity_type="POTA")["items"]),
+      str(menus.log_menu(on=True, activity_type="POTA")["items"]))
 check("a contest activity needs no reference item",
       "p" not in [k for k, _ in
-                  menus.log_menu(on=True, activity="CONTEST")["items"]],
+                  menus.log_menu(on=True, activity_type="CONTEST")["items"]],
       str(menus.log_menu(on=True, activity="CONTEST")["items"]))
 
 print("\nthree default activities, and the rest are examples to copy")
 equals("exactly three are built in", sorted(activities.BUILTIN),
        ["CONTEST", "GENERAL", "POTA"])
-picker = menus.activity_menu(sorted(activities.BUILTIN), "POTA")
+picker = menus.activity_type_menu(sorted(activities.BUILTIN), "POTA")
 check("the picker offers general logging first",
       "General" in picker["items"][0][1], str(picker["items"]))
 check("and marks the one in use",
@@ -174,9 +209,14 @@ check("absent without it", "t" not in
       [k for k, _ in menus.log_menu(on=True)["items"]])
 check("present with it", "t" in
       [k for k, _ in menus.log_menu(on=True, has_tqsl=True)["items"]])
-check("and it says sign, because that is what tqsl does",
-      any("Sign" in l for _, l in
+# It used to say "Sign and upload to LoTW", which reads like a key that
+# sends. It exports a file and prints the tqsl command; the label says that.
+check("and it says it prints the command, because that is all it does",
+      any("print" in l.lower() for _, l in
           menus.log_menu(on=True, has_tqsl=True)["items"]))
+check("and does not read like a key that sends",
+      not any("upload to LoTW" in l for _, l in
+              menus.log_menu(on=True, has_tqsl=True)["items"]))
 
 print("\nand the fullest menu still fits the panel")
 full = menus.log_menu(on=True, count=14, lookup=True, activity="POTA",
@@ -230,5 +270,42 @@ for key in ("RIG", "ANTENNA", "TX_POWER"):
     check(f"{key} is a station field", key in
           [k for k, _l, _t in menus.STATION_FIELDS],
           str([k for k, _l, _t in menus.STATION_FIELDS]))
+
+print("\nnothing in the panel uploads a contact anywhere")
+# The operator's rule, 2026-10-11: uploading is always a manual action, never
+# automatic. A deck being tested is full of contacts that must not reach
+# anyone's permanent record, and "I did not press anything" has to be a
+# complete defense.
+#
+# Pinned as a property of the source rather than as a comment, because a
+# comment does not fail when someone wires a key to an uploader.
+_PANEL = os.path.join(_SRC, "cyberdeck.py")
+_panel_src = open(_PANEL).read()
+
+check("the panel never imports qrzlog",
+      "qrzlog" not in _panel_src,
+      "cyberdeck.py mentions qrzlog")
+# lotw IS imported -- for `available()` and to PRINT a command. What must not
+# appear is a call to the function that actually sends.
+for call in ("lotw.upload(", "lotwmod.upload(", "qrzlog.upload("):
+    check(f"and never calls {call})", call not in _panel_src,
+          f"cyberdeck.py calls {call}")
+
+menu = menus.log_menu(True, count=3, has_qrz_key=True, qrz_pending=7, has_tqsl=True)
+labels = " ".join(label for _k, label in menu["items"])
+check("the menu offers no QRZ upload, even with a key configured",
+      "QRZ" not in labels, labels)
+check("and no count of contacts 'waiting' to be sent",
+      "waiting" not in labels, labels)
+check("the LoTW item says it exports and prints rather than sends",
+      "print" in labels.lower(), labels)
+check("ADIF export is still offered — it writes a local file",
+      "Export ADIF" in labels, labels)
+
+# The parameters stay accepted so no caller breaks, and passing them changes
+# nothing: that is what makes reinstating an upload item a deliberate edit.
+equals("has_qrz_key no longer changes the menu",
+       [k for k, _l in menus.log_menu(True, count=3, has_qrz_key=True)["items"]],
+       [k for k, _l in menus.log_menu(True, count=3, has_qrz_key=False)["items"]])
 
 sys.exit(report())
