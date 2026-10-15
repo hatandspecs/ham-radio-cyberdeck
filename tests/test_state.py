@@ -24,9 +24,12 @@ sys.path.insert(0, _HERE)
 
 from harness import check, equals, report
 from test_screen import run
+import colors
 
+F1 = "\x1bOP"          # xterm F1: the menu
 F3 = "\x1bOR"          # xterm F3: the mode picker
 F4 = "\x1bOS"          # xterm F4: cycle the color scheme
+CTRL_N = "\x0e"        # the log screen
 
 
 if __name__ == "__main__":
@@ -93,5 +96,46 @@ if __name__ == "__main__":
               second.display[0])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    print("\nF4 cycles the color scheme from every area")
+    # It was bound in one place, on the fallthrough BELOW the screen handlers,
+    # so it worked on the conversation and was a dead key on the log screen,
+    # the activities list, the pickers, the tune screen and inside every menu.
+    # Changing scheme is a decision about the light in the room, not about the
+    # screen in front of you.
+    #
+    # The state file is what makes it observable: the scheme deliberately
+    # writes no transcript note, because a log of it is noise mid-contact.
+    def color_after(keys):
+        """The remembered scheme after driving `keys` into a fresh deck."""
+        d = tempfile.mkdtemp(prefix="cyberdeck-scheme-")
+        try:
+            conf = os.path.join(d, "cyberdeck.conf")
+            with open(conf, "w") as fh:
+                fh.write("CALLSIGN = KD3CCO\nLOGGING = yes\n"
+                         + f"LOG_PATH = {os.path.join(d, 'qso.log')}\n")
+            state = os.path.join(d, "state", "cyberdeck.json")
+            run(keys=keys, state_path=state, conf=conf, settle=1.5)
+            if not os.path.exists(state):
+                return ""
+            with open(state) as fh:
+                return json.load(fh).get("color", "")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # No baseline from a keyless run: nothing triggers a save, so the state
+    # file is not written at all and there is nothing to compare against. What
+    # matters is not which scheme F4 lands on but that one keystroke lands on
+    # the SAME one from all three areas.
+    moved = color_after([F4])
+    check("F4 on the conversation records a scheme",
+          moved in colors.SCHEMES, repr(moved))
+    # The same one keystroke, from the other two areas. Asserted as the SAME
+    # destination: one cycle step from the same starting scheme, so a handler
+    # that fired twice or not at all both show up here.
+    equals("F4 on the log screen lands on the same one",
+           color_after([CTRL_N, F4]), moved)
+    equals("and F4 inside the settings menu too",
+           color_after([F1, F4]), moved)
 
     sys.exit(report())

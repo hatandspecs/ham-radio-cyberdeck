@@ -18,6 +18,7 @@ from harness import check, equals, report
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_screen import run, show
 from fldigi_client import Fldigi
+import menus
 
 F1, F3 = "\x1bOP", "\x1bOR"
 UP, DOWN, ENTER, ESC = "\x1bOA", "\x1bOB", "\r", "\x1b"
@@ -33,9 +34,13 @@ print("\n-- Enter on the first item reaches Mode --")
 body = show("F1 Enter", run(keys=[F1, ENTER]))
 check("landed on MODE", "MODE" in body, body[:400])
 
-print("\n-- Up from the first item wraps to the last, System --")
+# Up from the first item wraps to the last, and Enter on it opens that
+# submenu. Both halves matter: a root entry with no handler still wraps to,
+# and then does nothing, which is how the Logging entry was caught.
+_LAST = menus.ROOT["items"][-1][1].upper()
+print(f"\n-- Up from the first item wraps to the last, {_LAST.title()} --")
 body = show("F1 Up Enter", run(keys=[F1, UP, ENTER]))
-check("wrapped to SYSTEM", "SYSTEM" in body, body[:400])
+check(f"wrapped to {_LAST} and it opened", _LAST in body, body[:400])
 
 print("\n-- tuning menu now shows live state --")
 body = show("F1 then 2", run(keys=[F1, "2"]))
@@ -73,7 +78,8 @@ check("F6 is untouched", "F6  DE {call} {call} K" in body, body[:400])
 print("\n-- the station fields are editable, and show their tokens --")
 body = show("F1 6 — station", run(keys=[F1, "6"], settle=1.3))
 check("every field carries its token",
-      all(t in body for t in ("{call}", "{name}", "{qth}", "{grid}", "{rig}")), body[:400])
+      all(t in body for t in ("{call}", "{name}", "{qth}", "{grid}", "{rig}",
+                              "{ant}", "{power}")), body[:400])
 check("and its current value", "KD3CCO" in body, body[:400])
 
 body = show("F1 6 2 — edit Name", run(keys=[F1, "6", "2"], settle=1.4))

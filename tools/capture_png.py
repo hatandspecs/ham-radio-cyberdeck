@@ -121,6 +121,21 @@ if __name__ == "__main__":
     # operator's neighbours and do not belong in a published screenshot.
     made.append(draw(cap.wifi_screen(), "matrix", f"{OUT}/wifi.png"))
 
+    # The log screen's three states, and the menu that reaches it.
+    for kind in ("general", "pota", "contest"):
+        made.append(draw(cap.log_screen(kind), "matrix",
+                         f"{OUT}/log-{kind}.png"))
+    made.append(draw(menus.render(
+        menus.log_menu(True, count=14, lookup=True, activity_type="POTA",
+                       park="US-5678", operating="auto", has_tqsl=True),
+        COLS, ROWS, selected=0), "matrix", f"{OUT}/log-menu.png"))
+    import activities as _acts
+    _t = _acts.load(os.path.join(_PROJECT, "activities.conf.example"))
+    made.append(draw(menus.render(
+        menus.activity_type_menu(sorted(_t), "PAQP",
+                            {n: _t[n].label for n in _t}),
+        COLS, ROWS, selected=3), "matrix", f"{OUT}/log-activity.png"))
+
     names = menus.keyboard_modes([n for _, n in menus.MODE_TIER1] + [
         "BPSK125", "BPSK250", "BPSK500", "QPSK63", "QPSK125", "QPSK250",
         "OLIVIA-4/250", "OLIVIA-16/500", "OLIVIA-32/1K", "MFSK8", "MFSK32",

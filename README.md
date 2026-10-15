@@ -71,9 +71,93 @@ on exit.
   attached, because that is the one situation it cannot be told about.
 * **Touch, minimally**: drag the transcript to scroll it, tap to choose on the
   pairing screens. No pointer, no cursor, nothing else is selectable.
+* **A general-purpose contact log**, off by default and absent when off —
+  prototype, see below.
 
-It deliberately does **not** do contest logging, ADIF, weak-signal modes,
-waterfall display, image modes, or packet.
+It deliberately does **not** do contest exchanges, serial numbers, dupe
+checking, Cabrillo, weak-signal modes, waterfall display, image modes, or
+packet.
+
+### Logging — prototype
+
+A general contact log: time, call, frequency, band, mode, both reports, name,
+QTH, grid and a free-text comment, stored append-only and exported as ADIF.
+Off by default, and when off nothing exists — no key bound, no status field,
+no file.
+
+It is a **general** log, not an activity log — but activities are configurable.
+An activity type is a named, ordered list of fields, and that list doubles as
+the entry grammar:
+
+```ini
+[PAQP]
+like = QSOPARTY              # start from a saved template
+label = Pennsylvania QSO Party
+contest_id = PA-QSO-PARTY
+label_exchange_rx = County   # the word you are listening for
+```
+
+With that selected, `W3ABC 123 MONT` is serial 123 and county MONT. In general
+logging the same line shape means something else — which is the point, since
+`599` is both a valid signal report and a valid serial and nothing about the
+token says which. Choosing the activity resolves it once instead of guessing
+per contact.
+
+Three are built in — **General**, **POTA** and **Contest** — and only three.
+SOTA, WWFF, Field Day, Sweepstakes and the state QSO parties are worked
+examples in `activities.conf.example` to copy with `like =`, because a
+built-in nobody uses is a line in the picker to scroll past forever.
+
+Every contact of every activity also records this station's **rig, antenna and
+transmit power**. Rig and antenna come from the Station menu you already use;
+power is read from the radio, falling back to the configured value. The same
+three are message-memory tokens — `{rig}`, `{ant}`, `{power}` — with `{power}`
+read live, so a brag line cannot claim 20 watts while you sit at 5.
+
+This station's own serial is not typed — it increments, and it comes from the
+log rather than a counter file, so it survives a power pull and cannot
+disagree with what was actually sent. This station's exchange and park are
+settings, because they are the same on every contact of an event.
+
+The mode is filled in from the deck when the deck is what is making the
+contact — fldigi's modem on digital — and left alone on voice, where fldigi
+has a modem loaded that nobody is using.
+
+Two destinations beyond the file: a QRZ logbook (needs their paid
+subscription, currently **paused** for that reason) and LoTW, which is free
+but signs through `tqsl` and so is an export plus a command rather than a
+button.
+
+Callsign lookup has three providers when there is a network: callook.info (US,
+no account), HamQTH (worldwide, free) and QRZ XML (worldwide, free). They are
+tried in that order, which is about the grid — QRZ withholds it from
+non-subscribers, and it is the field most worth having. Partial answers are
+filled in from the next provider rather than accepted. Logged something with
+the WiFi off? `qso.py backfill` fills the names and grids in later, without
+rewriting the log.
+
+HamQTH's username is the **callsign**, not the email address — the email is
+refused in a way that looks like a wrong password.
+
+**What works today:** everything above, from a terminal or over SSH with
+[`tools/qso.py`](tools/qso.py). **What does not:** none of it is reachable
+from the panel yet — no `Ctrl-N`, no root-menu entry. The screen renderer and
+the menu are written and tested; the key handler in `cyberdeck.py` is not.
+[`docs/logging_tutorial.md`](docs/logging_tutorial.md) is the walkthrough, with
+screenshots; [`docs/qso_log_design.md`](docs/qso_log_design.md) has the design,
+the decisions and an honest account of what is unfinished.
+
+```bash
+qso.py log W3ABC 59 57 Bob Pittsburgh      # a contact
+qso.py log --comment "5W to a wire" K2XYZ  # with a note
+qso.py log --lookup OK2CQR 59 55           # fill name/QTH/grid from a callbook
+qso.py log --pota --my-park US-5678 N3QQQ 59 57 US-1234
+qso.py log --activity PAQP --exchange-tx CENT W3ABC 123 MONT
+qso.py activities                           # the field list and every activity
+qso.py list                                 # recent
+qso.py adif log.adi                         # export
+qso.py lotw log.adi                         # export + the tqsl command
+```
 
 ## Screens
 
@@ -249,7 +333,12 @@ Nothing else in the repository reaches the deck.
 | [`src/btpair.py`](src/btpair.py) | Pairing a keyboard over BlueZ, on one long-lived D-Bus connection |
 | [`src/wifi.py`](src/wifi.py) | Joining networks through `nmcli`. Long operations do not block the panel |
 | [`src/config.py`](src/config.py) | `cyberdeck.conf` — the station's own settings, message memories, remembered state |
-| [`src/rigctld_client.py`](src/rigctld_client.py) | Unused. Documents a hamlib bug and a raw-CAT workaround |
+| [`src/rigctld_client.py`](src/rigctld_client.py) | Frequency and mode from the radio. Documents a hamlib bug and a raw-CAT workaround |
+| [`src/qsolog.py`](src/qsolog.py) | The contact log: parsing, records, ADIF, storage. No I/O beyond the file |
+| [`src/activities.py`](src/activities.py) | Activity types — a named field list that doubles as the entry grammar |
+| [`src/callbook.py`](src/callbook.py) | Callsign lookup — callook.info, then HamQTH. Cached; silent with no network |
+| [`src/qrzlog.py`](src/qrzlog.py) | Queued upload to a QRZ logbook. Cannot lose a contact |
+| [`src/lotw.py`](src/lotw.py) | LoTW through `tqsl`, which hangs rather than failing — so, carefully |
 | [`tools/build_deck_image.sh`](tools/build_deck_image.sh) | Builds and flashes the Pi's SD card |
 | [`tools/configure_fldigi.py`](tools/configure_fldigi.py) | Sets fldigi's audio and rig control without its GUI |
 | [`tools/dev-fldigi.sh`](tools/dev-fldigi.sh) | fldigi headless under Xvfb, for development |
@@ -261,10 +350,17 @@ Nothing else in the repository reaches the deck.
 | [`tests/test_cold_boot.py`](tests/test_cold_boot.py) | Starting before fldigi does, against a stand-in that arrives late |
 | [`tests/test_colors.py`](tests/test_colors.py) | The schemes, and the two properties that were real faults |
 | [`tests/test_sequences.py`](tests/test_sequences.py) | Over, hand and abort pressed in orders nobody designed for |
+| [`tests/test_qsolog.py`](tests/test_qsolog.py) | Log parsing, ADIF, and where the logged mode comes from |
+| [`tests/test_log_screen.py`](tests/test_log_screen.py) | The log screen at every width, general mode and POTA mode |
+| [`tests/test_lotw.py`](tests/test_lotw.py) | tqsl's exit statuses, including the hang and the 255 |
+| [`tests/test_activities.py`](tests/test_activities.py) | Activity definitions, and the grammar each one implies |
 | [`tools/bt_agent_probe.py`](tools/bt_agent_probe.py) | Proves a BlueZ agent survives a scan, before any of it is built on |
+| [`tools/qso.py`](tools/qso.py) | Log contacts from a terminal or over SSH; ADIF and LoTW export |
 | [`tools/run_tests.sh`](tools/run_tests.sh) | The whole suite, one command |
 | [`docs/deploy_cyberdeck_instructions.md`](docs/deploy_cyberdeck_instructions.md) | The full runbook, blank card to on the air |
 | [`docs/operating_tutorial.md`](docs/operating_tutorial.md) | How to actually work someone, for a first-timer |
+| [`docs/qso_log_design.md`](docs/qso_log_design.md) | The contact log: design, decisions, and what is not built |
+| [`docs/logging_tutorial.md`](docs/logging_tutorial.md) | How to actually log a contact, with screenshots |
 | `deck.conf` | How to build that card: hostname, panel, keyboard, radio |
 
 ## Running it on a laptop, with your own radio
@@ -521,8 +617,9 @@ tools/dev-fldigi.sh        # fldigi must be running; three tests drive it
 tools/run_tests.sh
 ```
 
-436 checks. `test_screen.py`, `test_menu_nav.py`, `test_menu_arrows.py`,
-`test_console_keys.py`, `test_screen_toggles.py` and `test_state.py` fork
+1743 checks across 24 files. `test_screen.py`, `test_menu_nav.py`,
+`test_menu_arrows.py`, `test_console_keys.py`, `test_screen_toggles.py`,
+`test_log_panel.py` and `test_state.py` fork
 a pseudo-terminal, run the real application, and read the screen back with a
 terminal emulator, so the tests assert on what the deck looks like rather than
 on functions in isolation.

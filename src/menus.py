@@ -58,6 +58,10 @@ ROOT = {
         ("5", "Memories"),
         ("6", "Station"),
         ("7", "System"),
+        # Added together with its handler in cyberdeck.py, which is the rule:
+        # a root entry whose Enter does nothing is worse than no entry, since
+        # being discoverable is the line's only job and it then lies.
+        ("8", "Logging"),
     ],
     "footer": "Esc back to the conversation   ↑↓ move   Enter select",
 }
@@ -156,6 +160,178 @@ def band_menu(supported=None):
     return {"title": "BAND", "items": items,
             "footer": "Esc back   \u2191\u2193 move   Enter select"}
 
+def activity_type_menu(names, current="", labels=None):
+    """Pick a saved activity TYPE. The list comes from activities.load().
+
+    A picker rather than a toggle because the whole point is that an operator
+    defines their own: a list of named templates, chosen by name, is what
+    "save an activity type and select it later" means at the panel.
+
+    A *type* is the template of fields. An *activity* is a session that uses
+    one and has a name and a log file of its own -- that is the ACTIVITIES
+    screen, not this.
+    """
+    labels = labels or {}
+    items = [("g", "General logging" +
+              ("   *" if not current or current == "GENERAL" else ""))]
+    for i, name in enumerate(n for n in names if n != "GENERAL"):
+        mark = "   *" if name == current else ""
+        label = labels.get(name, name)
+        items.append((str(i + 1)[-1], f"{name:<12} {label[:28]}{mark}"))
+    return {
+        "title": "ACTIVITY TYPE",
+        "items": items,
+        # Three things can start here: select a type, copy one into a new type,
+        # or begin a new type with nothing in it. Creating a type belongs here
+        # rather than on the logging menu, where it asked the operator to
+        # decide to create one before seeing what already exists.
+        #
+        # `c` and `d` each take a number after them. Two keystrokes and, for
+        # the delete, a confirmation as well -- a type an operator spent a
+        # contest getting right should not go on one.
+        "footer": ("Esc back  Enter select  c+n copy  n new  "
+                   "d+n delete  * in use"),
+    }
+
+
+def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
+             qrz_pending=0, operating="auto", has_tqsl=False,
+             activity="", dupe="band+mode", log_name="",
+             activity_type="", callbook_state="", log_lines=1):
+    # has_qrz_key and qrz_pending are accepted and ignored. They fed the
+    # removed QRZ upload item; the parameters stay so that a caller passing
+    # them is not a TypeError, and so that reinstating an upload item is a
+    # deliberate edit here rather than a side effect somewhere else.
+    """The logging menu. One line in the root menu leads here.
+
+    When logging is off this is a single item, because that is the whole of
+    what the feature is when it is off (docs/qso_log_design.md §1). The rest
+    appears only once there is something for it to act on.
+
+    The items are ordered general first: the log, its export, the mode source
+    and the lookup apply to every contact. POTA mode comes after them, and
+    this station's park reference appears only once POTA mode is on — off, it
+    is not a field waiting to be filled, it is a question that does not apply.
+
+    **Nothing here uploads a contact anywhere.** `Export ADIF` writes a file
+    beside the log and `Sign and upload to LoTW` writes that file and prints
+    the tqsl command for it -- the command is never run, because signing needs
+    a callsign certificate that does not belong on a card that travels. The
+    only code in this project that transmits a log to a third party is
+    `tools/qso.py lotw --upload`, which is a flag, on a subcommand, typed by
+    hand on the laptop. There is deliberately no panel key that does it and
+    nothing on any timer that does it: a deck full of test contacts must not
+    be one keystroke from someone's permanent record.
+
+    There was a `Upload to QRZ  n waiting` item here. It was removed: no
+    handler was ever bound to it, so the line did nothing, and "n waiting"
+    described a queue that drains, which is exactly the impression this
+    feature must not give.
+    """
+    if not on:
+        return {
+            "title": "LOGGING",
+            "items": [("l", "Logging                      off")],
+            "footer": "Esc back   Enter select",
+        }
+
+    items = [
+        ("l", f"Logging                      on — {count} "
+              f"QSO{'' if count == 1 else 's'}"),
+        # The DEFAULT log, which is also the directory the per-activity logs
+        # sit beside. It is not the file in use unless logging is casual --
+        # an activity has its own, named after it. Which file is actually
+        # open is on the log screen's header, where it is read while typing
+        # into it rather than two keystrokes away.
+        ("f", f"Default log                  {log_name or 'qso.log'}"),
+        ("a", "Export ADIF"),
+        ("m", f"Mode from                    {_OPERATING_LABEL.get(operating, operating)}"),
+        ("d", f"Duplicates                   {_DUPE_LABEL(dupe)}"),
+        # Three words from two settings: "off" is a decision, "no wifi" is a
+        # condition the operator can fix, "on" is working. Showing "off" for a
+        # station with no association made a missing network look like a
+        # switched-off feature.
+        ("c", f"Callbook lookup              "
+              f"{callbook_state or ('on' if lookup else 'off')}"),
+        # Two lines, because these are two things. The ACTIVITY is the
+        # session being logged -- this park, this contest weekend -- and it
+        # carries the operator's name for it and a log file of its own. The
+        # ACTIVITY TYPE is the template of fields it uses, edited once and
+        # reused by every activity that wants it.
+        #
+        # They were one setting called "Activity". That let the operator
+        # choose POTA but not say which activation it was, and made two
+        # weekends of the same QSO party share one serial sequence.
+        ("e", f"Activity                     "
+              f"{activity or 'casual logging'}"),
+        # Creating a type is not a line here. It belongs on the picker that
+        # lists them, where the operator is already looking at what exists and
+        # can see what is worth copying -- a separate menu item asked them to
+        # decide to create one before seeing the alternatives.
+        ("v", f"Activity type                "
+              f"{activity_type or 'general logging'}"),
+        # How tall a contact is in the list. What the extra rows SHOW is
+        # deliberately not described here: it is the activity type's own field
+        # order, carrying on from where the first row stops, so it differs with
+        # the type and any description written here would be wrong for most of
+        # them.
+        ("n", f"Lines per contact            "
+              f"{log_lines} of 3"),
+    ]
+    if needs_reference(activity_type):
+        # Only when the selected activity has a reference field. Otherwise
+        # this station's own park is not an unset field, it is a question that
+        # does not apply to the operating being done.
+        items.append(("p", f"My reference                 "
+                           f"{park or 'not set'}"))
+    extra = []
+    if has_tqsl:
+        # Signing needs a callsign certificate and tqsl blocks rather than
+        # failing without one, so this is an export-and-a-command, not a
+        # one-key upload. The label says so: nothing is sent from here.
+        extra.append(("t", "Export + print the LoTW command"))
+    items[2:2] = extra
+    return {
+        "title": "LOGGING",
+        "items": items,
+        "footer": "Esc back   ↑↓ move   Enter select   ^N the log screen",
+    }
+
+
+# Short enough to fit the 66-column panel beside its label. What each one
+# actually does is in docs/qso_log_design.md §6; the panel only has room to
+# say which of the three is selected.
+def needs_reference(activity_type):
+    """Whether an activity TYPE puts this station's reference on every contact.
+
+    Asked of the type rather than hard-coded, so an operator who defines a
+    WWFF or IOTA type with a `park` field gets the setting without anyone
+    editing this file.
+    """
+    try:
+        import activities as _acts
+        act = _acts.get(activity_type, _acts.load())
+        return act.wants("park")
+    except Exception:
+        return str(activity_type or "").upper() in ("POTA", "SOTA", "WWFF")
+
+
+def _DUPE_LABEL(rule):
+    """What the panel calls a duplicate rule. Short enough for 66 columns."""
+    try:
+        import qsolog
+        return qsolog.DUPE_LABELS.get(rule, rule)
+    except Exception:
+        return rule
+
+
+_OPERATING_LABEL = {
+    "auto": "auto — fldigi on digital",
+    "digital": "fldigi, always",
+    "voice": "the rig, always",
+}
+
+
 SYSTEM = {
     "title": "SYSTEM",
     "items": [
@@ -192,6 +368,9 @@ STATION_FIELDS = (
     ("QTH", "QTH", "{qth}"),
     ("LOCATOR", "Locator", "{grid}"),
     ("RIG", "Rig", "{rig}"),
+    ("ANTENNA", "Antenna", "{ant}"),
+    ("TX_POWER_MAX", "Max power (W)", ""),
+    ("TX_POWER", "Power (W)", "{power}"),
 )
 
 
