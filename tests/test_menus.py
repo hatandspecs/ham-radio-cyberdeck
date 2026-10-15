@@ -77,8 +77,14 @@ keys = [k for k, _ in on["items"]]
 # `e` is the ACTIVITY -- the session being logged -- and `v` the TYPE it
 # uses. Two lines because they are two things: an operator could previously
 # choose POTA but not say which activation it was.
+# No `n` any more. Creating an activity type moved onto the picker that lists
+# them, where what already exists is in front of the operator making the
+# decision.
 equals("on opens the rest", keys,
-       ["l", "f", "a", "m", "d", "c", "e", "v", "n"])
+       ["l", "f", "a", "m", "d", "c", "e", "v"])
+check("creating a type is not offered here",
+      not any("New type" in label for _k, label in on["items"]),
+      str(on["items"]))
 equals("the activity comes before its type",
        keys.index("e") < keys.index("v"), True)
 # The log file sits directly under the toggle: which file is being written is

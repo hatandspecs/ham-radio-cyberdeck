@@ -758,8 +758,19 @@ def activity_screen(rows, selected, width, height, current="", message=""):
     return out[:height]
 
 
+# How many fields fit on one selection page. The list outgrew both the screen
+# and the seventeen keys that can jump to a row, so it pages -- and the page is
+# derived from where the cursor is rather than held separately, which means
+# walking off the bottom of one page simply arrives at the top of the next.
+# Fourteen, so that page one holds QRZ's whole QSO record -- see the comment
+# over `activities.ENTRY_FIELDS`, which is where the order comes from. The
+# ceiling is `len(activities.PICK_KEYS)`, since every row on a page has a key
+# printed beside it, and the screen itself fits `height - 4`.
+FIELDS_PER_PAGE = 14
+
+
 def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
-                        footer=""):
+                        footer="", per_page=FIELDS_PER_PAGE):
     """Which fields an activity uses. `rows` is [(name, label, on), ...].
 
     One screen for one question. The ordering is asked separately, because
@@ -767,13 +778,19 @@ def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
     """
     out = []
     chosen = sum(1 for _n, _l, on in rows if on)
+    pages = max(1, (len(rows) + per_page - 1) // per_page)
+    page = min(max(0, selected // per_page), pages - 1)
+    shown = rows[page * per_page:(page + 1) * per_page]
+
     head = f" {title}"
+    if pages > 1:
+        head += f"  {page + 1}/{pages}"
     right = f"{chosen} of {len(rows)} chosen "
     pad = max(1, width - len(head) - len(right))
     out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
     out.append(rule(width))
 
-    for i, (name, label, on) in enumerate(rows):
+    for i, (name, label, on) in enumerate(shown, start=page * per_page):
         mark = "\u25b8" if i == selected else " "
         box = FIELD_ON if on else FIELD_OFF
         help_text = ""
@@ -782,12 +799,14 @@ def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
             help_text = activities.FIELD_HELP.get(name, "")
         except Exception:
             help_text = ""
+        # The jump key is the row's position ON THIS PAGE, so the keys read
+        # 1..9,a.. on every page rather than running out after the first.
         key = ""
         try:
             import activities as _acts
-            key = _acts.pick_key(i)
+            key = _acts.pick_key(i - page * per_page)
         except Exception:
-            key = str(i + 1) if i < 9 else ""
+            key = ""
         line = f"{mark} {key or ' '}  {box}  {label:<9} {help_text}"
         out.append([(line[:width].ljust(width),
                      "bright" if i == selected else "")])
@@ -795,9 +814,11 @@ def field_select_screen(rows, selected, width, height, title="SELECT FIELDS",
     while len(out) < height - 2:
         out.append([(" " * width, "")])
     out.append(rule(width))
-    out.append([((" " + (footer or
-                 "Esc cancel   \u2191\u2193 move   Space toggle   "
-                 "Enter order them"))[:width].ljust(width), "dim")])
+    default = ("Esc cancel  \u2191\u2193 move  Space toggle  Enter order")
+    if pages > 1:
+        default = ("Esc cancel  \u2191\u2193 move  \u2190\u2192 page  "
+                   "Space toggle  Enter order")
+    out.append([((" " + (footer or default))[:width].ljust(width), "dim")])
     return out[:height]
 
 

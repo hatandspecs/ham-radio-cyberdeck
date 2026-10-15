@@ -447,6 +447,56 @@ class Cache:
         return len(self._data)
 
 
+_ROUTES = "/proc/net/route"
+
+
+def online(routes_path=_ROUTES):
+    """Whether this machine has a default route, i.e. a way off the subnet.
+
+    Read from /proc rather than probed over the network, deliberately. The
+    answer is wanted on every menu draw and every lookup decision, and a
+    machine with no route must get that answer instantly instead of waiting
+    out a connection attempt -- which on the deck means the operator is in a
+    field with the panel in front of them.
+
+    A default route is not proof the internet is reachable. It is proof the
+    attempt is worth making, which is the decision being taken. The lookup
+    itself fails gracefully either way, and the distinction the operator cares
+    about is "the WiFi is not associated" versus "I turned this off".
+
+    The field in /proc/net/route is the destination as a little-endian hex
+    word; 00000000 is the default route.
+    """
+    try:
+        with open(routes_path, encoding="utf-8") as fh:
+            next(fh, None)                               # the header row
+            for line in fh:
+                parts = line.split()
+                if len(parts) > 2 and parts[1] == "00000000":
+                    return True
+    except (OSError, StopIteration):
+        return False
+    return False
+
+
+# What the operator is told, which is three states from two settings. "off"
+# is a decision they made; "no wifi" is a condition they can fix; "on" is
+# working. Collapsing the last two into one word is what made a station with
+# no association look like a station with the feature switched off.
+CALLBOOK_OFF = "off"
+CALLBOOK_ON = "on"
+CALLBOOK_NO_NET = "no wifi"
+
+
+def callbook_state(setting, is_online=None):
+    """One of CALLBOOK_OFF / CALLBOOK_ON / CALLBOOK_NO_NET."""
+    if str(setting or "").strip().lower() not in ("yes", "on", "true", "1"):
+        return CALLBOOK_OFF
+    if is_online is None:
+        is_online = online()
+    return CALLBOOK_ON if is_online else CALLBOOK_NO_NET
+
+
 def providers_from(settings, fetch=_http_get):
     """The provider chain a configuration implies, in the order to try it.
 

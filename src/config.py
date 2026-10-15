@@ -130,10 +130,15 @@ SCHEMA = {
     "DUPE_CHECK":      ("band+mode", str, "off | call | band | mode | "
                                           "band+mode — when to say a station "
                                           "has been worked before"),
-    "CALLBOOK":        ("no", str, "yes | no — look up callsigns over the "
-                                   "network. Sends every call worked to a "
-                                   "third party, so it is off separately "
-                                   "from logging"),
+    # On by default (2026-10-14, the operator's decision). It sends every
+    # call worked to a third party, which is why it remains a setting of its
+    # own rather than following LOGGING -- but a name and a grid filled in
+    # automatically is most of what a log is for, and a station with no
+    # network simply shows "no wifi" instead of pretending to be off.
+    "CALLBOOK":        ("yes", str, "yes | no — look up callsigns over the "
+                                    "network. Sends every call worked to a "
+                                    "third party. On, it reads 'no wifi' when "
+                                    "there is no default route"),
 
     # Secrets. These are NOT read from cyberdeck.conf — see SECRETS_PATH below
     # and the note on `load`. They are listed here so the rest of the program
@@ -168,6 +173,11 @@ SCHEMA = {
     "FONT":            ("12x24", str, "console font; sets the character grid"),
 
     "FLDIGI_URL":      ("http://127.0.0.1:7362/", str, "fldigi's XML-RPC address"),
+    # Where rigctld is. Configurable rather than hard-coded so a second
+    # instance can be addressed -- which is what `tools/deck_local.py` needs
+    # when a real fldigi or rigctld already holds the usual port.
+    "RIGCTLD_HOST":    ("127.0.0.1", str, "rigctld's address"),
+    "RIGCTLD_PORT":    (4532, int, "rigctld's port"),
     "POLL_MS":         (200, int, "how often to ask fldigi for new text"),
     "SCROLLBACK":      (2000, int, "transcript lines kept in memory"),
     "TX_TIMEOUT":      (180, int, "seconds before an over is aborted; 0 disables"),

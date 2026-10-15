@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# The cyberdeck's interface, on this laptop, at the panel's exact 66x20.
+#
+#   ./deck --foot              IN FOOT, at the panel's real font and size
+#   ./deck                     the deck, with a few contacts already logged
+#   ./deck --no-radio          as when the rig is off: no mode, no frequency
+#   ./deck --callbook yes      network callsign lookup, with real credentials
+#   ./deck --activity-type POTA --park US-5678
+#   ./deck --console           how to run it on a real console (prints only)
+#   ./deck --help              every option
+#
+# This is the real src/cyberdeck.py driven through a pseudo-terminal sized to
+# the panel, with a pretend fldigi and rigctld behind it so the deck reads a
+# mode, a VFO and a transmit power. Nothing it writes touches the real log,
+# the saved state or activities.conf. See tools/deck_local.py.
+#
+# Ctrl-N opens the log. Ctrl-Q twice quits. Ctrl-] forces it to let go.
+#
+# With no arguments it seeds a few contacts, because an empty list tells you
+# nothing about the layout and the layout is what this is for. Pass any
+# argument and you get exactly what you asked for.
+#
+# THIS SCRIPT DOES NOT ALLOCATE A VIRTUAL CONSOLE, AND MUST NOT LEARN HOW.
+# An earlier version ran `sudo openvt -s -w -- runuser -u "$USER" -- ...` to
+# get a real console with native key sequences and a console font. It killed
+# the graphical session: `runuser` opens a PAM session, and pam_systemd
+# registering a new logind session on a VT while a graphical seat is active
+# took down the desktop, VS Code and everything running in it. That is the
+# second time this project has lost a console to a program reaching for a tty
+# it did not own. Log into a console by hand instead -- `--console` prints how.
+set -euo pipefail
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${1:-}" == "--console" ]]; then
+  cat <<EOF
+A real Linux console is the best place to judge layout, glyphs and keys: TERM
+is genuinely 'linux', the keyboard produces console byte sequences so nothing
+is translated, and the font is a console font rather than a desktop font with
+all of Unicode in it. A glyph the panel cannot show appears there as the blank
+box it will be on the deck.
+
+Do it by hand. This script will not do it for you -- automating it once took
+down the graphical session, VS Code included.
+
+  1. Ctrl+Alt+F3            a console login prompt
+  2. log in
+  3. cd ${here}
+  4. ./deck                 (TERM is already linux; no translation happens)
+  5. Ctrl-Q twice           to quit
+  6. Ctrl+Alt+F2            back to the desktop (F1 on some setups)
+
+Nothing needs sudo, nothing is stopped, and the desktop session is untouched
+because the console login is a session of its own rather than one grafted onto
+your seat.
+EOF
+  exit 0
+fi
+
+# --foot re-runs this script inside foot, sized and fonted to the panel, and
+# passes everything after it through. In the terminal the editor hands you, the
+# window is whatever size that pane happens to be and the font is a desktop
+# font, so glyph width and layout are both wrong -- and judging layout is the
+# only reason this rig exists.
+#
+# Terminus Bold at pixelsize 24 is not an approximation of the deck's font: the
+# deck runs Uni3-TerminusBold24x12, which IS Terminus Bold 24px on a 12x24
+# cell. 66x20 of those is 792x480, the panel's own resolution. `fc-match
+# 'Terminus:style=Bold:pixelsize=24'` should answer ter-u24b.otb.
+#
+# pad=0x0 so the window is exactly the cell grid with no border stealing pixels
+# from the comparison.
+#
+# No recursion: the inner call is this script WITHOUT --foot, so it falls
+# through to the python line below.
+if [[ "${1:-}" == "--foot" ]]; then
+  shift
+  if ! command -v foot >/dev/null; then
+    echo "foot is not installed.  sudo dnf install foot" >&2
+    exit 1
+  fi
+  if ! fc-match "Terminus:style=Bold:pixelsize=24" 2>/dev/null | grep -q ter-u; then
+    echo "Terminus is not installed, so the cell will not be the panel's." >&2
+    echo "  sudo dnf install terminus-fonts" >&2
+  fi
+  exec foot --title="cyberdeck 66x20" \
+            --app-id=cyberdeck-rig \
+            --font="Terminus:style=Bold:pixelsize=24" \
+            --window-size-chars=66x20 \
+            --override=main.pad=0x0 \
+            -- "${BASH_SOURCE[0]}" "$@"
+fi
+
+args=("$@")
+if (( ${#args[@]} == 0 )); then
+  args=(--contacts)
+fi
+
+exec python3 "${here}/tools/deck_local.py" "${args[@]}"

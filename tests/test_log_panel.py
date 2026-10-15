@@ -24,6 +24,7 @@ from harness import check, equals, report
 from test_screen import run, show
 import activities
 import menus
+import render
 
 STATION = ("CALLSIGN = KD3CCO\nLOCATOR = FN10cs\nRIG = FTX-1\n"
            "ANTENNA = EFHW\n")
@@ -199,7 +200,26 @@ print("\nbuilding an activity on the panel")
 # Copy an existing one, change which fields it has, put them in order, name
 # it, save it. The file written is the same INI an operator edits over SSH,
 # so a definition made on the panel can be read and corrected by hand.
+#
+# The copy starts from the type picker -- `v` to open it, then `c` and the
+# number of the type to copy. It used to start from a line on the logging
+# menu; that line is gone, because choosing what to copy without seeing the
+# list of what exists is the wrong order to decide in.
 DOWN = "\x1b[B"
+RIGHT = "\x1b[C"
+COPY_CONTEST = ["v", "c", "1"]
+
+
+# Derived, never counted by hand. Both the page a field is on and the key
+# printed beside it move when ENTRY_FIELDS is reordered, and a hard-coded "6"
+# is how a test ends up toggling whatever slid into that row -- it was "6" for
+# `name` until page one became QRZ's entry panel, and then it was `grid`.
+# `type_key` above exists for exactly the same reason.
+def field_keys(name):
+    """The keystrokes that toggle `name`, starting from page one."""
+    names = [f for f, _l, _k in activities.field_choices()]
+    page, row = divmod(names.index(name), render.FIELDS_PER_PAGE)
+    return [RIGHT] * page + [activities.pick_key(row)]
 
 def build(keys, label):
     """Run with an activities.conf of our own, and return (body, its text)."""
@@ -220,14 +240,25 @@ def build(keys, label):
         written = open(acts).read() if os.path.exists(acts) else ""
         return body, written
 
-body, _ = build(["\x0e", F1["linux"], "n"], "copy the activity in use")
+body, _ = build(["\x0e", F1["linux"]] + COPY_CONTEST,
+                "copy the activity in use")
 check("the selection screen opens", "SELECT FIELDS" in body, body[:120])
 check("naming what it was copied from", "CONTEST" in body, body[:120])
-check("the copied fields are on", "\u2588" in body, body[:400])
-check("and the others are off", "\u00b7" in body, body[:400])
+check("the fields not copied are off", "\u00b7" in body, body[:400])
 check("it says how to toggle", "Space toggle" in body, body[-120:])
+check("and that the list pages", "page" in body, body[-120:])
 
-body, _ = build(["\x0e", F1["linux"], "n", "6", "\r"], "choose fields, then order")
+# CONTEST is a serial and an exchange, and anything strictly contest-related
+# is on page two: page one is general and POTA logging. So the copy shows its
+# fields on from the page they are on, not from the first one.
+body, _ = build(["\x0e", F1["linux"]] + COPY_CONTEST + [RIGHT],
+                "the copied fields are on, on their own page")
+check("the copied fields are on", "\u2588" in body, body[:400])
+check("and the heading says which page", "2/2" in body, body[:80])
+
+body, _ = build(["\x0e", F1["linux"]] + COPY_CONTEST
+                + field_keys("name") + ["\r"],
+                "choose fields, then order")
 check("Enter moves on to the ordering screen", "ORDER FIELDS" in body,
       body[:120])
 check("the chosen fields are numbered", "1." in body and "2." in body,
@@ -235,8 +266,8 @@ check("the chosen fields are numbered", "1." in body and "2." in body,
 check("and it says a number moves a row", "renumber" in body, body[-120:])
 
 # Toggle Name on, go to it, type 1 to make it first, name it, save it.
-keys = (["\x0e", F1["linux"], "n", "6", "\r", DOWN, DOWN, "1", "\r"]
-        + list("PAQP") + ["\r"])
+keys = (["\x0e", F1["linux"]] + COPY_CONTEST + field_keys("name")
+        + ["\r", DOWN, DOWN, "1", "\r"] + list("PAQP") + ["\r"])
 body, written = build(keys, "name it and save")
 check("the file was written", "[PAQP]" in written, written or "(empty)")
 check("with the field that was added", "name" in written, written)
@@ -535,6 +566,129 @@ body, text = with_type(["\x0e", F1["linux"], "v", "d", "\x1b",
                        "d then Esc then a number selects")
 check("the type still exists", "[PAQP]" in text, text)
 check("and was selected", "PAQP" in body, body[:200])
+
+print("\ncreating a type starts from the picker, not from a menu item")
+
+# The logging menu used to carry a "New type, copied from this one" line. It
+# asked the operator to decide to create a type before seeing what already
+# existed, so it moved onto the picker that lists them.
+body, _ = deck(["\x0e", F1["linux"], "8"], "LOGGING = yes\n",
+               term="linux", label="the logging menu")
+check("the logging menu no longer offers to create a type",
+      "New type" not in body, body)
+check("but it still leads to the picker", "Activity type" in body, body)
+
+body, text = with_type(["\x0e", F1["linux"], "v"], "the picker advertises both")
+check("copy is offered", "c+n copy" in body, body[-160:])
+check("and so is a new type from nothing", "n new" in body, body[-160:])
+
+body, text = with_type(["\x0e", F1["linux"], "v", "c", PAQP_KEY],
+                       "c then a number copies that type")
+check("the field picker opens", "SELECT FIELDS" in body, body[:200])
+# The title names the type by its NAME, not its label: the name is what the
+# saved definition will say it came from.
+check("and says what it was copied from", "from PAQP" in body, body[:200])
+check("copying writes nothing until it is saved", "[PAQP]" in text, text)
+
+# `c` and `d` are the same two-keystroke shape, so the pending flags have to
+# be exclusive: pressing one and then the other must do the second thing.
+body, text = with_type(["\x0e", F1["linux"], "v", "d", "c", PAQP_KEY],
+                       "d then c copies rather than deletes")
+check("the type survives", "[PAQP]" in text, text)
+check("and the field picker is what opened", "SELECT FIELDS" in body, body[:200])
+
+body, text = with_type(["\x0e", F1["linux"], "v", "c", "\x1b",
+                        "8", "v", PAQP_KEY],
+                       "c then Esc then a number selects")
+check("the type still exists", "[PAQP]" in text, text)
+check("and was selected rather than copied", "PAQP" in body, body[:200])
+
+body, text = with_type(["\x0e", F1["linux"], "v", "n"],
+                       "n starts a type from nothing")
+check("the field picker opens", "SELECT FIELDS" in body, body[:200])
+check("with nothing chosen", "0 of " in body, body[:200])
+check("and it does not claim to be copied from anything",
+      "from" not in body.splitlines()[0], body[:200])
+
+print("\nsaving a type over a name that is taken asks first")
+
+# `activities.save` replaces a section of that name on purpose -- saving twice
+# under one name is what revising a definition looks like -- but it did it
+# silently, so a name that collided destroyed the earlier type with no sign of
+# it.
+#
+# These assert OUTCOMES, in the file. The harness quits with Ctrl-Q, and the
+# confirmation treats every key but Enter as "no", so the last screen is never
+# the question. What the question SAYS is checked against render.confirm_screen
+# in test_log_screen.py.
+# Copy CONTEST, accept its fields and their order, and name it PAQP -- which
+# the fixture already has, with a label of its own to recognize it by.
+#
+# CONTEST and not the fixture's own KEEPME: KEEPME is `[KEEPME]` with a label
+# and nothing else, so it has no fields at all and copying it lands on the
+# refusal instead of the order screen. The letters of the name were then read
+# as row-toggle keys -- the `A` of PAQP turning on whatever row `a` happened
+# to be -- and the sequence ended three screens short of the question it was
+# written to ask.
+CONTEST_KEY = type_key("CONTEST")
+RENAME = ["v", "c", CONTEST_KEY, "\r", "\r"] + list("PAQP") + ["\r"]
+
+body, text = with_type(["\x0e", F1["linux"]] + RENAME,
+                       "the question alone replaces nothing")
+check("the old PAQP is still there", "Pennsylvania QSO Party" in text, text)
+
+body, text = with_type(["\x0e", F1["linux"]] + RENAME + ["\x1b"],
+                       "any other key keeps the old one")
+check("Esc keeps it", "Pennsylvania QSO Party" in text, text)
+check("and it was not written alongside itself",
+      text.count("[PAQP]") == 1, text)
+check("backing out returns to the name prompt, prefilled",
+      "Name for this activity" in body and "PAQP" in body, body[:200])
+
+body, text = with_type(["\x0e", F1["linux"]] + RENAME + ["\r"],
+                       "Enter replaces it")
+check("the old definition is gone",
+      "Pennsylvania QSO Party" not in text, text)
+check("and left one section, not two", text.count("[PAQP]") == 1, text)
+check("the type beside it is untouched",
+      "[KEEPME]" in text and "Not this one" in text, text)
+
+# A built-in has no section in the file, so nothing of the operator's is lost
+# -- but the name stops meaning what it means everywhere else on the deck.
+BUILTIN_NAME = ["v", "c", CONTEST_KEY, "\r", "\r"] + list("POTA") + ["\r"]
+
+body, text = with_type(["\x0e", F1["linux"]] + BUILTIN_NAME + ["\x1b"],
+                       "shadowing a built-in asks too")
+check("nothing is written until it is answered", "[POTA]" not in text, text)
+
+body, text = with_type(["\x0e", F1["linux"]] + BUILTIN_NAME + ["\r"],
+                       "Enter writes over the built-in")
+check("the operator's POTA is now in the file", "[POTA]" in text, text)
+
+# GENERAL is refused outright rather than confirmed: it is the fallback every
+# other type is resolved against, so there is no version of replacing it that
+# leaves the deck able to log.
+GENERAL_NAME = ["v", "c", CONTEST_KEY, "\r", "\r"] + list("GENERAL") + ["\r"]
+body, text = with_type(["\x0e", F1["linux"]] + GENERAL_NAME,
+                       "GENERAL cannot be taken")
+check("nothing is written", "[GENERAL]" not in text, text)
+check("and the refusal is on the screen, not only in the transcript",
+      "GENERAL is the built-in" in body, body[:400])
+
+print("\nnaming a new activity asks which type it uses")
+
+body, left = with_activity(["\x0e", F2["linux"], "n", "F", "D", "\r"],
+                           "name an activity, then the type picker")
+check("the type picker comes up next", "ACTIVITY TYPE" in body, body[:200])
+check("with the create paths on it", "n new" in body, body[-160:])
+
+# Esc out of the picker must not land back on the activities list: that list
+# is the screen the operator has already finished with.
+body, left = with_activity(["\x0e", F2["linux"], "n", "F", "D", "\r",
+                            "\x1b", "\x1b"],
+                           "Esc out of the picker")
+check("it backs out onto the log screen, not the activities list",
+      "ACTIVITIES" not in body, body[:200])
 
 print("\nEsc returns to the conversation")
 body, _ = deck(["\x0e", "\x1b"], "LOGGING = yes\n", label="Ctrl-N then Esc")

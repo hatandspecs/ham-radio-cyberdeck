@@ -42,8 +42,45 @@ equals("in ENTRY_FIELDS order, so the panel and the docs agree",
        names, list(activities.ENTRY_FIELDS))
 check("the two reports lead, because nearly every activity wants them",
       names[:2] == ["rst_s", "rst_r"], str(names[:2]))
-check("and the fields a particular event asks for come last",
-      names[-1] == "precedence", str(names[-3:]))
+
+# Page one of the selection screen is QRZ's own QSO record. The fields QRZ
+# matches a contact on -- the callsigns, the time, the band, the mode -- are
+# stored on every contact and are not selectable, so what is left of that
+# record is the report, the worked station, this station's side and the QSL
+# route. An operator who chooses from page one alone uploads a complete log.
+#
+# Asserted as a list rather than a set: the page is derived from position in
+# ENTRY_FIELDS, so an insertion in the wrong place silently pushes the last
+# of these onto page two where it will not be found.
+import render as _render
+# Six of what QRZ's panel asks for are filled in rather than chosen -- the
+# callsign, date, UTC time, band, frequency and mode are on every contact and
+# are not selectable at all -- so this is the rest of it, with the worked
+# station's details around them. `my_park` is absent on purpose: it is the
+# same on every contact of an activation, so it is asked once for the activity
+# rather than being a column that repeats itself down the file.
+QRZ_PAGE = ["rst_s", "rst_r", "name", "qth", "state", "grid", "county",
+            "country", "park", "comment", "tx_power", "my_rig", "my_antenna",
+            "qsl_via"]
+equals("page one is QRZ's QSO record", names[:_render.FIELDS_PER_PAGE],
+       QRZ_PAGE)
+equals("and it fills the page exactly", len(QRZ_PAGE),
+       _render.FIELDS_PER_PAGE)
+check("every row of that page has a key printed beside it",
+      _render.FIELDS_PER_PAGE <= len(activities.PICK_KEYS),
+      f"{_render.FIELDS_PER_PAGE} rows, {len(activities.PICK_KEYS)} keys")
+
+# What is left is the contest exchange and the program references: the whole
+# point inside one event, and noise outside it.
+# Anything strictly contest-related, and anything outside general and POTA
+# logging, goes here.
+equals("page two is the exchange, the zones and the other programs",
+       names[_render.FIELDS_PER_PAGE:],
+       ["serial_rx", "exchange_rx", "check", "precedence", "power_rx",
+        "cq_zone", "itu_zone", "iota", "sota", "wwff", "sat_name",
+        "prop_mode", "age", "freq_rx"])
+check("this station's own reference is not a per-contact field",
+      "my_park" not in names, str(names))
 check("each has a label and a kind",
       all(l and k for _f, l, k in activities.field_choices()),
       str(activities.field_choices()))

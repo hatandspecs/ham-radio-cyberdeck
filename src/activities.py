@@ -53,29 +53,93 @@ TEXT, NUMBER, REPORT, REF = "text", "number", "report", "ref"
 # Each one has an ADIF home in qsolog._ADIF_FIELDS. A field with nowhere to go
 # in an export is a field that quietly does not survive the log, so adding one
 # here means adding it there.
+# The order here is the order of the selection screen, which pages at
+# `render.FIELDS_PER_PAGE`.
+#
+# Page one is QRZ's own QSO record. The four fields QRZ matches a contact on --
+# the two callsigns, the time, the band and the mode -- are stored on every
+# contact and are not selectable, so what is left of that record is the report,
+# the worked station's details, this station's side and the QSL route. A log
+# kept on page one alone uploads complete.
+#
+# Page two is the contest exchange and the program references: fields that are
+# the whole point inside one event and noise outside it.
+# The order here is the order of the selection screen, which pages at
+# `render.FIELDS_PER_PAGE`.
+#
+# Page one is what QRZ's own logbook asks for. Half of what that panel wants is
+# filled in rather than chosen -- the callsign, the date, the UTC time, the
+# band, the frequency and the mode are on every contact this deck writes and
+# are not selectable at all -- so page one is the rest of it with the worked
+# station's details around them. An operator who never leaves page one uploads
+# a complete log.
+#
+# Page two is the contest exchange, the zones and the program references:
+# fields that are the whole point inside one event and noise outside it.
+#
+# `my_park` is deliberately not here. It is this station's own reference, the
+# same on every contact of an activation, so it is a station setting on the
+# logging menu rather than a column that would repeat itself down the file.
 ENTRY_FIELDS = {
+    # --- page one: QRZ's entry panel --------------------------------------
     "rst_s":       (REPORT, "Sent"),
     "rst_r":       (REPORT, "Rcvd"),
-    "serial_rx":   (NUMBER, "Nr"),
-    "exchange_rx": (TEXT,   "Exch"),
-    "park":        (REF,    "Ref"),
+    # The worked station. The callbook fills name, qth and grid when there is
+    # a network; the rest are typed or read off their page.
     "name":        (TEXT,   "Name"),
     "qth":         (TEXT,   "QTH"),
-    # Their grid. The callbook fills it when there is a network, and VHF
-    # contests exchange it on the air.
-    "grid":        (TEXT,   "Grid"),
-    # State and county. A state QSO party is scored by county, so for the
-    # Pennsylvania QSO Party this is the exchange rather than a detail.
+    # State and county. Also the exchange in a state QSO party, which is
+    # scored by county -- there they are the contact rather than a detail.
     "state":       (TEXT,   "State"),
+    "grid":        (TEXT,   "Grid"),
     "county":      (TEXT,   "County"),
-    # CQ zone, exchanged in the CQ contests alongside the report.
-    "cq_zone":     (NUMBER, "CQ zn"),
-    # Their power, exchanged in QRP events.
-    "power_rx":    (NUMBER, "Their W"),
+    "country":     (TEXT,   "Country"),
+    # THEIR park, which is what makes a contact a park-to-park: it exports as
+    # SIG/SIG_INFO and POTA_REF, against this station's MY_ forms. See the
+    # note over the POTA block in `qsolog.adif_record`.
+    "park":        (REF,    "Ref"),
+    # A note on this contact. Recorded on every contact for as long as there
+    # has been a log -- everything after a semicolon on the old one-line entry
+    # went here -- but the form that replaced that line had nowhere to type
+    # one, because this was not a field an activity could ask for.
+    "comment":     (TEXT,   "Comment"),
+    # This station's own side. Filled in, not typed: power from a CAT reading
+    # with the configured wattage behind it, rig and antenna from the Station
+    # menu. All three are recorded either way; listing them here puts them ON
+    # THE FORM, which is a different thing -- the operator can see what is
+    # about to be logged and correct it, which matters on the day the antenna
+    # is not the one the configuration still names. Each behaves like the
+    # frequency and mode fields: prefilled, refreshed, and frozen the moment
+    # it is edited.
+    "tx_power":    (NUMBER, "My W"),
+    "my_rig":      (TEXT,   "My rig"),
+    "my_antenna":  (TEXT,   "My ant"),
+    # The QSL route. One of the four categories QRZ builds a QSO record from,
+    # and the last row of page one.
+    "qsl_via":     (TEXT,   "QSL via"),
+
+    # --- page two: the exchange, the zones, and the programs ---------------
+    "serial_rx":   (NUMBER, "Nr"),
+    "exchange_rx": (TEXT,   "Exch"),
     # ARRL Sweepstakes exchanges a check (the year first licensed) and a
     # precedence alongside the serial and the section. Both or neither.
     "check":       (NUMBER, "Check"),
     "precedence":  (TEXT,   "Prec"),
+    # Their power, exchanged in QRP events.
+    "power_rx":    (NUMBER, "Their W"),
+    # Zones and islands: carried for awards, and exchanged on the air in the
+    # CQ contests alongside the report.
+    "cq_zone":     (NUMBER, "CQ zn"),
+    "itu_zone":    (NUMBER, "ITU zn"),
+    "iota":        (TEXT,   "IOTA"),
+    "sota":        (REF,    "SOTA"),
+    "wwff":        (REF,    "WWFF"),
+    "sat_name":    (TEXT,   "Sat"),
+    "prop_mode":   (TEXT,   "Prop"),
+    "age":         (NUMBER, "Age"),
+    # Split operation: the frequency they were transmitting on, when it is
+    # not the one this station is listening on.
+    "freq_rx":     (TEXT,   "Their f"),
 }
 
 # The keys that jump to a row on the selection screen, in row order. Digits
@@ -118,6 +182,20 @@ FIELD_HELP = {
     "power_rx": "their power in watts",
     "check": "their check — ARRL Sweepstakes",
     "precedence": "their precedence — ARRL SS",
+    "comment": "a note on this contact",
+    "tx_power": "your power in watts, from the radio",
+    "my_rig": "your rig, from the Station menu",
+    "my_antenna": "your antenna, from the Station menu",
+    "itu_zone": "their ITU zone",
+    "country": "their country or entity",
+    "iota": "their IOTA reference",
+    "sota": "their summit reference",
+    "wwff": "their WWFF reference",
+    "sat_name": "satellite worked",
+    "prop_mode": "propagation — SAT, EME, MS",
+    "age": "their age, some contests",
+    "qsl_via": "QSL manager or route",
+    "freq_rx": "their frequency, split operation",
 }
 
 

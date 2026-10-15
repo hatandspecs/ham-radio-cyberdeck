@@ -58,8 +58,23 @@ STATION = (
     ("exchange_tx", "My exch", True),
 )
 
-# Prefilled from the radio and refreshed until touched.
-RADIO = ("freq", "mode")
+# Prefilled from the radio and refreshed until touched. `tx_power` is here
+# only when an activity asks for it: the wattage is recorded on every contact
+# regardless, read from CAT at commit, and putting it ON THE FORM is a
+# different thing -- it lets the operator see what is about to be logged and
+# correct it when the radio cannot be read.
+RADIO = ("freq", "mode", "tx_power")
+
+# From the Station menu rather than from the radio, and otherwise the same:
+# written in until the operator edits one, and then left alone. Together with
+# RADIO these are the fields nobody types. `Field.from_radio` is what marks a
+# field as one of them -- the name is older than the station settings.
+#
+# Not `STATION`: that is taken, by the sticky own-side fields above. These two
+# are per-contact fields an activity can ask for, which happen to be filled
+# from the configuration rather than typed.
+FROM_CONFIG = ("my_rig", "my_antenna")
+PREFILLED = RADIO + FROM_CONFIG
 
 # Filled from a callbook answer about the station being worked. They belong to
 # that callsign and to no other, so changing the callsign drops them -- see
@@ -122,9 +137,12 @@ class LogForm:
         act = self.activity_type
         order = [Field(*CALL)]
 
-        # 1. Typed for this contact, in the activity's own order.
+        # 1. Typed for this contact, in the activity's own order. One of them
+        # is not typed at all: tx_power comes from the radio, and is marked so
+        # it prefills and stops tracking the moment it is corrected.
         for name in act.entry:
-            order.append(Field(name, act.label_for(name)))
+            order.append(Field(name, act.label_for(name),
+                               from_radio=(name in PREFILLED)))
         order.append(Field(*COMMENT))
 
         # 2. This station's side, starting with the serial being sent. It is
@@ -317,7 +335,23 @@ class LogForm:
 
     # -- the radio --------------------------------------------------------
 
-    def from_radio(self, freq="", mode=""):
+    def from_station(self, rig="", antenna=""):
+        """Refresh the fields that come from the Station menu.
+
+        Separate from `from_radio` because the source is different and so is
+        the failure: a radio that cannot be read leaves the power blank, an
+        unset Station menu leaves these blank, and those are fixed in two
+        different places. Skipping a touched field is the same rule -- a
+        corrected antenna has to survive the next poll.
+        """
+        for name, value in (("my_rig", rig), ("my_antenna", antenna)):
+            f = self.field(name)
+            if f is not None and not f.touched and value:
+                f.value = str(value)
+                f.prefill = f.value
+                self._wrote(f)
+
+    def from_radio(self, freq="", mode="", power=""):
         """Refresh the radio-sourced fields, skipping any the operator edited.
 
         Called on whatever poll the interface was already doing. Silently does
@@ -328,7 +362,8 @@ class LogForm:
         left them blank would make the commonest contact — call, 59, 59 — more
         typing than before rather than less.
         """
-        for name, value in (("freq", freq), ("mode", mode)):
+        for name, value in (("freq", freq), ("mode", mode),
+                            ("tx_power", power)):
             f = self.field(name)
             if f is not None and not f.touched and value:
                 f.value = str(value)

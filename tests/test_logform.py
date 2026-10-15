@@ -367,12 +367,23 @@ for name in activities.ENTRY_FIELDS:
     if name != "park":
         check(f"{name}: survives an export", name in _mapped, name)
 
-print("\nthe row keys reach every field")
+print("\nthe row keys reach every field on a page")
+# The keys address a row on the CURRENT page, not a position in the whole
+# list, so the invariant is one key per row of a page -- not one per field.
+# The list outgrew both the screen and the keys; pretending otherwise is how
+# a row only the arrows can reach gets shipped, and a row most operators
+# never find is a row that may as well not be selectable.
+import render as _render
 check("there are more fields than digits",
       len(activities.ENTRY_FIELDS) > 9, str(len(activities.ENTRY_FIELDS)))
-check("and a key for every one of them",
-      all(activities.pick_key(i) for i in range(len(activities.ENTRY_FIELDS))))
-keys = [activities.pick_key(i) for i in range(len(activities.ENTRY_FIELDS))]
+check("and more fields than fit on one page",
+      len(activities.ENTRY_FIELDS) > _render.FIELDS_PER_PAGE,
+      f"{len(activities.ENTRY_FIELDS)} in {_render.FIELDS_PER_PAGE}")
+check("a key for every row of a page",
+      all(activities.pick_key(i)
+          for i in range(_render.FIELDS_PER_PAGE)),
+      str(_render.FIELDS_PER_PAGE))
+keys = [activities.pick_key(i) for i in range(_render.FIELDS_PER_PAGE)]
 equals("no key is used twice", len(set(keys)), len(keys))
 for i, k in enumerate(keys):
     equals(f"{k!r} selects row {i}", activities.pick_index(ord(k)), i)

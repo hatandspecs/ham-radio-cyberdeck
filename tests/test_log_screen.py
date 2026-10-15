@@ -247,6 +247,28 @@ one = "\n".join(plain(l) for l in render.confirm_screen(
                         "deleted."], 66, 12))
 check("one contact is singular", "1 contact will" in one, one)
 
+# Not every question is a deletion, so the footer has to be able to say
+# something other than "Enter delete". Saving a type over a name that is
+# already taken is the other one: `activities.save` replaces that section on
+# purpose -- revising a definition is what saving twice under one name means
+# -- but it did it silently, so the earlier type went with no sign of it.
+rep = [plain(l) for l in render.confirm_screen(
+    "REPLACE ACTIVITY TYPE",
+    ["PAQP", "", "A type named PAQP is already in activities.conf.",
+     "Saving replaces it. Contacts already logged are", "not touched."],
+    66, 12, footer="Enter replace   any other key picks a new name")]
+flat = "\n".join(rep)
+check("titled by what it will do", "REPLACE ACTIVITY TYPE" in rep[0], rep[0])
+check("it names the type", "PAQP" in flat, flat)
+check("it says the contacts are safe", "not touched" in flat, flat)
+check("Enter is the one key that replaces", "Enter replace" in rep[-1], rep[-1])
+check("and the footer no longer claims to delete",
+      "delete" not in rep[-1], rep[-1])
+check("every other key leads back to the name prompt",
+      "picks a new name" in rep[-1], rep[-1])
+for row in rep:
+    equals("every row of the replace question is padded", len(row), 66)
+
 print("\nactivities, listed to be resumed or deleted")
 ROWS = [{"name": "Bald Eagle SP", "date": "2026-10-11", "contacts": 12,
          "path": "/x/Bald-Eagle-SP_2026-10-11.log"},

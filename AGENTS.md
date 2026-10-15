@@ -18,6 +18,25 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 
 ## Things that cost a lot to rediscover
 
+- **Run the laptop test rig in foot: `./deck --foot`.** That is what the
+  sessions that worked used. The rig is the real `src/cyberdeck.py` in a pty at
+  the panel's 66x20, with a pretend fldigi and rigctld behind it, and nothing it
+  writes touches the real log, saved state or `activities.conf`. The terminal
+  matters: `--foot` sets `Terminus:style=Bold:pixelsize=24`, which is not an
+  approximation but the deck's own font — the panel runs
+  `Uni3-TerminusBold24x12`, Terminus Bold 24px on a 12x24 cell, and 66x20 of
+  those is 792x480, the panel's resolution. `pad=0x0` removes the border. Run
+  in the editor's own terminal instead and the window is whatever size that pane
+  is, in a desktop font, so glyph width and layout are both wrong — which is the
+  only thing the rig is for. An earlier attempt in a small, glitchy window was
+  unreadable and the glitching turned out to be `os.write` short writes.
+- **`./deck --console` prints instructions and MUST NOT launch a console.** It
+  once ran `sudo openvt -s -w -- runuser -u "$USER" -- ...`, which killed the
+  graphical session, VS Code and the agent session with it: `runuser` opens a PAM
+  session and `pam_systemd` registering a logind session on a VT while a
+  graphical seat is active takes down the seat. That is the second console this
+  project has lost to a program claiming a tty it did not own. A real console is
+  still the best place to judge glyphs — log into one by hand, Ctrl+Alt+F3.
 - **Do not write signal processing.** fldigi does all of it; this program is a
   terminal that drives fldigi over XML-RPC on the loopback interface. A better
   PSK31 demodulator is not the project.
@@ -35,6 +54,49 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   restarted deck comes back on that carrier`). Re-run that file on its own
   before believing it: they pass in isolation. Never run two test files at
   once, for the same reason — they share the modem and the carrier.
+- **A field can be stored, exported, and still invisible.** A log field needs
+  an entry in THREE places: `activities.ENTRY_FIELDS` to be selectable,
+  `qsolog._FIELD_ORDER` to be written to the line, and `qsolog._ADIF_FIELDS` to
+  survive an export. `comment`, `my_rig` and `my_antenna` had the last two for
+  months and not the first, so every contact carried them and no activity could
+  put them on the form. `field_choices()` derives from `ENTRY_FIELDS`; it used
+  to keep its own copy, and seven fields added to one were selectable nowhere.
+- **`ENTRY_FIELDS` order IS the selection screen, and it pages.** 28 fields,
+  `render.FIELDS_PER_PAGE` = 14, two pages. Page one is general and POTA
+  logging — which is also QRZ's own QSO record, minus the six fields QRZ wants
+  that the deck fills in and never offers (call, date, UTC, band, frequency,
+  mode). Page two is the contest exchange, the zones and the non-POTA programs.
+  Inserting a field in the middle silently pushes the last of page one onto page
+  two, where nobody will find it, so `tests/test_activities.py` asserts both
+  pages as ordered lists.
+- **Never hardcode a row key or a picker number in a test.** Both move when
+  `ENTRY_FIELDS` is reordered or a type is added. `type_key()` and
+  `field_keys()` in `tests/test_log_panel.py` derive them. Hardcoding `"2"` once
+  deleted the wrong activity type and the test passed; hardcoding `"6"` for
+  `name` later toggled `grid`. The keys are per-PAGE positions, not positions in
+  the whole list.
+- **`session.note` is invisible on the full-screen pickers.** SELECT FIELDS,
+  ORDER FIELDS, the activities list and a confirmation all cover the transcript,
+  so a refusal written only with `note()` reads as a key that did nothing. Those
+  screens take a `message` / `footer`; use it as well. This bit the
+  "choose at least one field" refusal, which an activity type started from
+  scratch hits on its very first Enter.
+- **This station's own reference is asked once per activity, not per contact.**
+  `my_park` is a sticky own-side field, not in `ENTRY_FIELDS`. Naming a new
+  activity CLEARS it and the type picker that follows asks for it again when the
+  type has a `park` field — carrying last week's park onto today's contacts
+  without saying so is worse than a question. Their park (`park`, exported as
+  `SIG`/`SIG_INFO`/`POTA_REF`) and this station's (`my_park`, the `MY_` forms)
+  are separate fields because a park-to-park carries both.
+- **Saving an activity type over a name that exists asks first.**
+  `activities.save` replaces that section on purpose — revising a definition is
+  what saving twice under one name means — but it did it silently, so a
+  collision destroyed the earlier type with no sign of it.
+- **F4 cycles the color scheme from every screen**, handled before the menu and
+  screen dispatch in `handle()` and after the editor. It was bound once, on the
+  fallthrough below the screen handlers, so it worked on the conversation and
+  was a dead key everywhere else. Only a confirmation and the no-keyboard notice
+  keep it out, because on those a keystroke already means something.
 - **Card-durability settings live in two places and neither is obvious.**
   `rootflags=data=journal` has to be on the kernel command line, because `data=`
   cannot be changed by the remount `fstab` drives. The swap writeback file is
@@ -219,6 +281,34 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   explicit `<br/>` so every box comes out the same height — mermaid's own
   wrapping leaves them ragged.
 
+- **Never have a program claim a tty it does not own.** This has cost a
+  working session twice. On the deck, advice to stop the unit owning tty1 and
+  run something else there left no way to type. On the laptop,
+  `sudo openvt -s -w -- runuser -u "$USER" -- ...` in `./deck --console` killed
+  the graphical session outright, VS Code and the editor's Claude Code session
+  with it: `runuser` opens a PAM session, and pam_systemd registering a new
+  logind session on a VT while a graphical seat is active tears the seat down.
+  `openvt` taking "the first free VT" is not the safe-sounding thing it looks
+  like.
+
+  The supported way to get a real console is to log into one by hand --
+  Ctrl+Alt+F3, then run the program -- which is a session of its own rather
+  than one grafted onto an active seat. `./deck --console` prints those steps
+  and deliberately does nothing else. **Do not teach it to launch one.**
+
+- **A laptop terminal cannot show you a font fault.** `tools/deck_local.py`
+  pins the pseudo-terminal to the panel's 66x20 and audits every glyph the
+  program drew against the set the console font actually has, because a
+  desktop terminal renders all of Unicode and a missing glyph is invisible
+  from there. A real console (above) is the only place the fault shows itself.
+
+- **Key bytes differ between the host terminal and the child's TERM.** The rig
+  runs the child as `TERM=linux`; an xterm sends `ESC O P` for F1 where `linux`
+  expects `ESC [ [ A`, and F6 upward happen to agree -- so the failure looks
+  partial. `deck_local.key_translation` reads both terminfo entries with
+  `infocmp` and rewrites the 12 sequences that differ. Read the capabilities;
+  never hard-code them.
+
 - **The console font has no emoji.** Only glyphs already proven on the shipped
   panel are safe: `█ · ✓ ▸ ✗ ↑↓` and box drawing. Anything else renders as a
   blank or a replacement box, and you will not see it from here.
@@ -235,8 +325,8 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 
 ## Where it stands
 
-1518 checks across 24 files, all passing as of 2026-10-11 on the `logger`
-branch. Run them serially and do not edit `src/` or `tests/` while a run is in
+1743 checks across 24 files, all passing as of 2026-10-14 on the `logger`
+branch — a clean serial run, every file green. Run them serially and do not edit `src/` or `tests/` while a run is in
 flight: three successive runs during that session each reported a different
 single failure, because what executed was not what was on disk. A clean serial
 run had no flakes. The deck has worked real DX on PSK31 and RTTY. A DS3231 real-time
@@ -246,8 +336,16 @@ screen joins networks from the panel.
 A general-purpose QSO logger is on the local branch `logger` (2026-10-11),
 uncommitted, and **reachable from the panel**: Ctrl-N opens a tabbed entry
 form, Tab moves between fields, Enter logs, Esc returns. F1 on that screen
-opens the logging menu — activity, dupe rule, ADIF export, and building an
-activity by copying one, choosing its fields, ordering them and naming it.
+opens the logging menu — activity, dupe rule, ADIF export — and F2 the
+activities list.
+
+An ACTIVITY is a named operating session with its own dated log file; an
+ACTIVITY TYPE is the template of fields it uses. Creating a type happens on the
+TYPE PICKER (`F1` → `v`), not on a menu line: `c` + number copies that type,
+`n` starts one with no fields, `d` + number deletes one, and the picker has ONE
+exit — it closes to the log screen however it was reached. Naming a new
+activity leads straight into that picker, so the whole flow is name → type →
+reference → log.
 `tests/test_log_panel.py` drives the real application through a pty under
 TERM=linux as well as xterm and checks a contact reaches the disk. The pure
 cores are `src/qsolog.py`, `src/activities.py`, `src/logform.py`,
@@ -261,6 +359,29 @@ being tested is full of contacts that must not reach a permanent record. This
 is pinned in `tests/test_menus.py` as a property of the source — no `qrzlog`
 import in `cyberdeck.py`, no `upload(` call, no QRZ menu item — because a
 comment does not fail when somebody wires a key to an uploader.
+
+**Open design decision, not yet built: three first-class areas.** Settings,
+logging and digimodes as peers on a ring, cycled with **Ctrl-B / Ctrl-F**
+(settings → log → digimodes, wrapping). Arrow keys were ruled out by terminfo,
+which is the whole point of recording it: `infocmp linux` has NO modified
+cursor-key entries, and `xterm-256color` defines only the SHIFT forms
+(`kLFT=\E[1;2D`). So Alt+arrow arrives on the framebuffer console as Esc
+followed by KEY_LEFT — and Esc is load-bearing on every screen — while
+Shift+arrow works in the laptop rig and is a dead key on the deck. Control
+characters are 7-bit and identical everywhere; free ones are Ctrl-B, E, F, G,
+K, O, P, V (Ctrl-Z is not free: linux terminfo maps `kspd=^Z`).
+
+The agreed F-key map, with F1 the menu and F4 the color cycle on every screen:
+
+| | F1 | F2 | F3 | F4 | F5–F12 |
+|---|---|---|---|---|---|
+| Settings | menu | Station | Band / rig | color | — |
+| Logging | menu | Activities | Activity type | color | — |
+| Digimodes | menu | Tuner | Mode selector | color | Memories |
+
+F2 and F3 are always that area's two main sub-views. F5–F12 are to be scoped to
+digimodes: they are global today, so F7 on the log screen inserts a transmit
+macro into a log field.
 
 `docs/qso_log_design.md` carries the design and the open decisions.
 **`docs/logger_branch_deploy.md` carries the deploy sequence and the recovery

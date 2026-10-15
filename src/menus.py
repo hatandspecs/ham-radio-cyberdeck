@@ -181,17 +181,23 @@ def activity_type_menu(names, current="", labels=None):
     return {
         "title": "ACTIVITY TYPE",
         "items": items,
-        # `d` then a number deletes one, and then asks: two keystrokes and
-        # a confirmation, because a type an operator spent a contest getting
-        # right should not go on one.
-        "footer": "Esc back   Enter select   d+number deletes   * in use",
+        # Three things can start here: select a type, copy one into a new type,
+        # or begin a new type with nothing in it. Creating a type belongs here
+        # rather than on the logging menu, where it asked the operator to
+        # decide to create one before seeing what already exists.
+        #
+        # `c` and `d` each take a number after them. Two keystrokes and, for
+        # the delete, a confirmation as well -- a type an operator spent a
+        # contest getting right should not go on one.
+        "footer": ("Esc back  Enter select  c+n copy  n new  "
+                   "d+n delete  * in use"),
     }
 
 
 def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
              qrz_pending=0, operating="auto", has_tqsl=False,
              activity="", dupe="band+mode", log_name="",
-             activity_type=""):
+             activity_type="", callbook_state=""):
     # has_qrz_key and qrz_pending are accepted and ignored. They fed the
     # removed QRZ upload item; the parameters stay so that a caller passing
     # them is not a TypeError, and so that reinstating an upload item is a
@@ -241,7 +247,12 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         ("a", "Export ADIF"),
         ("m", f"Mode from                    {_OPERATING_LABEL.get(operating, operating)}"),
         ("d", f"Duplicates                   {_DUPE_LABEL(dupe)}"),
-        ("c", f"Callbook lookup              {'on' if lookup else 'off'}"),
+        # Three words from two settings: "off" is a decision, "no wifi" is a
+        # condition the operator can fix, "on" is working. Showing "off" for a
+        # station with no association made a missing network look like a
+        # switched-off feature.
+        ("c", f"Callbook lookup              "
+              f"{callbook_state or ('on' if lookup else 'off')}"),
         # Two lines, because these are two things. The ACTIVITY is the
         # session being logged -- this park, this contest weekend -- and it
         # carries the operator's name for it and a log file of its own. The
@@ -253,12 +264,12 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # weekends of the same QSO party share one serial sequence.
         ("e", f"Activity                     "
               f"{activity or 'casual logging'}"),
+        # Creating a type is not a line here. It belongs on the picker that
+        # lists them, where the operator is already looking at what exists and
+        # can see what is worth copying -- a separate menu item asked them to
+        # decide to create one before seeing the alternatives.
         ("v", f"  Activity type              "
               f"{activity_type or 'general logging'}"),
-        # Copy, change, name, save. Copying rather than starting blank
-        # because every type an operator wants is a small change to one
-        # that already exists.
-        ("n", "    New type, copied from this one"),
     ]
     if needs_reference(activity_type):
         # Only when the selected activity has a reference field. Otherwise

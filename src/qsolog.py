@@ -755,11 +755,16 @@ def make_record(parsed, when, freq_hz=None, mode="", my_call="", my_grid="",
     # come from the station settings; power prefers an actual CAT reading and
     # falls back to the configured wattage, because what was logged should be
     # what the radio was doing rather than what the configuration hoped.
-    if my_rig:
+    # Only when the entry did not already say. An activity can put any of
+    # these three on the form, and then the operator has seen the value and
+    # may have corrected it -- the antenna that is actually up today rather
+    # than the one the configuration still names. Overwriting here would log
+    # the configuration and discard what was on the screen.
+    if my_rig and not rec.get("my_rig"):
         rec["my_rig"] = str(my_rig)
-    if my_antenna:
+    if my_antenna and not rec.get("my_antenna"):
         rec["my_antenna"] = str(my_antenna)
-    if tx_power:
+    if tx_power and not rec.get("tx_power"):
         # NOT int(). This radio goes to 0.5 W, and int() would log every
         # sub-watt QRP contact as 0 and drop the field entirely. ADIF's
         # TX_PWR is a Number, so a fraction is valid; the integer form is
@@ -821,6 +826,10 @@ def activity_of(rec):
 _FIELD_ORDER = ("when", "call", "freq", "band", "mode",
                 "rst_s", "rst_r", "serial_rx", "exchange_rx",
                 "park", "name", "qth", "grid",
+                "state", "county", "country", "cq_zone", "itu_zone",
+                "iota", "sota", "wwff", "sat_name", "prop_mode",
+                "age", "qsl_via", "freq_rx", "power_rx",
+                "check", "precedence",
                 "my_call", "my_grid", "my_park",
                 "serial_tx", "exchange_tx", "activity", "activity_type",
                 "contest_id",
@@ -904,6 +913,18 @@ _ADIF_FIELDS = (
     ("power_rx", "RX_PWR"),
     ("check", "CHECK"),
     ("precedence", "PRECEDENCE"),
+    ("itu_zone", "ITUZ"),
+    ("country", "COUNTRY"),
+    ("iota", "IOTA"),
+    ("sota", "SOTA_REF"),
+    ("wwff", "WWFF_REF"),
+    ("sat_name", "SAT_NAME"),
+    ("prop_mode", "PROP_MODE"),
+    ("age", "AGE"),
+    ("qsl_via", "QSL_VIA"),
+    # Split operation. ADIF keeps the two frequencies apart, and FREQ_RX is
+    # theirs; `freq` stays this station's.
+    ("freq_rx", "FREQ_RX"),
     ("comment", "COMMENT"),
     ("my_call", "STATION_CALLSIGN"),
     ("my_grid", "MY_GRIDSQUARE"),

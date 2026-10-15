@@ -106,9 +106,10 @@ class Deck:
         self.acts_sel = 0
         self.acts_message = ""
         self.confirm = None
-        # Set by `d` on the activity-type picker: the next number typed names
-        # the type to delete rather than the one to select.
+        # Set by `d` or `c` on the activity-type picker: the next number typed
+        # names the type to delete, or to copy, rather than the one to select.
         self._pending_type_delete = False
+        self._pending_type_copy = False
         # How far back the contact list is scrolled, in rows, counted from
         # the newest. Separate from `scroll`: the two screens are scrolled
         # independently and leaving one scrolled must not move the other.
@@ -846,7 +847,9 @@ class Deck:
         if self._rig is None:
             try:
                 import rigctld_client
-                self._rig = rigctld_client.Rigctld()
+                self._rig = rigctld_client.Rigctld(
+                    host=self.cfg.get("RIGCTLD_HOST", "127.0.0.1"),
+                    port=self.cfg.get("RIGCTLD_PORT", 4532))
             except Exception:
                 return None
         return self._rig
@@ -932,7 +935,10 @@ class Deck:
                   "log_name": self._log_name(),
                   "clock": time.strftime("%H%MZ", time.gmtime())}
         if form is not None:
-            form.from_radio(freq=self._log_freq_mhz(), mode=self._log_mode())
+            form.from_radio(freq=self._log_freq_mhz(), mode=self._log_mode(),
+                            power=self._power_watts())
+            form.from_station(rig=self.cfg.get("RIG", ""),
+                              antenna=self.cfg.get("ANTENNA", ""))
             # The activity is what the operator is doing and goes first; the
             # type is what the fields on screen mean and follows it. With one
             # setting there was only ever one of them to show.
@@ -951,6 +957,7 @@ class Deck:
         # knowing is to decide whether to work them, and by commit that has
         # been decided. It never blocks the contact — a duplicate is logged
         # deliberately often enough that refusing would be wrong.
+        self._lookup_maybe(form)
         arrived = self._lookup_collect(form)
         if arrived:
             self.log_message = arrived
@@ -996,10 +1003,30 @@ class Deck:
         self.screen = FIELDS
         self._close_menu()
 
+    def _new_activity_type(self):
+        """Begin a type with no fields chosen.
+
+        Worth having alongside the copy, because an activity that shares
+        nothing with GENERAL or a contest reaches its field list faster from
+        empty than by pruning somebody else's. An empty `picker_from` is what
+        marks it as built from nothing, and keeps the saved label from
+        claiming descent from a type it was never copied from.
+        """
+        self.picker = activities.FieldPicker(())
+        self.picker_from = ""
+        self.picker_sel = 0
+        self.picker_message = ""
+        self.screen = FIELDS
+        self._close_menu()
+
     def _draw_fields(self, h, w):
         for i, line in enumerate(render.field_select_screen(
                 self.picker.rows(), self.picker_sel, w, h,
-                title=f"SELECT FIELDS — from {self.picker_from}")):
+                title=("SELECT FIELDS — from " + self.picker_from
+                       if self.picker_from else "SELECT FIELDS — new type"),
+                footer=(self.picker_message
+                        + "  ·  Space toggle  Enter order"
+                        if self.picker_message else ""))):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -1010,18 +1037,33 @@ class Deck:
         rows = self.picker.rows()
         if ch == 27:
             self.picker = None
-            self.screen = LOG
+            self.picker_message = ""
+            self.screen = LOG if self.log_on else CHAT
         elif ch == curses.KEY_UP:
             self.picker_sel = (self.picker_sel - 1) % len(rows)
         elif ch == curses.KEY_DOWN:
             self.picker_sel = (self.picker_sel + 1) % len(rows)
+        # A page at a time. The page follows the cursor, so this is just a
+        # bigger step rather than separate state.
+        elif ch in (curses.KEY_LEFT, curses.KEY_PPAGE):
+            self.picker_sel = max(0, self.picker_sel - render.FIELDS_PER_PAGE)
+        elif ch in (curses.KEY_RIGHT, curses.KEY_NPAGE):
+            self.picker_sel = min(len(rows) - 1,
+                                  self.picker_sel + render.FIELDS_PER_PAGE)
         elif ch in (32, 10, 13, curses.KEY_ENTER) and ch == 32:
+            self.picker_message = ""
             self.picker.toggle(rows[self.picker_sel][0])
         elif ch in (10, 13, curses.KEY_ENTER):
             if not self.picker.entry():
                 # An activity with no fields is a form with nothing but a
                 # callsign on it. Refusing here is kinder than letting it be
                 # saved and discovered mid-contact.
+                #
+                # On the screen, not only in the transcript: a type started
+                # from nothing begins with every field off, so this is the
+                # first thing Enter does, and a note the operator cannot see
+                # reads as a dead key.
+                self.picker_message = "choose at least one field"
                 self.session.note("choose at least one field")
                 return True
             self.picker_sel = 0
@@ -1031,9 +1073,14 @@ class Deck:
             # the list grew past nine, and a row only the arrows can get to
             # is a row most operators never find. The screen prints the key
             # beside each row, so the two cannot drift apart.
+            # The key names a row on the CURRENT page, not in the whole list.
             at = activities.pick_index(ch)
+            page = self.picker_sel // render.FIELDS_PER_PAGE
+            if at >= 0:
+                at += page * render.FIELDS_PER_PAGE
             if 0 <= at < len(rows):
                 self.picker_sel = at
+                self.picker_message = ""
                 self.picker.toggle(rows[at][0])
         return True
 
@@ -1076,19 +1123,80 @@ class Deck:
         return True
 
     def _save_activity(self, name):
-        """Write the built activity out, then select it."""
+        """Name the built type. Three things can stop the write.
+
+        Two are refusals -- no name, and the one reserved name -- and they
+        print on the ORDER screen as well as in the transcript. The transcript
+        is covered here, so a note on its own reads as an Enter that did
+        nothing, which is how the empty-field refusal used to read.
+
+        The third is a question rather than a refusal. `activities.save`
+        replaces a section of the same name on purpose, because saving twice
+        under one name is what revising a definition looks like -- but it did
+        it silently, so a name that collided destroyed the earlier type with
+        no sign of it. Asking keeps the revision path and loses the surprise.
+        """
         name = "".join(c for c in (name or "").strip().upper()
                        if c.isalnum() or c in "-_")
         if not name:
+            self.picker_message = "an activity type needs a name"
             self.session.note("an activity needs a name")
             return
         if name in ("GENERAL",):
+            self.picker_message = "GENERAL is the built-in — pick another name"
             self.session.note("GENERAL is the built-in; pick another name")
             return
+        if name in self._file_types():
+            # Their own definition, in the file. Replacing it is the common
+            # case and the one worth confirming: it is the only one where
+            # something an operator wrote goes away.
+            self._ask_confirm(
+                "REPLACE ACTIVITY TYPE",
+                [name, "",
+                 f"A type named {name} is already in activities.conf.",
+                 "Saving replaces it. Contacts already logged are",
+                 "not touched."],
+                lambda n=name: self._write_activity(n),
+                back=ORDER, footer="Enter replace   any other key picks "
+                                   "a new name",
+                cancel=lambda n=name: self._rename_activity_type(n))
+            return
+        if activities.is_builtin(name):
+            # A built-in with no section yet. Nothing of theirs is lost, but
+            # the name stops meaning what it means everywhere else on the
+            # deck, so it is still worth a keystroke.
+            self._ask_confirm(
+                "REPLACE BUILT-IN TYPE",
+                [name, "",
+                 f"{name} is built in. Saving puts your version in",
+                 "activities.conf, and it is used from then on.",
+                 "",
+                 f"Deleting yours later restores the built-in {name}."],
+                lambda n=name: self._write_activity(n),
+                back=ORDER, footer="Enter replace   any other key picks "
+                                   "a new name",
+                cancel=lambda n=name: self._rename_activity_type(n))
+            return
+        self._write_activity(name)
+
+    def _rename_activity_type(self, name):
+        """Back from "that name is taken" to the name prompt, prefilled.
+
+        Prefilled rather than empty: the operator is changing one name into
+        a near neighbor -- PAQP into PAQP-SSB -- and retyping it is work the
+        answer to the question already did.
+        """
+        self.screen = ORDER
+        self._open_editor(None, "Name for this activity",
+                          sink=self._save_activity, text=name)
+
+    def _write_activity(self, name):
+        """Write the built type out and select it. Past every check."""
         base = activities.get(self.picker_from, self._activity_table())
         text = activities.format_activity(
             name, self.picker.entry(),
-            label=f"{name} (from {base.label})",
+            label=(f"{name} (from {base.label})" if self.picker_from
+                   else name),
             sig=base.sig, contest_id=base.contest_id,
             serial=base.serial, serial_start=base.serial_start,
             labels={f: base.label_for(f) for f in self.picker.entry()
@@ -1097,12 +1205,61 @@ class Deck:
         try:
             path = activities.save(activities.config_path(), name, text)
         except OSError as exc:
+            self.picker_message = f"could not save: {exc}"
             self.session.note(f"could not save: {exc}")
+            self.screen = ORDER
             return
         self.picker = None
+        self.picker_message = ""
         self.session.note(f"saved {name} to {path}")
         self._set_activity_type(name)
-        self.screen = LOG
+        self.screen = LOG if self.log_on else CHAT
+
+    def _callbook_state(self):
+        """"off", "on" or "no wifi", for the menu and the status line."""
+        import callbook as cb
+        return cb.callbook_state(self.cfg.get("CALLBOOK"), self._online())
+
+    def _online(self):
+        """Whether there is a default route, cached for a few seconds.
+
+        Asked on every menu draw and every lookup decision. The read is a
+        handful of bytes out of /proc, but doing it five times a second for
+        the life of the process is still pointless.
+        """
+        now = time.monotonic()
+        if now - getattr(self, "_online_checked", 0.0) > 5.0:
+            import callbook as cb
+            self._online_cached = cb.online()
+            self._online_checked = now
+        return getattr(self, "_online_cached", False)
+
+    def _lookup_maybe(self, form):
+        """Look the callsign up once it has stopped changing.
+
+        The lookup used to fire from exactly one place: Tab out of the
+        callsign field. So the fast path -- type a call, press Enter -- never
+        looked anything up, and the feature appeared not to work at all. It
+        was working; nothing was asking it.
+
+        Asking on every keystroke is the other wrong answer: `W`, `W3`, `W3A`
+        are not callsigns, and sending three partial calls to a third party to
+        learn that is worse than waiting. So this waits for the field to go
+        quiet, which is what a human does anyway before reaching for the next
+        one.
+        """
+        if form is None or self.screen != LOG:
+            return
+        call = form.value("call").strip().upper()
+        if call != getattr(self, "_call_seen", None):
+            self._call_seen = call
+            self._call_still = time.monotonic()
+            return
+        if not call or call == self._looked_up:
+            return
+        if time.monotonic() - getattr(self, "_call_still", 0.0) < 0.8:
+            return
+        self._lookup_start(call)
 
     def _lookup_start(self, call):
         """Ask the callbooks about a callsign, off the interface thread.
@@ -1120,6 +1277,8 @@ class Deck:
         if self.log_form is not None and call != self._looked_up:
             self.log_form.forget_lookup()
         if self.cfg.get("CALLBOOK") != "yes":
+            return
+        if not self._online():
             return
         if not call or call == self._looked_up or not qsolog.is_callsign(call):
             return
@@ -1232,6 +1391,27 @@ class Deck:
                                      activity=self._activity_name())
         self._save_state()
         self.session.note(f"activity: {act.label}")
+        self._ask_my_park()
+
+    def _ask_my_park(self):
+        """Ask for this station's own reference, once, if the type wants one.
+
+        Typed once for the activity rather than once per contact: it is the
+        same park on every line of an activation, and it is already carried
+        across a type change for that reason. Asking here is what makes "once"
+        true -- it used to be a menu item an operator had to know to go and
+        find, so the alternative to typing it per contact was not typing it.
+
+        Only when it is not already known. The park is cleared when a new
+        activity is named, so a new activation always asks and a correction to
+        an activity already under way never does -- last week's reference
+        logged onto today's contacts is worse than a question.
+        """
+        if self.cfg.get("MY_PARK"):
+            return
+        if not menus.needs_reference(self.cfg.get("ACTIVITY_TYPE", "")):
+            return
+        self._open_editor("MY_PARK", "My reference", sink=self._set_my_park)
 
     def _set_my_park(self, value):
         self.cfg["MY_PARK"] = (value or "").strip().upper()
@@ -1368,7 +1548,8 @@ class Deck:
         else:
             self.session.note(f"{name} started — {where}")
 
-    def _ask_confirm(self, title, lines, action, back=None):
+    def _ask_confirm(self, title, lines, action, back=None, footer="",
+                     cancel=None):
         """Put a destructive action behind one deliberate keystroke.
 
         Enter does it; Esc and every other key keep things as they are. The
@@ -1383,13 +1564,15 @@ class Deck:
         # and unanswerable, which is exactly how "delete does nothing" looks.
         self._close_menu()
         self.confirm = {"title": title, "lines": list(lines),
-                        "action": action, "back": destination}
+                        "action": action, "back": destination,
+                        "footer": footer, "cancel": cancel}
         self.screen = CONFIRM
 
     def _draw_confirm(self, h, w):
         c = self.confirm or {}
         for i, line in enumerate(render.confirm_screen(
-                c.get("title", "CONFIRM"), c.get("lines", ()), w, h)):
+                c.get("title", "CONFIRM"), c.get("lines", ()), w, h,
+                footer=c.get("footer", ""))):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -1400,10 +1583,10 @@ class Deck:
         c = self.confirm or {}
         self.confirm = None
         self.screen = c.get("back") or CHAT
-        if ch in (10, 13, curses.KEY_ENTER):
-            action = c.get("action")
-            if callable(action):
-                action()
+        action = c.get("action") if ch in (10, 13, curses.KEY_ENTER) \
+            else c.get("cancel")
+        if callable(action):
+            action()
         return True
 
     def _activity_choices(self):
@@ -1466,9 +1649,28 @@ class Deck:
         return True
 
     def _start_named_activity(self, name):
-        """Name a new activity from the activities screen, then open its log."""
+        """Name a new activity, then ask which type it uses.
+
+        Naming it and dropping straight into the log screen left the type at
+        whatever the last activity used, which is wrong more often than right:
+        a new activity is usually new because the operating is different. So
+        the type picker comes next, and that picker is also where a type can
+        be copied or created -- the whole decision in one place.
+        """
         self._set_activity_session(name)
+        # A new activity is a new activation, so this station's own reference
+        # is unknown until it is stated. Carrying the last one over would log
+        # last week's park onto today's contacts without saying so, and the
+        # type picker that comes next is what asks for the new one.
+        if name and self.cfg.get("MY_PARK"):
+            self._set_my_park("")
+        # The log screen goes underneath first. The picker is a menu drawn over
+        # whatever screen is current, and leaving the activities list there
+        # means backing out of the picker lands on the list the operator has
+        # already finished with.
         self.screen = LOG if self.log_on else CHAT
+        if name:
+            self._open_menu("activity")
 
     def _delete_activity(self, path, name):
         """Remove one activity's log file. Confirmed before it gets here."""
@@ -2105,6 +2307,7 @@ class Deck:
                 has_tqsl=self._has_tqsl(),
                 log_name=os.path.basename(
                     qsolog.log_path(self.cfg.get("LOG_PATH", ""))),
+                callbook_state=self._callbook_state(),
                 activity=self._activity_name(),
                 activity_type="" if act == "GENERAL" else act)
         if m == "activity":
@@ -2165,6 +2368,23 @@ class Deck:
         if self.edit is not None:
             return self._handle_edit(ch)
 
+        # The color scheme, from anywhere. It was bound once, on the fallthrough
+        # below the screen handlers, which meant it worked on the conversation
+        # and was a dead key on the log, the activities list, the pickers, the
+        # tune screen and inside every menu. Changing the scheme is a decision
+        # about the light in the room rather than about the screen in front of
+        # you, so it belongs to no one screen.
+        #
+        # Before the menu and screen handlers so they cannot shadow it, and
+        # after the editor so it cannot interrupt typing. Inside a menu as
+        # well: the settings tree is one of the three places this was asked
+        # for, and no menu binds F4. Two screens keep it out -- a confirmation,
+        # where a keystroke already means "no", and the no-keyboard notice,
+        # where a keystroke arriving IS the answer.
+        if ch == curses.KEY_F4 and self.screen not in (CONFIRM, NOKB):
+            self._apply_scheme(colors.cycle(self.scheme))
+            return True
+
         if self.menu:
             return self._handle_menu(ch)
 
@@ -2213,8 +2433,6 @@ class Deck:
             # *now* is producing copy.
             self._rx_tail = ""
             self.screen = TUNE
-        elif ch == curses.KEY_F4:
-            self._apply_scheme(colors.cycle(self.scheme))
         elif ch == 20:                       # Ctrl-T
             # Not while the previous over is still going out. `Ctrl-Y` has
             # already put fldigi's "receive when drained" mark into the
@@ -2499,6 +2717,7 @@ class Deck:
         # picker deleted that type instead of selecting it -- a destructive
         # action still armed by a keystroke the operator had backed out of.
         self._pending_type_delete = False
+        self._pending_type_copy = False
         self.menu = which
         self.menu_page = 0
         self.menu_sel = self._first_selectable(which)
@@ -2706,10 +2925,6 @@ class Deck:
                 self._open_activities()
             elif key == "v":
                 self._open_menu("activity")
-            elif key == "n":
-                current = (self.log_form.activity_type.name if self.log_form
-                           else self.cfg.get("ACTIVITY_TYPE", "") or "GENERAL")
-                self._copy_activity(current)
             elif key == "f":
                 self._open_editor("LOG_PATH", "Log file")
             elif key == "a":
@@ -2753,13 +2968,28 @@ class Deck:
             # single keystroke that would remove it.
             if key == "d":
                 self._pending_type_delete = True
+                self._pending_type_copy = False
                 self.session.note("press the number of the type to delete")
+                return True
+            if key == "c":
+                self._pending_type_copy = True
+                self._pending_type_delete = False
+                self.session.note("press the number of the type to copy")
+                return True
+            if key == "n":
+                self._pending_type_copy = False
+                self._pending_type_delete = False
+                self._new_activity_type()
                 return True
             chosen = ""
             if key == "g":
                 chosen = "GENERAL"
             elif key.isdigit() and key != "0" and 0 <= int(key) - 1 < len(names):
                 chosen = names[int(key) - 1]
+            if chosen and self._pending_type_copy:
+                self._pending_type_copy = False
+                self._copy_activity(chosen)
+                return True
             if chosen and self._pending_type_delete:
                 self._pending_type_delete = False
                 in_file = chosen in self._file_types()
@@ -2779,9 +3009,18 @@ class Deck:
                     back=self.screen)
                 return True
             self._pending_type_delete = False
+            self._pending_type_copy = False
             if chosen:
                 self._set_activity_type(chosen, table)
-                self._open_menu("logging")
+                # One exit, whichever way the picker was reached. It used to
+                # go back to the logging menu when opened from there and to
+                # the log screen when opened by naming a new activity, which
+                # meant the same keystroke on the same screen landed in two
+                # places depending on history the operator could not see.
+                # Choosing a type rebuilds the form, and looking at the form
+                # is the next thing either way.
+                self._close_menu()
+                self.screen = LOG if self.log_on else CHAT
             return True
 
         if m == "system":
@@ -2971,6 +3210,15 @@ class Deck:
             e["cursor"] += 1
         return True
 
+    def _power_watts(self):
+        """Transmit power as a bare number for the form: "6", or "".
+
+        The same reading `_power_now` puts in a memory, without the unit --
+        the form's label already says W, and the log stores a number.
+        """
+        text = self._power_now()
+        return text.split()[0] if text else ""
+
     def _power_now(self):
         """Transmit power as a string for a memory: "20 W", or "".
 
@@ -2986,7 +3234,9 @@ class Deck:
             # a memory that nobody has put {power} into should not start one.
             if self._rig is None:
                 import rigctld_client
-                self._rig = rigctld_client.Rigctld()
+                self._rig = rigctld_client.Rigctld(
+                    host=self.cfg.get("RIGCTLD_HOST", "127.0.0.1"),
+                    port=self.cfg.get("RIGCTLD_PORT", 4532))
             watts = self._rig.power(max_watts=self.cfg.get("TX_POWER_MAX", 0))
         except Exception:
             # No rigctld, no radio, a hamlib that will not convert: all the
