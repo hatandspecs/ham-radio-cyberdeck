@@ -29,6 +29,11 @@ from session import Entry, Session, RX, TX
 
 CHAT, TUNE, PAIR, NOKB, WIFI = "chat", "tune", "pair", "nokb", "wifi"
 LOG, FIELDS, ORDER = "log", "fields", "order"
+# One logged contact, field by field. The list has one row per contact and a
+# contact has up to forty fields, so without this the ones that did not fit
+# were unreadable on the panel and correctable only over SSH -- which is no
+# use from the bench where the mistakes get made.
+ENTRY = "entry"
 # Activities on disk, and the question asked before anything is
 # destroyed. The confirmation is a screen of its own because deleting a
 # log deletes contacts, and a prompt sharing a screen with the thing it
@@ -106,6 +111,21 @@ class Deck:
         self.acts_sel = 0
         self.acts_message = ""
         self.confirm = None
+        # Which logged contact the arrows have picked out, as an index into
+        # the contacts on screen -- None when the form has the keyboard, which
+        # is almost always. Enter means two different things depending on this,
+        # so it is drawn: the picked row is reversed and the footer changes.
+        self.log_sel = None
+        # What the callbook had to say, kept apart from `log_message` so that a
+        # poll arriving between keystrokes cannot overwrite a duplicate warning
+        # or the receipt for the contact just logged.
+        self.lookup_message = ""
+        # The contact being read field by field, and which field the cursor is
+        # on. `entry_rec` is a snapshot: the detail screen is opened from the
+        # list and the list is rebuilt on every draw.
+        self.entry_rec = None
+        self.entry_sel = 0
+        self.entry_message = ""
         # Set by `d` or `c` on the activity-type picker: the next number typed
         # names the type to delete, or to copy, rather than the one to select.
         self._pending_type_delete = False
@@ -960,8 +980,12 @@ class Deck:
         self._lookup_maybe(form)
         arrived = self._lookup_collect(form)
         if arrived:
-            self.log_message = arrived
+            self.lookup_message = arrived
 
+        # Precedence, most important last to be overridden: what the operator
+        # just did, then the duplicate warning, then the callbook's status.
+        # All three used to share one attribute, so whichever was written last
+        # won -- and the callbook, which polls, was always last.
         message = self.log_message
         if form is not None and not message:
             note = qsolog.dupe_note(qsolog.find_dupes(
@@ -971,19 +995,239 @@ class Deck:
                 activity=self._activity_name()))
             if note:
                 message = f"** {note}"
+            elif self.lookup_message:
+                message = self.lookup_message
 
         # Clamped on the way in: contacts arriving while the list is
         # scrolled back must not leave it pointing past the end.
         self.log_scroll = max(0, min(
-            self.log_scroll, render.log_scroll_max(shown, h, form, w)))
+            self.log_scroll,
+            render.log_scroll_max(shown, h, form, w, self._log_lines())))
+        # A selection that no longer has a contact under it is dropped rather
+        # than clamped: contacts arrive while the screen is open, and silently
+        # moving the selection onto a different contact than the one that was
+        # picked is how the wrong one gets edited.
+        if self.log_sel is not None and not 0 <= self.log_sel < len(shown):
+            self.log_sel = None
         for i, line in enumerate(render.log_screen(
                 shown, "", w, h, header=header, scroll=self.log_scroll,
-                message=message, form=form)):
+                message=message, form=form, lines=self._log_lines(),
+                selected=self.log_sel)):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
         except curses.error:
             pass
+
+    def _log_lines(self):
+        """Lines per contact in the list: 1, 2 or 3."""
+        try:
+            n = int(str(self.cfg.get("LOG_LINES", "1")).strip() or "1")
+        except (TypeError, ValueError):
+            n = 1
+        return max(render.LOG_LINES_MIN, min(n, render.LOG_LINES_MAX))
+
+    def _log_shown(self):
+        """The contacts the list is showing, in the order it shows them.
+
+        The same scoping `_draw_log` uses. Selection indexes THIS list, so the
+        two cannot be allowed to disagree -- an index into the whole log would
+        open a contact from a different activity.
+        """
+        if self.log_form is None:
+            return self.log_records
+        return qsolog.for_activity(self.log_records, self._activity_name())
+
+    def _log_pick(self, step):
+        """Move the selection through the contacts. Returns False if there are
+        none, so the caller can leave the keystroke to the form."""
+        shown = self._log_shown()
+        if not shown:
+            return False
+        if self.log_sel is None:
+            # Up from the form picks the newest contact, which is the one the
+            # question is almost always about -- "did that last one go in".
+            self.log_sel = len(shown) - 1 if step < 0 else 0
+        else:
+            self.log_sel = max(0, min(self.log_sel + step, len(shown) - 1))
+        # Follow the selection with the window, so picking never walks the
+        # cursor off the top of a scrolled list.
+        h, w = self._screen_size()
+        per = render.log_body_rows(h, self.log_form, w, self._log_lines())
+        back = len(shown) - 1 - self.log_sel
+        if back < self.log_scroll:
+            self.log_scroll = back
+        elif back >= self.log_scroll + per:
+            self.log_scroll = back - per + 1
+        self.log_message = ""
+        return True
+
+    def _open_entry(self):
+        """Open the picked contact for reading and correcting."""
+        shown = self._log_shown()
+        if self.log_sel is None or not 0 <= self.log_sel < len(shown):
+            return False
+        self.entry_rec = dict(shown[self.log_sel])
+        self.entry_sel = self._entry_next(0, +1)
+        self.entry_message = ""
+        self.screen = ENTRY
+        return True
+
+    def _entry_rows(self):
+        kind = self.entry_rec.get("activity_type", "") if self.entry_rec else ""
+        act = activities.get(kind, self._activity_table()) if kind else None
+        return qsolog.detail_rows(self.entry_rec or {}, act)
+
+    def _entry_next(self, start, step):
+        """The next editable row at or after `start`, wrapping.
+
+        The cursor skips what cannot be changed rather than stopping on it. A
+        cursor that could sit on `when` and do nothing on Enter would read as
+        a broken key.
+        """
+        rows = self._entry_rows()
+        if not rows:
+            return 0
+        i = max(0, min(int(start), len(rows) - 1))
+        for _ in range(len(rows)):
+            if rows[i][3]:
+                return i
+            i = (i + step) % len(rows)
+        return 0
+
+    def _draw_entry(self, h, w):
+        rows = self._entry_rows()
+        rec = self.entry_rec or {}
+        shown = self._log_shown()
+        position = ""
+        if self.log_sel is not None and shown:
+            position = f"{self.log_sel + 1} of {len(shown)}"
+        for i, line in enumerate(render.entry_screen(
+                rows, self.entry_sel, w, h, call=rec.get("call", ""),
+                when=rec.get("when", ""), message=self.entry_message,
+                position=position)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_entry(self, ch):
+        rows = self._entry_rows()
+        if ch == 27:                                    # Esc
+            self.entry_rec = None
+            self.entry_message = ""
+            self.screen = LOG if self.log_on else CHAT
+        elif ch == curses.KEY_UP:
+            self.entry_sel = self._entry_next(
+                (self.entry_sel - 1) % max(1, len(rows)), -1)
+            self.entry_message = ""
+        elif ch == curses.KEY_DOWN:
+            self.entry_sel = self._entry_next(
+                (self.entry_sel + 1) % max(1, len(rows)), +1)
+            self.entry_message = ""
+        elif ch in (ord("d"), ord("D")):
+            self._ask_delete_qso()
+        elif ch in (10, 13, curses.KEY_ENTER) and rows:
+            name, label, value, editable = rows[
+                max(0, min(self.entry_sel, len(rows) - 1))]
+            if not editable:
+                self.entry_message = f"{label} cannot be changed"
+                return True
+            self._open_editor(None, label, text=value,
+                              sink=lambda v, f=name: self._edit_entry(f, v))
+        return True
+
+    def _ask_delete_qso(self):
+        """Confirm, then remove this contact from the log.
+
+        Behind a confirmation like the activity and activity-type deletes, and
+        for a stronger reason: those throw away a template or a file the
+        operator can rebuild, and this throws away a contact that cannot be
+        recovered from anything on the deck. Enter does it and every other key
+        keeps it, which is the rule the other two already follow.
+        """
+        rec = self.entry_rec or {}
+        when, call = rec.get("when", ""), rec.get("call", "")
+        if not when:
+            self.entry_message = "this contact has no timestamp to find it by"
+            return
+        band = rec.get("band", "")
+        mode = rec.get("mode", "")
+        worked = "  ".join(p for p in (call, band, mode) if p)
+        self._ask_confirm(
+            "DELETE THIS CONTACT",
+            [worked or call or "(no callsign)",
+             f"{when[:10]} {when[11:19]}Z" if len(when) >= 19 else when,
+             "",
+             "It is removed from the log permanently. Nothing on",
+             "the deck can put it back.",
+             "",
+             "An ADIF already exported is not changed."],
+            lambda w=when, c=call: self._delete_qso(w, c),
+            back=LOG if self.log_on else CHAT,
+            footer="Enter delete   any other key keeps it")
+
+    def _delete_qso(self, when, call):
+        """Remove one contact. Confirmed before it gets here."""
+        try:
+            gone = qsolog.remove(self._log_path(), when, call)
+        except OSError as exc:
+            self._log_note(f"could not write the log: {exc}")
+            return
+        if gone is None:
+            self._log_note("that contact is no longer in the log")
+            return
+        # The contact screen was showing what has just stopped existing, and
+        # the selection indexed a list that is now one shorter. Both go.
+        self.entry_rec = None
+        self.entry_message = ""
+        self.log_sel = None
+        self.log_records = qsolog.read(self._log_path())
+        self._log_note(f"{gone.get('call', 'that contact')} deleted from the "
+                       f"log")
+
+    def _edit_entry(self, field, value):
+        """Write one corrected field back to the log file.
+
+        The file is replaced whole and atomically -- see `qsolog.update`. The
+        contact is found by its timestamp, so a log that changed underneath
+        this screen refuses the edit instead of rewriting the wrong line.
+        """
+        rec = self.entry_rec or {}
+        when, call = rec.get("when", ""), rec.get("call", "")
+        if not when:
+            self.entry_message = "this contact has no timestamp to find it by"
+            return
+        # A frequency is SHOWN grouped -- 7.185.000 -- and STORED in hertz. The
+        # screen hands back what it showed, so it is read back through the same
+        # parser that accepts everything an operator might type, and what
+        # reaches the file is hertz. Without this, one edit of the frequency
+        # field would leave a dotted string where `band_for` and the ADIF
+        # export both expect a number.
+        if field in qsolog.HERTZ_FIELDS and str(value or "").strip():
+            hz = qsolog.parse_freq(value)
+            if not hz:
+                self.entry_message = f"{qsolog.field_label(field)}: cannot read that frequency"
+                return
+            value = str(hz)
+        try:
+            got = qsolog.update(self._log_path(), when, call, {field: value})
+        except OSError as exc:
+            self.entry_message = f"could not write the log: {exc}"
+            return
+        if got is None:
+            self.entry_message = "that contact is no longer in the log"
+            return
+        self.entry_rec = got
+        # Re-read rather than patching the list in memory: the file is the
+        # record and anything else is a second copy of it that can be wrong.
+        self.log_records = qsolog.read(self._log_path())
+        label = qsolog.field_label(field)
+        self.entry_message = (
+            f"{label} cleared" if not str(value).strip()
+            else f"{label} is now "
+                 f"{qsolog.display_value(field, got.get(field, ''))}")
 
     # -- building an activity ----------------------------------------------
 
@@ -1064,7 +1308,7 @@ class Deck:
                 # first thing Enter does, and a note the operator cannot see
                 # reads as a dead key.
                 self.picker_message = "choose at least one field"
-                self.session.note("choose at least one field")
+                self._log_note("choose at least one field")
                 return True
             self.picker_sel = 0
             self.screen = ORDER
@@ -1118,7 +1362,12 @@ class Deck:
                     break
             self.picker_message = ""
         elif ch in (10, 13, curses.KEY_ENTER):
-            self._open_editor(None, "Name for this activity",
+            # "activity TYPE", because that is what is being named. It said
+            # "Name for this activity", which is the other thing entirely: an
+            # activity is a session with a log file, a type is the template of
+            # fields that session uses, and the screen that had just finished
+            # choosing and ordering FIELDS was asking for the wrong one.
+            self._open_editor(None, "Name for this activity type",
                               sink=self._save_activity)
         return True
 
@@ -1140,11 +1389,11 @@ class Deck:
                        if c.isalnum() or c in "-_")
         if not name:
             self.picker_message = "an activity type needs a name"
-            self.session.note("an activity needs a name")
+            self._log_note("an activity type needs a name")
             return
         if name in ("GENERAL",):
             self.picker_message = "GENERAL is the built-in — pick another name"
-            self.session.note("GENERAL is the built-in; pick another name")
+            self._log_note("GENERAL is the built-in; pick another name")
             return
         if name in self._file_types():
             # Their own definition, in the file. Replacing it is the common
@@ -1187,7 +1436,7 @@ class Deck:
         answer to the question already did.
         """
         self.screen = ORDER
-        self._open_editor(None, "Name for this activity",
+        self._open_editor(None, "Name for this activity type",
                           sink=self._save_activity, text=name)
 
     def _write_activity(self, name):
@@ -1206,12 +1455,12 @@ class Deck:
             path = activities.save(activities.config_path(), name, text)
         except OSError as exc:
             self.picker_message = f"could not save: {exc}"
-            self.session.note(f"could not save: {exc}")
+            self._log_note(f"could not save: {exc}")
             self.screen = ORDER
             return
         self.picker = None
         self.picker_message = ""
-        self.session.note(f"saved {name} to {path}")
+        self._log_note(f"saved {name} to {path}")
         self._set_activity_type(name)
         self.screen = LOG if self.log_on else CHAT
 
@@ -1254,6 +1503,8 @@ class Deck:
         if call != getattr(self, "_call_seen", None):
             self._call_seen = call
             self._call_still = time.monotonic()
+            # "W1AW: nothing known" must not outlive the callsign it was about.
+            self.lookup_message = ""
             return
         if not call or call == self._looked_up:
             return
@@ -1316,9 +1567,17 @@ class Deck:
             field = form.field(key)
             if field is not None and info.get(key) and not field.touched:
                 form.set(key, info[key])
-        # Reported whether or not a field took it: the grid reaches the record
-        # even on an activity whose form has nowhere to show it.
-        return "-- " + ", ".join(f"{k}={v}" for k, v in info.items())
+        # Nothing to say when it worked. The fields filling in front of the
+        # operator is the message, and printing the answer as well cost more
+        # than it gave: it sat on the one line this screen has for messages and
+        # so hid the duplicate warning, which is the thing on that line worth
+        # reading. A dupe is a decision about whether to work the station; a
+        # name that has already appeared in the Name field is not news.
+        #
+        # A lookup that found NOTHING still reports, because that cannot be
+        # read off the fields: no name appearing looks the same as no network,
+        # a wrong callsign, and a station nobody has heard of.
+        return ""
 
     def _file_types(self):
         """Type names defined in activities.conf, as opposed to in code.
@@ -1349,7 +1608,7 @@ class Deck:
         try:
             return activities.load()
         except Exception as exc:
-            self.session.note(f"activities.conf: {exc}")
+            self._log_note(f"activities.conf: {exc}")
             return dict(activities.BUILTIN)
 
     def _has_tqsl(self):
@@ -1390,7 +1649,7 @@ class Deck:
         self.log_form.advance_serial(self.log_records, act.serial_start,
                                      activity=self._activity_name())
         self._save_state()
-        self.session.note(f"activity: {act.label}")
+        self._log_note(f"activity: {act.label}")
         self._ask_my_park()
 
     def _ask_my_park(self):
@@ -1413,6 +1672,29 @@ class Deck:
             return
         self._open_editor("MY_PARK", "My reference", sink=self._set_my_park)
 
+    def _log_note(self, text):
+        """A message about logging, shown on the logging screens only.
+
+        NOT `session.note`. That writes into the keyboard-to-keyboard
+        transcript, which is a record of what was said on the air, and
+        housekeeping about activities, types and log files was never part of
+        that conversation -- twenty of these were filling the transcript with
+        lines nobody on the other end ever sent. Worse, they were invisible
+        where they mattered: the log screen draws `log_message`, not the
+        transcript, so a refusal raised here could not be read at the moment it
+        was raised and could not be got rid of afterwards.
+
+        The log screen is where the operator ends up, so `log_message` is always
+        set. The picker and the activities list get it too when that is where
+        the message was raised, because those screens cover the log screen and
+        would otherwise show nothing.
+        """
+        self.log_message = text
+        if self.screen in (FIELDS, ORDER):
+            self.picker_message = text
+        elif self.screen == ACTS:
+            self.acts_message = text
+
     def _set_my_park(self, value):
         self.cfg["MY_PARK"] = (value or "").strip().upper()
         if self.log_form is not None:
@@ -1424,7 +1706,7 @@ class Deck:
         path = self._log_path()
         records = qsolog.read(path)
         if not records:
-            self.session.note("nothing logged yet")
+            self._log_note("nothing logged yet")
             return
         out = qsolog.export_path(path)
         try:
@@ -1433,16 +1715,16 @@ class Deck:
                 fh.flush()
                 os.fsync(fh.fileno())
         except OSError as exc:
-            self.session.note(f"could not write {out}: {exc}")
+            self._log_note(f"could not write {out}: {exc}")
             return
-        self.session.note(f"{len(records)} contacts to {out}")
+        self._log_note(f"{len(records)} contacts to {out}")
         if lotw:
             # Printed, never run. tqsl needs a callsign certificate and blocks
             # rather than failing without one, and a signing key does not
             # belong on a card that travels (qso_log_design.md §11).
             try:
                 import lotw as lotwmod
-                self.session.note("sign it with: " + lotwmod.quoted_command(
+                self._log_note("sign it with: " + lotwmod.quoted_command(
                     out, location=self.cfg.get("LOTW_LOCATION", ""),
                     upload=True))
             except Exception:
@@ -1471,7 +1753,7 @@ class Deck:
         shown = (qsolog.for_activity(self.log_records, self._activity_name())
                  if form is not None else self.log_records)
         h, w = self._screen_size()
-        top = render.log_scroll_max(shown, h, form, w)
+        top = render.log_scroll_max(shown, h, form, w, self._log_lines())
         self.log_scroll = max(0, min(self.log_scroll + int(rows), top))
         return self.log_scroll
 
@@ -1526,7 +1808,7 @@ class Deck:
         """
         name = str(name or "").strip()
         if name and not qsolog.activity_slug(name):
-            self.session.note("that name needs a letter or a digit in it")
+            self._log_note("that name needs a letter or a digit in it")
             return
         self.cfg["ACTIVITY"] = name
         if not name:
@@ -1540,13 +1822,13 @@ class Deck:
         self._switch_log()
         where = os.path.basename(self._log_path())
         if not name:
-            self.session.note(f"casual logging — {where}")
+            self._log_note(f"casual logging — {where}")
         elif self.log_records:
-            self.session.note(f"{name} resumed — {where}, "
+            self._log_note(f"{name} resumed — {where}, "
                               f"{len(self.log_records)} contact"
                               f"{'' if len(self.log_records) == 1 else 's'}")
         else:
-            self.session.note(f"{name} started — {where}")
+            self._log_note(f"{name} started — {where}")
 
     def _ask_confirm(self, title, lines, action, back=None, footer="",
                      cancel=None):
@@ -1678,10 +1960,10 @@ class Deck:
             os.remove(path)
         except OSError as exc:
             self.acts_message = f"could not delete: {exc}"
-            self.session.note(f"could not delete {name}: {exc}")
+            self._log_note(f"could not delete {name}: {exc}")
             return
         self.acts_message = f"{name} deleted"
-        self.session.note(f"activity {name} deleted")
+        self._log_note(f"activity {name} deleted")
         # If that was the activity in use, there is nothing to log into any
         # more: fall back to casual logging rather than to a file that is
         # gone, which would be recreated empty on the next contact.
@@ -1692,7 +1974,7 @@ class Deck:
     def _delete_activity_type(self, name):
         """Remove one activity type from activities.conf."""
         ok, detail = activities.delete(activities.config_path(), name)
-        self.session.note(detail)
+        self._log_note(detail)
         if not ok:
             return
         # The form may be built on the type that just went.
@@ -1722,7 +2004,7 @@ class Deck:
             # name is wrong, and the operator needs to be told and left able
             # to type another.
             self.log_records = []
-            self.session.note(f"could not read {os.path.basename(path)}: {exc}")
+            self._log_note(f"could not read {os.path.basename(path)}: {exc}")
             return
         self._looked_up = ""
         self.log_scroll = 0
@@ -1730,7 +2012,7 @@ class Deck:
             self.log_form.advance_serial(
                 self.log_records, self.log_form.activity_type.serial_start,
                 activity=self._activity_name())
-        self.session.note(f"{os.path.basename(path)} — "
+        self._log_note(f"{os.path.basename(path)} — "
                           f"{len(self.log_records)} contact"
                           f"{'' if len(self.log_records) == 1 else 's'}")
 
@@ -1830,7 +2112,14 @@ class Deck:
             return True
 
         if ch == 27:                                    # Esc
-            self.screen = CHAT
+            # One Esc puts the keyboard back on the form, a second leaves the
+            # screen. Leaving outright would make a mis-hit arrow cost the
+            # whole screen.
+            if self.log_sel is not None:
+                self.log_sel = None
+                self.log_message = ""
+            else:
+                self.screen = CHAT
         # The function keys are otherwise dead here, and F1 means "menu"
         # everywhere else on the deck. It opens the LOGGING menu rather than
         # the root one, because that is what is being configured from this
@@ -1853,7 +2142,13 @@ class Deck:
             form.tab(back=True)
             self.log_message = ""
         elif ch in (10, 13, curses.KEY_ENTER):
-            self._log_commit()
+            # With a contact picked, Enter opens it. Not hidden state: the row
+            # is reversed and the footer says "Enter open" rather than
+            # "Enter log" exactly when this is true.
+            if self.log_sel is not None:
+                self._open_entry()
+            else:
+                self._log_commit()
         # Ctrl-Z is 26 over SSH and KEY_SUSPEND on the panel, because
         # TERM=linux defines kspd=^Z and ncurses consumes the byte. Matching
         # only 26 ships dead on the deck — that happened here once already,
@@ -1877,26 +2172,52 @@ class Deck:
                 self.log_message = "-- entry cleared"
             else:
                 self.log_message = "-- nothing staged to clear"
+        # Both drop the selection first, for the same reason typing does: the
+        # operator has gone back to the form, and leaving a contact picked
+        # would leave Enter meaning "open that" while they were filling in a
+        # new contact.
         elif ch == curses.KEY_LEFT:
-            form.left()
+            self.log_sel = None
+            form.tab(back=True)
+            self.log_message = ""
         elif ch == curses.KEY_RIGHT:
-            form.right()
+            self.log_sel = None
+            form.tab()
+            self.log_message = ""
         elif ch == curses.KEY_HOME:
             form.home()
         elif ch == curses.KEY_END:
             form.end()
+        # The arrows pick a logged contact; Tab and Shift-Tab move between
+        # fields, which is what they already did. The arrows were a second,
+        # redundant way to do the same thing, so reading back and correcting
+        # what is already logged had no keys at all.
         elif ch == curses.KEY_UP:
-            form.tab(back=True)
+            if not self._log_pick(-1):
+                form.tab(back=True)
         elif ch == curses.KEY_DOWN:
-            form.tab()
+            if self.log_sel is None:
+                form.tab()
+            else:
+                self._log_pick(+1)
         # The list, not the form. The arrows move between fields, so paging
         # is what is left -- and a touchscreen gesture should not be the only
         # way to reach a contact from an hour ago.
         elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
             h, w = self._screen_size()
-            page = max(1, render.log_body_rows(h, form, w) - 1)
+            page = max(1, render.log_body_rows(
+                h, form, w, self._log_lines()) - 1)
             self._log_scroll_by(page if ch == curses.KEY_PPAGE else -page)
         elif 32 <= ch < 127:
+            # Typing always goes to the form, and drops the selection on the
+            # way. An operator who nudged an arrow and then started a callsign
+            # must not lose the first letter of it.
+            self.log_sel = None
+            # The previous contact's receipt stops applying the moment the next
+            # one is being typed. Leaving it up suppressed the duplicate
+            # warning on the contact now being entered, which is the one
+            # message on this screen that changes what the operator does.
+            self.log_message = ""
             form.type(chr(ch))
             # "-- logged W3ABC" is about the contact just finished and goes
             # stale the moment the next one is started. Clearing it here is
@@ -2191,6 +2512,8 @@ class Deck:
             self._draw_fields(h, w)
         elif self.screen == ORDER:
             self._draw_order(h, w)
+        elif self.screen == ENTRY:
+            self._draw_entry(h, w)
         elif self.screen == ACTS:
             self._draw_activities(h, w)
         elif self.screen == CONFIRM:
@@ -2309,7 +2632,8 @@ class Deck:
                     qsolog.log_path(self.cfg.get("LOG_PATH", ""))),
                 callbook_state=self._callbook_state(),
                 activity=self._activity_name(),
-                activity_type="" if act == "GENERAL" else act)
+                activity_type="" if act == "GENERAL" else act,
+                log_lines=self._log_lines())
         if m == "activity":
             table = self._activity_table()
             current = (self.log_form.activity_type.name if self.log_form
@@ -2409,6 +2733,9 @@ class Deck:
 
         if self.screen == ORDER:
             return self._handle_order(ch)
+
+        if self.screen == ENTRY:
+            return self._handle_entry(ch)
 
         # Before every other screen: a question that has to be answered is
         # the only thing a keystroke can mean while it is on screen.
@@ -2916,8 +3243,8 @@ class Deck:
                 self.log_on = not self.log_on
                 self.cfg["LOGGING"] = "yes" if self.log_on else "no"
                 self._save_state()
-                self.session.note("logging on — Ctrl-N opens it"
-                                  if self.log_on else "logging off")
+                self._log_note("logging on — Ctrl-N opens it"
+                               if self.log_on else "logging off")
                 if not self.log_on and self.screen == LOG:
                     self.screen = CHAT
             elif key == "e":
@@ -2940,6 +3267,9 @@ class Deck:
                 self.session.note(
                     "callbook lookup on — every call worked goes to a third "
                     "party" if on else "callbook lookup off")
+            elif key == "n":
+                self.cfg["LOG_LINES"] = str(self._log_lines() % 3 + 1)
+                self._save_state()
             elif key == "d":
                 rules = qsolog.DUPE_RULES
                 now = self.cfg.get("DUPE_CHECK", "band+mode")
@@ -2969,12 +3299,12 @@ class Deck:
             if key == "d":
                 self._pending_type_delete = True
                 self._pending_type_copy = False
-                self.session.note("press the number of the type to delete")
+                self._log_note("press the number of the type to delete")
                 return True
             if key == "c":
                 self._pending_type_copy = True
                 self._pending_type_delete = False
-                self.session.note("press the number of the type to copy")
+                self._log_note("press the number of the type to copy")
                 return True
             if key == "n":
                 self._pending_type_copy = False
@@ -2994,8 +3324,8 @@ class Deck:
                 self._pending_type_delete = False
                 in_file = chosen in self._file_types()
                 if not in_file:
-                    self.session.note(f"{chosen} is built in — nothing in "
-                                      f"activities.conf to delete")
+                    self._log_note(f"{chosen} is built in — nothing in "
+                                   f"activities.conf to delete")
                     return True
                 reset = activities.is_builtin(chosen)
                 self._ask_confirm(
@@ -3165,9 +3495,16 @@ class Deck:
             text = e["text"].strip()
             if e.get("sink") is not None:
                 # Not stored here and never written to the card: the sink owns
-                # it. The transcript note says the field, never the value.
+                # it. The note says the field, never the value.
+                #
+                # And it does not go to the transcript. Every sink here belongs
+                # to the logger -- naming an activity, naming a type, this
+                # station's reference -- so "Activity name entered" was landing
+                # in the record of a conversation on the air. The sink itself
+                # reports what it did; this only has to say the prompt was
+                # answered.
                 self.edit = None
-                self.session.note(f"{e['title']} entered")
+                self._log_note(f"{e['title']} entered")
                 e["sink"](text)
                 return True
             self.cfg[e["key"]] = text

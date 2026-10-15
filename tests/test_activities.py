@@ -91,8 +91,19 @@ equals("general is the default when nothing is named",
 equals("an unknown activity falls back rather than raising",
        activities.get("NOT-A-THING").name, "GENERAL")
 check("case does not matter", activities.get("pota").name == "POTA")
-equals("general's grammar is what the log always had",
-       activities.GENERAL.entry, ("rst_s", "rst_r", "name", "qth"))
+# What gets typed or read off the rig on an ordinary contact. The time, the
+# callsign, the band and the radio's frequency and mode are on every contact
+# regardless and are not listed here. `name` is, because the callbook lookup
+# writes into it and with no `name` field there is nowhere for a looked-up name
+# to go; `qth` is not, so a looked-up QTH is reported on the message line
+# instead and an operator who wants the field adds it from the selector.
+equals("general logging is what gets typed, plus what the rig says",
+       activities.GENERAL.entry,
+       ("rst_s", "rst_r", "name", "tx_power", "comment"))
+# The field list IS the entry grammar, so this is also what a typed one-line
+# entry means under general logging -- see test_qsolog.
+check("and the comment is one of its own fields, not an afterthought",
+      "comment" in activities.GENERAL.entry, str(activities.GENERAL.entry))
 check("a contest has a serial and leaves reports out",
       activities.BUILTIN["CONTEST"].entry == ("serial_rx", "exchange_rx")
       and activities.BUILTIN["CONTEST"].serial,
@@ -189,10 +200,16 @@ equals("one report is the received one",
        qsolog.parse_entry("W3ABC 57", "USB", G)["rst_r"], "57")
 equals("and the sent one defaults",
        qsolog.parse_entry("W3ABC 57", "USB", G)["rst_s"], "59")
-both = qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh PA", "USB", G)
-equals("both reports, name, and the rest as QTH",
-       (both["rst_s"], both["rst_r"], both["name"], both["qth"]),
-       ("59", "57", "Bob", "Pittsburgh PA"))
+both = qsolog.parse_entry("W3ABC 59 57 Bob", "USB", G)
+equals("both reports and the name",
+       (both["rst_s"], both["rst_r"], both["name"]), ("59", "57", "Bob"))
+# General logging has no `qth` field any more, and the field list IS the entry
+# grammar -- so there is no position for a QTH to be typed into and words after
+# the name have nowhere to go. The form cannot type one either, which is the
+# same fact seen from the other side.
+spare = qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh PA", "USB", G)
+equals("the name still lands", spare["name"], "Bob")
+equals("and there is no QTH to land in", spare["qth"], "")
 equals("no activity argument at all is general logging",
        qsolog.parse_entry("W3ABC 59 57 Bob", "USB"),
        qsolog.parse_entry("W3ABC 59 57 Bob", "USB", G))

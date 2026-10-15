@@ -38,6 +38,14 @@ import activities
 CALL = ("call", "Call", False)
 COMMENT = ("comment", "Comment", True)
 
+# Sticky wherever it appears, including when an activity lists it among its own
+# fields and so decides its position. The comment is the one per-contact field
+# that is usually the same all session -- "5W to a wire", "mobile" -- and it is
+# carried across a type change for the same reason. Without this, moving it
+# into an activity's field list silently turned it into a field that cleared
+# itself on every commit.
+STICKY_ANYWHERE = ("comment",)
+
 # Fields held in upper case however they are typed. A callsign is upper case
 # everywhere it is ever written -- on the air, in ADIF, in every log -- so
 # Caps Lock and the Shift key should not be able to produce a lower-case one,
@@ -142,8 +150,18 @@ class LogForm:
         # it prefills and stops tracking the moment it is corrected.
         for name in act.entry:
             order.append(Field(name, act.label_for(name),
-                               from_radio=(name in PREFILLED)))
-        order.append(Field(*COMMENT))
+                               from_radio=(name in PREFILLED),
+                               sticky=(name in STICKY_ANYWHERE)))
+        # Every form has a comment field, whether or not the activity asked
+        # for one: a note about a contact is never not worth having.
+        #
+        # Unless the activity DID ask for one, in which case it has already
+        # been placed above, in the position the operator chose. Appending it
+        # again put two Comment fields on one form -- which became possible
+        # the moment `comment` was made selectable, and is the sort of thing a
+        # field list must not be able to say twice.
+        if "comment" not in act.entry:
+            order.append(Field(*COMMENT))
 
         # 2. This station's side, starting with the serial being sent. It is
         # on the form rather than computed at commit so the operator can SEE

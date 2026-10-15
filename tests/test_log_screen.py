@@ -194,9 +194,19 @@ gen = lines(ORD, "", 66, 10, header={"count": 2})
 act = lines(ORD, "", 66, 10,
             header={"count": 2, "activity_type": "POTA",
                          "my_park": "US-5678"})
-check("general logging says only LOG", "LOG" in gen[0] and "POTA" not in gen[0],
-      gen[0])
+check("casual logging says so rather than going blank",
+      "LOG" in gen[0] and "casual logging" in gen[0], gen[0])
+check("and names no activity type it is not using",
+      "POTA" not in gen[0], gen[0])
 check("the activity is named on the header", "POTA" in act[0], act[0])
+check("and an activity replaces the casual wording rather than adding to it",
+      "casual logging" not in lines(
+          ORD, "", 66, 10,
+          header={"count": 2, "activity": "Bald Eagle SP",
+                  "activity_type": "POTA"})[0],
+      lines(ORD, "", 66, 10,
+            header={"count": 2, "activity": "Bald Eagle SP",
+                    "activity_type": "POTA"})[0])
 check("and so is the reference", "US-5678" in act[0], act[0])
 check("GENERAL is not printed as though it were an activity",
       "GENERAL" not in lines(ORD, "", 66, 10,

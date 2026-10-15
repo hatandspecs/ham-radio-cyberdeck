@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "src"))
 
 from harness import check, equals, report
 import qsolog
+import activities
 
 
 WHEN = datetime.datetime(2026, 10, 10, 16, 12, 3)
@@ -90,7 +91,11 @@ equals("received", both["rst_r"], "57")
 
 full = qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh PA", "USB")
 equals("name", full["name"], "Bob")
-equals("qth takes the rest", full["qth"], "Pittsburgh PA")
+# General logging has no `qth` field, so there is no position for one and the
+# words after the name have nowhere to go. The field list IS the grammar: an
+# operator who wants a QTH typed adds the field from the selector, and then
+# this line means something different, which is the whole design.
+equals("and nothing follows it under general logging", full["qth"], "")
 
 named = qsolog.parse_entry("W3ABC Bob", "USB")
 equals("a name where a report would be", named["name"], "Bob")
@@ -132,14 +137,19 @@ for bad, why in (("", "empty"), ("   ", "whitespace only"), ("HELLO 59", "no cal
         check(f"{why} says something useful", bool(str(e)), repr(str(e)))
 
 print("\nrecords")
-rec = qsolog.make_record(qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh", "USB"),
-                         WHEN, freq_hz=7_074_000, mode="USB",
-                         my_call="KD3CCO", my_grid="FN10CS")
+# The comment carries the multi-word value here. General logging has no `qth`
+# field, so there is no position to type one into -- the field list IS the
+# grammar -- and everything after a semicolon is the comment.
+rec = qsolog.make_record(
+    qsolog.parse_entry("W3ABC 59 57 Bob ; Pittsburgh", "USB"),
+    WHEN, freq_hz=7_074_000, mode="USB",
+    my_call="KD3CCO", my_grid="FN10CS")
 equals("time is UTC and ISO", rec["when"], "2026-10-10T16:12:03Z")
 equals("band derived", rec["band"], "40m")
 equals("mode normalized", rec["mode"], "SSB")
 equals("own call recorded", rec["my_call"], "KD3CCO")
-check("empty fields are dropped", "name" in rec and rec.get("qth"))
+check("empty fields are dropped",
+      "name" in rec and rec.get("comment") and "qth" not in rec)
 
 nofreq = qsolog.make_record(qsolog.parse_entry("W3ABC", "USB"), WHEN,
                             freq_hz=None, mode="USB", my_call="KD3CCO")
@@ -152,13 +162,14 @@ line = qsolog.format_record(rec)
 check("one line", "\n" not in line, repr(line))
 back = qsolog.parse_record(line)
 equals("call survives", back["call"], "W3ABC")
-equals("qth with a space survives", back["qth"], "Pittsburgh")
+equals("the comment survives", back["comment"], "Pittsburgh")
 equals("time survives", back["when"], rec["when"])
 
-spacey = qsolog.make_record(qsolog.parse_entry("W3ABC 59 57 Bob Mount Joy PA", "USB"),
-                            WHEN, freq_hz=14_070_000, mode="USB", my_call="KD3CCO")
+spacey = qsolog.make_record(
+    qsolog.parse_entry("W3ABC 59 57 Bob ; Mount Joy PA", "USB"),
+    WHEN, freq_hz=14_070_000, mode="USB", my_call="KD3CCO")
 rt = qsolog.parse_record(qsolog.format_record(spacey))
-equals("multi-word qth round trips", rt["qth"], "Mount Joy PA")
+equals("a multi-word value round trips", rt["comment"], "Mount Joy PA")
 equals("and the field after it is intact", rt["my_call"], "KD3CCO")
 
 print("\nADIF")
@@ -264,9 +275,9 @@ print("\ncomments: the catch-all a general log needs")
 # Everything after a semicolon is free text. A general log's most-used field
 # after the call is the one that holds "QRP 5W" or "first one from this
 # county", and no positional scheme can tell that from a QTH.
-c = qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh ; running 5W to a wire", "USB")
+c = qsolog.parse_entry("W3ABC 59 57 Bob ; running 5W to a wire", "USB")
 equals("the comment is taken whole", c["comment"], "running 5W to a wire")
-equals("and does not become the QTH", c["qth"], "Pittsburgh")
+equals("and the name before it is still the name", c["name"], "Bob")
 equals("the name still parses", c["name"], "Bob")
 
 c = qsolog.parse_entry("W3ABC ; first one from this county", "USB")
@@ -573,5 +584,100 @@ check("and USB is not — it is plain sideband",
       "USB" not in qsolog.RIG_DATA_MODES)
 check("nor is LSB", "LSB" not in qsolog.RIG_DATA_MODES)
 check("nor FM", "FM" not in qsolog.RIG_DATA_MODES)
+
+print("\ncorrecting a contact already logged")
+# The file was append-only by design and the design doc said so. The reason
+# was good -- an append cannot damage what is already there, and this deck's
+# whole power story is that the plug gets pulled. The reason it changed is
+# also good: a callsign taken down wrong is wrong in the exported ADIF and in
+# every upload made from it, and "edit the file over SSH" is no recovery path
+# from a park bench.
+#
+# So the file is never written in place. It is replaced WHOLE and atomically,
+# which is what these assert: the neighbours, the order and the count survive
+# every edit, and a failed match changes nothing at all.
+import tempfile as _tf
+
+def _logged():
+    d = _tf.mkdtemp(prefix="qsolog-update-")
+    path = os.path.join(d, "qso.log")
+    for i, call in enumerate(("W1AW", "KD3CPP", "W3TM")):
+        qsolog.append(path, {"when": f"2026-10-14T14:0{i}:00Z", "call": call,
+                             "band": "40m", "mode": "SSB", "rst_s": "59",
+                             "rst_r": "59", "my_call": "KD3CCO"})
+    return d, path
+
+d, path = _logged()
+got = qsolog.update(path, "2026-10-14T14:01:00Z", "KD3CPP", {"call": "KD3CCP"})
+equals("the callsign is corrected", got and got["call"], "KD3CCP")
+equals("and that is what is in the file",
+       [r["call"] for r in qsolog.read(path)], ["W1AW", "KD3CCP", "W3TM"])
+equals("the count is unchanged", len(qsolog.read(path)), 3)
+check("no temp file is left behind",
+      [f for f in os.listdir(d) if f.startswith(".")] == [],
+      str(os.listdir(d)))
+
+# The timestamp is the key. It is not editable, because a contact whose time
+# can be retyped is a contact whose duplicate check means nothing.
+d, path = _logged()
+qsolog.update(path, "2026-10-14T14:01:00Z", "KD3CPP",
+              {"when": "1999-01-01T00:00:00Z", "name": "Ryan"})
+mid = qsolog.read(path)[1]
+equals("the timestamp cannot be retyped", mid["when"], "2026-10-14T14:01:00Z")
+equals("but the edit alongside it took", mid.get("name"), "Ryan")
+
+# An empty value clears the field, because a value typed by mistake has to be
+# removable -- but not the callsign, which every record must have.
+d, path = _logged()
+qsolog.update(path, "2026-10-14T14:01:00Z", "KD3CPP", {"name": "Ryan"})
+qsolog.update(path, "2026-10-14T14:01:00Z", "KD3CPP", {"name": ""})
+check("a field can be cleared", "name" not in qsolog.read(path)[1],
+      str(qsolog.read(path)[1]))
+qsolog.update(path, "2026-10-14T14:01:00Z", "KD3CPP", {"call": ""})
+equals("the callsign cannot be cleared", qsolog.read(path)[1]["call"],
+       "KD3CPP")
+
+# A guard that does not match is a refusal, not a guess: same instant,
+# different station means the file changed underneath the screen.
+d, path = _logged()
+before = open(path).read()
+equals("a wrong callsign guard refuses",
+       qsolog.update(path, "2026-10-14T14:01:00Z", "N0ONE", {"name": "X"}),
+       None)
+equals("an unknown timestamp refuses",
+       qsolog.update(path, "1999-01-01T00:00:00Z", "", {"name": "X"}), None)
+equals("and neither touched the file", open(path).read(), before)
+
+print("\none contact, field by field")
+# What the detail screen is built from. In the STORED order, so a line read
+# over SSH and this screen put the same field in the same place.
+rec = {"when": "2026-10-14T14:05:00Z", "call": "KD3CCP", "band": "40m",
+       "mode": "SSB", "rst_s": "59", "name": "Ryan", "my_call": "KD3CCO",
+       "activity_type": "POTA", "handwritten": "added over ssh"}
+rows = qsolog.detail_rows(rec, activities.get("POTA"))
+names = [n for n, _l, _v, _e in rows]
+equals("the timestamp leads, as it does in the file", names[0], "when")
+check("the callsign follows it", names[1] == "call", str(names[:3]))
+check("every field with a value is shown",
+      all(k in names for k in rec), str(names))
+# The second half of what makes this screen able to fix an OMISSION: POTA
+# wants a reference, this contact has none, and the blank row is what lets it
+# be filled in.
+check("a field the activity wants is shown even when empty",
+      "park" in names, str(names))
+equals("and it is empty",
+       [v for n, _l, v, _e in rows if n == "park"], [""])
+check("a field only the file knows about is still shown",
+      "handwritten" in names, str(names))
+# Hiding `when` would leave an operator wondering where the time went.
+# Showing it locked says it is there and is not theirs to change.
+locked = [n for n, _l, _v, e in rows if not e]
+equals("the timestamp is the only locked field", locked, ["when"])
+check("every label is non-empty", all(l for _n, l, _v, _e in rows), str(rows))
+equals("labels come from the selection screen where there is one",
+       qsolog.field_label("tx_power"),
+       activities.ENTRY_FIELDS["tx_power"][1])
+equals("and from this module for what the deck fills in",
+       qsolog.field_label("my_call"), "My call")
 
 sys.exit(report())

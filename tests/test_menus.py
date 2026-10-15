@@ -77,14 +77,29 @@ keys = [k for k, _ in on["items"]]
 # `e` is the ACTIVITY -- the session being logged -- and `v` the TYPE it
 # uses. Two lines because they are two things: an operator could previously
 # choose POTA but not say which activation it was.
-# No `n` any more. Creating an activity type moved onto the picker that lists
-# them, where what already exists is in front of the operator making the
-# decision.
+# `n` is no longer "new type" -- creating a type moved onto the picker that
+# lists them, where what already exists is in front of the operator making the
+# decision. It is now the lines-per-contact setting, which belongs on this menu
+# because it is about reading the log rather than about one activity.
 equals("on opens the rest", keys,
-       ["l", "f", "a", "m", "d", "c", "e", "v"])
+       ["l", "f", "a", "m", "d", "c", "e", "v", "n"])
 check("creating a type is not offered here",
       not any("New type" in label for _k, label in on["items"]),
       str(on["items"]))
+check("and `n` sets the line count", "Lines per contact" in
+      dict(on["items"])["n"], dict(on["items"])["n"])
+# It states the number and NOTHING about what the extra rows show. What they
+# show is the activity type's own field order, carrying on from where the
+# first row stops, so it differs with every type -- a county-hunting type puts
+# county there and a satellite type puts the bird there. Any description here
+# would be wrong for most of them, which is why there is none.
+for n in (1, 2, 3):
+    shown = dict(menus.log_menu(on=True, log_lines=n)["items"])["n"]
+    check(f"{n} is shown as the setting", f"{n} of 3" in shown, shown)
+    check(f"and {n} does not claim what the rows contain",
+          not any(w in shown.lower() for w in
+                  ("where", "station", "contact's", "grid", "power")),
+          shown)
 equals("the activity comes before its type",
        keys.index("e") < keys.index("v"), True)
 # The log file sits directly under the toggle: which file is being written is

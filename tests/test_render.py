@@ -178,4 +178,91 @@ check("only the first row is stamped and attributed",
 _l, (row, _col) = render.compose_lines(three, "", 66, 2, cursor=33)
 equals("with two rows shown the caret follows into them", row, 1)
 
+print("\ncontinuation rows follow the activity's field order")
+# Not a fixed list. The activity type's field order IS the operator's statement
+# about what matters on this contact, so a hardcoded "line two is where they
+# are" is wrong for every custom type -- a county-hunting type puts county
+# second, a satellite type puts the bird second, and neither wants a row spent
+# on a grid square it never asks for.
+import activities as _acts
+
+COUNTY = _acts.ActivityType("COUNTYHUNT", label="County hunting",
+                            entry=("rst_s", "rst_r", "county", "state"))
+SAT = _acts.ActivityType("SATWORK", label="Satellites",
+                         entry=("rst_s", "rst_r", "sat_name", "prop_mode"))
+REC = {"when": "2026-10-14T14:00:00Z", "call": "W1AW", "rst_s": "59",
+       "rst_r": "59", "county": "Centre", "state": "PA", "sat_name": "SO-50",
+       "prop_mode": "SAT", "grid": "FN10"}
+
+order = render.log_extra_fields(COUNTY, REC)
+equals("the county type leads with county, then state",
+       order[:2], ["county", "state"])
+order = render.log_extra_fields(SAT, REC)
+equals("the satellite type leads with the bird",
+       order[:2], ["sat_name", "prop_mode"])
+check("fields the first row already shows are not repeated",
+      not ({"call", "rst_s", "rst_r", "name", "qth"} & set(order)), str(order))
+# The station's own call is the same on every contact in the file, and the
+# activity is named in the header above the list.
+check("and neither are the ones the header already says",
+      not ({"my_call", "activity", "activity_type"} & set(order)), str(order))
+# What the activity never asked for still follows, so general logging -- whose
+# four fields all fit on the first row -- is not left with empty rows.
+check("anything else the record carries follows", "grid" in order, str(order))
+order = render.log_extra_fields(None, REC)
+check("with no activity at all, the stored order is used",
+      order and "state" in order, str(order))
+
+print("\na field is never split across two rows")
+WIDE = {"when": "2026-10-14T14:00:00Z", "call": "W1AW",
+        "county": "Northumberland", "state": "Pennsylvania",
+        "country": "United States", "grid": "FN10xx",
+        "my_rig": "FTX-1 Field", "my_antenna": "End-fed half wave"}
+fields = render.log_extra_fields(None, WIDE)
+rows = render.log_extra_rows(WIDE, fields, 66, 2)
+equals("exactly as many rows as asked for", len(rows), 2)
+for row in rows:
+    check(f"no row overruns the width: {row!r}", len(row) <= 66, row)
+# Every label that appears, appears whole and next to its own value. A `Coun`
+# at the end of one row and `ty Northumberland` at the start of the next is
+# worse than a short row.
+joined = " ".join(rows)
+for label, value in (("County", "Northumberland"),
+                     ("State", "Pennsylvania")):
+    if label in joined:
+        check(f"{label} is whole and keeps its value",
+              f"{label} {value}" in joined, joined)
+
+print("\nfree text is capped rather than taking the row")
+LONG = {"when": "2026-10-14T14:00:00Z", "call": "W1AW", "state": "PA",
+        "comment": "worked him on the second call after a long tail ender"}
+# `comment` is on the FIRST row, so it is asked for here directly -- the point
+# is the cap, not which row it lands on.
+rows = render.log_extra_rows(LONG, ("comment", "state"), 66, 1)
+check("a long comment is clipped", "..." in rows[0], rows[0])
+check("with ASCII dots, not an ellipsis character",
+      "\u2026" not in rows[0], rows[0])
+check("and it still leaves room for the field after it",
+      "State PA" in rows[0], rows[0])
+equals("clip leaves short text alone", render.clip("abc", 24), "abc")
+equals("and clips to exactly the limit",
+       len(render.clip("x" * 40, 24)), 24)
+check("the clipped form ends in dots",
+      render.clip("x" * 40, 24).endswith("..."), render.clip("x" * 40, 24))
+
+print("\nhow many contacts fit, when a contact is more than one row")
+# Both helpers return CONTACTS, not rows. They returned rows and were used as
+# a contact count, so at three lines each the scroll clamp allowed an offset a
+# third past the end of the list -- which draws nothing and reads as a hang.
+one = render.log_body_rows(20, None, 66, 1)
+check("three lines each fits fewer contacts than one line each",
+      render.log_body_rows(20, None, 66, 3) < one,
+      f"{render.log_body_rows(20, None, 66, 3)} vs {one}")
+equals("and never fewer than one", render.log_body_rows(6, None, 66, 3), 1)
+equals("the scroll stops at the end of the list",
+       render.log_scroll_max([{}] * 4, 20, None, 66, 1), 0)
+check("a three-line list can be scrolled when a one-line one cannot",
+      render.log_scroll_max([{}] * 6, 20, None, 66, 3) > 0,
+      str(render.log_scroll_max([{}] * 6, 20, None, 66, 3)))
+
 sys.exit(report())

@@ -910,24 +910,27 @@ def form_rows(form, width, columns=2, focus_cursor=True):
     return rows
 
 
-def log_body_rows(height, form=None, width=66):
-    """How many contacts the list can show, given the form below it.
+def log_body_rows(height, form=None, width=66, lines=1):
+    """How many CONTACTS the list can show, given the form below it.
 
-    Shared with the deck so that clamping a scroll position and drawing it
-    agree. When they did not, the list could be scrolled to an offset that
-    drew nothing and looked like a hang.
+    Contacts, not rows, because a contact is `lines` rows tall. Shared with the
+    deck so that clamping a scroll position and drawing it agree. When they did
+    not, the list could be scrolled to an offset that drew nothing and looked
+    like a hang.
     """
     entry_rows = len(form_rows(form, width)) if form is not None else 0
-    return max(1, height - 6 - max(1, entry_rows))
+    rows = max(1, height - 6 - max(1, entry_rows))
+    per = max(LOG_LINES_MIN, min(int(lines or 1), LOG_LINES_MAX))
+    return max(1, rows // per)
 
 
-def log_scroll_max(records, height, form=None, width=66):
+def log_scroll_max(records, height, form=None, width=66, lines=1):
     """The furthest back the list can be scrolled: 0 when it all fits."""
-    return max(0, len(records) - log_body_rows(height, form, width))
+    return max(0, len(records) - log_body_rows(height, form, width, lines))
 
 
 def log_screen(records, entry, width, height, header=None, message="",
-               cursor=None, form=None, scroll=0):
+               cursor=None, form=None, scroll=0, lines=1, selected=None):
     """The log screen: what has been worked, and the line being typed.
 
     Given the whole display rather than a prompt under the transcript, because
@@ -968,14 +971,18 @@ def log_screen(records, entry, width, height, header=None, message="",
     # the one that is usually already known.
     left = " LOG"
     activity = str(head.get("activity") or "").strip()
-    if activity:
-        left += f"  {activity}"
+    # Named either way. With an activity this is its name; without one it says
+    # so in the same words the logging menu uses, because a header that went
+    # blank left the operator unable to tell "logging to the casual log" from
+    # "the activity name is not being displayed" -- and those want opposite
+    # responses. The menu says `Activity  casual logging`; so does this.
+    left += f"  {activity}" if activity else "  casual logging"
     kind = str(head.get("activity_type") or "").strip().upper()
     if kind and kind != "GENERAL":
         left += f"  ({kind})" if activity else f"  {kind}"
-    # With no activity there is no name to show, so the file is named instead
-    # when it is not the default one -- a deck writing somewhere unexpected
-    # must never do it silently. An activity already names its own file.
+    # The file is named as well when it is not the default one -- a deck
+    # writing somewhere unexpected must never do it silently. An activity
+    # already names its own file, so this is only for casual logging.
     if not activity and head.get("log_name"):
         left = f" LOG:{head['log_name']}" + left[len(" LOG"):]
     for key in ("band", "mode", "freq"):
@@ -1018,13 +1025,19 @@ def log_screen(records, entry, width, height, header=None, message="",
     entry_rows = form_rows(form, width) if form is not None else []
     # One row less than before: the column heading takes it.
     body_rows = max(1, height - 6 - max(1, len(entry_rows)))
-    # `scroll` counts rows back from the newest, the same direction and the
-    # same units the transcript uses, so one drag gesture means the same thing
-    # on both screens. Clamped here as well as by the caller: a draw must be
-    # sane whatever it is handed.
-    back = max(0, min(int(scroll or 0), max(0, len(records) - body_rows)))
+    # Capacity in CONTACTS, not rows. At two or three lines each, a contact is
+    # several rows, and every count below it -- the scroll clamp, the page step,
+    # which contacts are on screen -- is about contacts.
+    per = max(LOG_LINES_MIN, min(int(lines or 1), LOG_LINES_MAX))
+    body_entries = max(1, body_rows // per)
+    # `scroll` counts contacts back from the newest, the same direction the
+    # transcript scrolls, so one drag gesture means the same thing on both
+    # screens. Clamped here as well as by the caller: a draw must be sane
+    # whatever it is handed.
+    back = max(0, min(int(scroll or 0), max(0, len(records) - body_entries)))
     end = len(records) - back
-    shown = records[max(0, end - body_rows):end] if records else []
+    first = max(0, end - body_entries)
+    shown = records[first:end] if records else []
 
     # A column is drawn when a contact on screen uses it OR when the activity
     # now selected asks for it. The second half is what shows the operator
@@ -1064,7 +1077,10 @@ def log_screen(records, entry, width, height, header=None, message="",
             max(0, width - len(tag))) + tag
     out.append([(heading[:width].ljust(width), "dim")])
 
-    for rec in shown:
+    for offset, rec in enumerate(shown):
+        # `selected` indexes `records`, not the window, so it survives
+        # scrolling: the contact stays selected while the list moves under it.
+        picked = selected is not None and (first + offset) == selected
         when = (rec.get("when", "") or "")[11:16]
         line = f" {when}  {rec.get('call', ''):<10}"
         rst = f"{rec.get('rst_s', '')}/{rec.get('rst_r', '')}"
@@ -1092,8 +1108,26 @@ def log_screen(records, entry, width, height, header=None, message="",
         if name or trailing:
             line += f" {name:<9}" if trailing else f" {name}"
             if trailing:
-                line += f" {trailing}"
-        out.append([(line[:width].ljust(width), "")])
+                # Clipped with `...`, not cut by the row width. A comment that
+                # ran off the end used to stop mid-word -- "worked him on the
+                # s" -- which reads as a rendering fault rather than as text
+                # that did not fit, and leaves the operator unsure whether
+                # there is more of it or the log is damaged. The dots say
+                # there is more, and the contact screen is where to read it.
+                line += " " + clip(trailing, max(0, width - len(line) - 1))
+        out.append([(line[:width].ljust(width),
+                     "reverse" if picked else "")])
+
+        # The continuation rows, carrying on down the activity's field order
+        # from where the first row stopped. Always exactly `per - 1` of them
+        # whether or not there is anything to put on them, so a contact is a
+        # fixed height and the arrows can walk the list predictably.
+        for extra in log_extra_rows(
+                rec, log_extra_fields(
+                    form.activity_type if form is not None else None, rec),
+                width, per - 1):
+            out.append([(extra[:width].ljust(width),
+                         "reverse" if picked else "dim")])
 
     # Padded, not empty. An unpadded blank line leaves whatever the previous
     # screen drew in those columns, and the log screen is reached from the
@@ -1114,8 +1148,22 @@ def log_screen(records, entry, width, height, header=None, message="",
         # F1 is the menu everywhere else on the deck and was unlabeled
         # here, so the one screen with its own menu was the one screen
         # that did not say so.
-        footer = (" F1 menu  F2 activity  Tab field  Enter log  ^X clear"
-                  "  Esc back")
+        # What the footer says depends on whether a contact is selected,
+        # because the two most important keys mean different things then. A
+        # footer that always claimed "Enter log" would be wrong exactly when
+        # the operator was about to press it on a selected contact.
+        if selected is not None:
+            footer = (" \u2191\u2193 pick  Enter open  Esc deselect"
+                      "  typing returns to the form")
+        else:
+            # 61 of 66. Four keys nobody guesses, and the two that are
+            # guessable are the ones left off: Tab also moves between fields
+            # and Esc also goes back, but the arrows are what this screen
+            # gives those jobs to now, and Esc means the same thing on every
+            # screen of this deck. The selected-state footer above names Esc
+            # anyway, which is where it matters.
+            footer = (" F1 menu  F2 activity  \u2191\u2193 pick"
+                      "  \u2190\u2192 field  Enter log  ^X clear")
         if head.get("hint"):
             footer += f"   {head['hint']}"
         out.append([(footer[:width].ljust(width), "dim")])
@@ -1146,6 +1194,193 @@ def log_screen(records, entry, width, height, header=None, message="",
         footer += f"   {head['hint']}"
     out.append([(footer[:width].ljust(width), "dim")])
     return out[:height]
+
+
+ENTRY_ROW0 = 2
+
+
+def entry_screen(rows, selected, width, height, call="", when="",
+                 message="", position=""):
+    """One logged contact, field by field, so it can be read and corrected.
+
+    `rows` is `qsolog.detail_rows()` output: `(name, label, value, editable)`.
+    The order is the stored line's order, so this screen and a line read over
+    SSH put the same field in the same place.
+
+    Exists because the list cannot show everything. A contact has up to forty
+    fields and the list has one row for it, so the fields that did not fit were
+    unreadable on the deck and unfixable anywhere but over SSH -- which is no
+    use from a park bench, which is where the mistakes get made.
+
+    A locked field is drawn dim and skipped by the cursor rather than hidden.
+    Hiding `when` would leave the operator wondering where the timestamp went;
+    showing it greyed says it is there and is not theirs to retype.
+    """
+    out = []
+    left = " CONTACT"
+    if call:
+        left += f"  {call}"
+    if when:
+        # "2026-10-14T14:05:00Z" -> "2026-10-14 14:05Z". The seconds are in the
+        # field list below; up here they are noise.
+        left += f"  {when[:10]} {when[11:16]}Z" if len(when) >= 16 else f"  {when}"
+    right = f"{position} " if position else ""
+    pad = max(1, width - len(left) - len(right))
+    if len(left) + len(right) + 1 > width:
+        left = left[:max(0, width - len(right) - 1)]
+        pad = 1
+    out.append([((left + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    # The cursor is an index into `rows`; the caller keeps it on an editable
+    # one. Paged by the cursor, like the field selector, so walking off the
+    # bottom arrives at the top of the next page instead of stopping.
+    body = max(1, height - 4)
+    page = max(0, int(selected or 0)) // body if rows else 0
+    shown = rows[page * body:(page + 1) * body]
+    for i, (_name, label, value, editable) in enumerate(shown,
+                                                        start=page * body):
+        mark = "\u25b8" if i == selected else " "
+        line = f"{mark} {label:<9} {value}"
+        if not editable:
+            out.append([(line[:width].ljust(width), "dim")])
+        else:
+            out.append([(line[:width].ljust(width),
+                         "bright" if i == selected else "")])
+
+    while len(out) < height - 2:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    footer = message or "Esc back  \u2191\u2193 field  Enter edit  d delete"
+    if not message and len(rows) > body:
+        footer = ("Esc back  \u2191\u2193 field  Enter edit  d delete  "
+                  f"{page + 1}/{(len(rows) + body - 1) // body}")
+    out.append([((" " + footer)[:width].ljust(width), "dim")])
+    return out[:height]
+
+
+# How many lines each contact takes in the list. One is the whole contact on a
+# row; two adds where they are; three adds this station's side and the notes.
+# A contact always takes exactly this many rows, blank ones included, because
+# the arrows select whole contacts and a list whose row height varied with how
+# much was filled in could not be walked predictably.
+LOG_LINES_MIN, LOG_LINES_MAX = 1, 3
+
+# What the first row already shows, so the continuation rows carry on from
+# there instead of repeating it. These are the columns the heading names.
+_LINE1_FIELDS = ("when", "call", "rst_s", "rst_r", "serial_tx", "serial_rx",
+                 "exchange_rx", "park", "name", "qth", "comment")
+
+# Never shown on a continuation row. The station's own call is the same on
+# every contact in the file, and the activity and its type are named in the
+# header above the list -- a column repeating any of them down the screen
+# spends rows on what the operator already knows.
+_LINE_SKIP = ("my_call", "activity", "activity_type", "contest_id")
+
+# Three ASCII dots, deliberately, NOT U+2026. The panel's console font is
+# Uni3-TerminusBold24x12 and its glyph coverage is known and small; an ellipsis
+# character is not in it, so it would look correct on a laptop and draw as a
+# blank box on the deck. The same trap has caught this project before.
+ELLIPSIS = "..."
+
+# How wide one field's value may be on a continuation row. Free text needs a
+# cap or a single long comment takes the whole row and shoves every other field
+# onto the next one -- and the comment is the field most likely to be long and
+# least likely to be read back. Anything not named here is shown in full.
+_VALUE_CAP = {"comment": 24}
+
+
+def clip(text, limit):
+    """`text`, or as much of it as fits in `limit` with `...` on the end."""
+    text = str(text or "")
+    if limit <= 0 or len(text) <= limit:
+        return text
+    if limit <= len(ELLIPSIS):
+        return text[:limit]
+    return text[:limit - len(ELLIPSIS)] + ELLIPSIS
+
+
+def log_extra_fields(activity_type, rec):
+    """Which fields the continuation rows show, in the order they show them.
+
+    THE ACTIVITY'S OWN ORDER, continuing where the first row stopped. Not a
+    fixed list: the activity type's field order is the operator's statement
+    about what matters on this contact, and a hardcoded "line two is where they
+    are" is wrong for every custom type. A county-hunting type puts county
+    second and a satellite type puts the bird second, and neither wants a row
+    spent on a grid square it never asks for.
+
+    Anything the record carries that the activity does not ask for follows, in
+    the stored order. That is what makes this useful on general logging, whose
+    four fields all fit on the first row: a contact still carries a state, a
+    power and a rig, and those are worth the second row even though no activity
+    asked for them. It is also what keeps a contact logged under some other
+    type readable.
+    """
+    import qsolog as _q
+    out, seen = [], set(_LINE1_FIELDS) | set(_LINE_SKIP)
+    for name in (getattr(activity_type, "entry", ()) or ()):
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    for name in _q._FIELD_ORDER:
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    for name in sorted(rec):
+        if name not in seen:
+            out.append(name)
+    return out
+
+
+def log_extra_rows(rec, fields, width, rows):
+    """`rows` continuation lines of `label value` pairs, wrapped and padded.
+
+    Labelled rather than columnar: rows of different shapes cannot share one
+    set of column headings, and an unlabelled `PA Centre FN10` stops being
+    readable the moment one of the three is missing.
+
+    **A field is never split across two rows.** One that does not fit in what
+    is left of a row starts the next one instead, which is what makes the rows
+    readable at a glance -- a `Coun` at the end of one row and `ty Centre` at
+    the start of the next is worse than a short row. A field too wide for a
+    whole row is clipped with `...`, because it can never fit anywhere and
+    dropping it silently would hide what is in the log.
+
+    Always exactly `rows` strings, blank ones included. A contact has to be the
+    same height whatever is filled in, because the arrows select whole contacts
+    and a list whose row height moved could not be walked predictably.
+    """
+    import qsolog as _q
+    indent = "      "
+    room = max(10, width - len(indent))
+    parts = []
+    for name in fields:
+        value = _q.display_value(name, rec.get(name, ""))
+        if not value:
+            continue
+        value = clip(value, _VALUE_CAP.get(name, 0))
+        parts.append(clip(f"{_q.field_label(name)} {value}", room))
+
+    out, line = [], ""
+    for part in parts:
+        if not line:
+            line = part
+        elif len(line) + 3 + len(part) <= room:
+            line += "   " + part
+        else:
+            out.append(indent + line)
+            if len(out) >= rows:
+                line = ""
+                break
+            line = part
+    if line and len(out) < rows:
+        out.append(indent + line)
+    while len(out) < rows:
+        out.append("")
+    return out[:rows]
 
 
 def no_keyboard_screen(bonded, width, height, tick=0, can_pair=True):

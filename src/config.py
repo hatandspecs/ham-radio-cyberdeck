@@ -100,6 +100,13 @@ SCHEMA = {
     "LOGGING":         ("no", str, "yes | no — the contact log, off by default"),
     "LOG_PATH":        ("", str, "contact log file; blank means "
                                  "~/.local/share/cyberdeck/qso.log"),
+    # How tall one contact is in the list. One line is the contact; two adds
+    # where they are; three adds this station's side and the notes. A contact
+    # always takes exactly this many rows, blank ones included, because the
+    # arrows select whole contacts.
+    "LOG_LINES":       ("1", str, "1 | 2 | 3 — lines per contact in the log "
+                                  "list; more shows more fields, fewer shows "
+                                  "more contacts"),
     # There is deliberately no POTA setting. POTA is an activity — ACTIVITY =
     # POTA — because a toggle and an activity that both mean "show the park
     # fields" are two controls for one thing, and they drift.

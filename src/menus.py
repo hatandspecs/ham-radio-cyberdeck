@@ -197,7 +197,7 @@ def activity_type_menu(names, current="", labels=None):
 def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
              qrz_pending=0, operating="auto", has_tqsl=False,
              activity="", dupe="band+mode", log_name="",
-             activity_type="", callbook_state=""):
+             activity_type="", callbook_state="", log_lines=1):
     # has_qrz_key and qrz_pending are accepted and ignored. They fed the
     # removed QRZ upload item; the parameters stay so that a caller passing
     # them is not a TypeError, and so that reinstating an upload item is a
@@ -268,14 +268,22 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # lists them, where the operator is already looking at what exists and
         # can see what is worth copying -- a separate menu item asked them to
         # decide to create one before seeing the alternatives.
-        ("v", f"  Activity type              "
+        ("v", f"Activity type                "
               f"{activity_type or 'general logging'}"),
+        # How tall a contact is in the list. What the extra rows SHOW is
+        # deliberately not described here: it is the activity type's own field
+        # order, carrying on from where the first row stops, so it differs with
+        # the type and any description written here would be wrong for most of
+        # them.
+        ("n", f"Lines per contact            "
+              f"{log_lines} of 3"),
     ]
     if needs_reference(activity_type):
         # Only when the selected activity has a reference field. Otherwise
         # this station's own park is not an unset field, it is a question that
         # does not apply to the operating being done.
-        items.append(("p", f"    My reference             {park or 'not set'}"))
+        items.append(("p", f"My reference                 "
+                           f"{park or 'not set'}"))
     extra = []
     if has_tqsl:
         # Signing needs a callsign certificate and tqsl blocks rather than

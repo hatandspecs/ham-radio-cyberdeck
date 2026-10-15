@@ -1037,6 +1037,231 @@ def append(path, rec):
     return line
 
 
+# Labels for the fields the DECK fills in rather than the operator choosing
+# them. The 28 selectable ones take their labels from
+# `activities.ENTRY_FIELDS`, so the detail screen and the selection screen
+# cannot drift apart; these are the rest -- what identifies the contact and
+# what the station contributed to it.
+_META_LABELS = {
+    "when":          "UTC",
+    "call":          "Call",
+    "band":          "Band",
+    "mode":          "Mode",
+    "freq":          "Freq",
+    "my_call":       "My call",
+    "my_grid":       "My grid",
+    "my_park":       "My ref",
+    "serial_tx":     "My nr",
+    "exchange_tx":   "My exch",
+    "activity":      "Activity",
+    "activity_type": "Type",
+    "contest_id":    "Contest",
+    "tx_backend":    "Via",
+}
+
+# Not editable. `when` is the key `update` finds the contact by, and it is the
+# one field nobody typed. Everything else on a contact was either typed or read
+# off the radio, and both can be wrong.
+NOT_EDITABLE = ("when",)
+
+
+# Stored in hertz, shown grouped: 7.185.000, the way the radio's own display
+# reads it. Stored raw because `band_for` needs hertz and the ADIF export needs
+# megahertz; shown grouped because three decimals throws away the tens of hertz,
+# which is the part that matters inside a 31 Hz-wide signal and the part that
+# lets the deck's reading be checked against the radio.
+HERTZ_FIELDS = ("freq", "freq_rx")
+
+
+def display_value(name, value):
+    """One field's value as a screen should show it.
+
+    Only frequencies differ from what is stored, and `parse_freq` reads the
+    grouped form straight back, so a field shown this way can be edited as it
+    is shown -- which is the whole point. `_edit_entry` normalizes it to hertz
+    on the way in.
+    """
+    text = str(value or "").strip()
+    if not text or name not in HERTZ_FIELDS:
+        return text
+    # Imported here rather than at the top: render imports this module the same
+    # lazy way, and at module level the two would be a cycle.
+    import render as _r
+    return _r.frequency(parse_freq(text)) or text
+
+
+def field_label(name):
+    """The label for one stored field, selectable or not."""
+    if name in _META_LABELS:
+        return _META_LABELS[name]
+    try:
+        import activities as _act
+        return _act.ENTRY_FIELDS.get(name, (None, name))[1]
+    except Exception:
+        return name
+
+
+def detail_rows(rec, activity_type=None):
+    """One contact, field by field, for the detail screen.
+
+    `[(name, label, value, editable), ...]` in `_FIELD_ORDER` -- the same order
+    the stored line uses, so a line read over SSH and this screen put the same
+    thing in the same place.
+
+    Shows every field that HAS a value, plus every field the contact's own
+    activity type asks for even when it is empty. The second half is what makes
+    this screen able to fix an omission rather than only a typo: a park
+    activation that logged a contact with the reference left blank shows the
+    blank, and it can be filled in here.
+
+    Fields the record carries that this program has never heard of are shown
+    too, at the end. The file is hand-editable over SSH by design, and a
+    detail screen that silently hid what somebody added to it would be lying
+    about what is in the log.
+    """
+    wanted = set()
+    if activity_type is not None:
+        for name in getattr(activity_type, "entry", ()) or ():
+            wanted.add(name)
+    out, seen = [], set()
+    for name in _FIELD_ORDER:
+        value = str(rec.get(name, "") or "")
+        if not value and name not in wanted:
+            continue
+        seen.add(name)
+        out.append((name, field_label(name), display_value(name, value),
+                    name not in NOT_EDITABLE))
+    for name in sorted(rec):
+        if name in seen or name in _FIELD_ORDER:
+            continue
+        out.append((name, field_label(name),
+                    display_value(name, rec[name]), True))
+    return out
+
+
+def update(path, when, call, changes):
+    """Change one already-logged contact. Returns the new record, or None.
+
+    This file was append-only by design, and `docs/qso_log_design.md` said so.
+    The reason was good: a log that is only ever appended to cannot be damaged
+    by a failed write, and the deck's whole power story is that the plug gets
+    pulled. The reason it changed is also good -- a callsign taken down wrong
+    is wrong in the exported ADIF and in every upload made from it, and the
+    recovery path was "edit the file over SSH", which is no recovery path at
+    all from a park bench.
+
+    So the file is still only ever REPLACED WHOLE, never written in place:
+    temp file beside it, fsync, `os.replace`. That is atomic on the same
+    filesystem, so a pulled plug leaves either the old file or the new one and
+    never a half-written log. The directory is fsynced too, because the rename
+    itself is metadata and is not durable until that happens.
+
+    The contact is named by `when` and guarded by `call`, not by a line number.
+    An index is a promise about a file this program does not own: it is
+    documented as hand-editable over SSH, and an index that shifted by one
+    would rewrite somebody else's contact. `when` is to the second, so it is
+    unique in practice; the `call` guard turns the one-in-a-million collision
+    into a refusal rather than a corruption.
+
+    `changes` with an empty value removes that field, because clearing a field
+    an operator typed by mistake has to be possible.
+    """
+    records = read(path)
+    hit = None
+    for i, rec in enumerate(records):
+        if rec.get("when") == when:
+            if call and rec.get("call", "").upper() != str(call).upper():
+                # Same instant, different station: refuse rather than guess.
+                return None
+            hit = i
+            break
+    if hit is None:
+        return None
+
+    rec = dict(records[hit])
+    for key, value in (changes or {}).items():
+        value = "" if value is None else str(value).strip()
+        if value:
+            rec[key] = value
+        else:
+            rec.pop(key, None)
+    # `when` alone is the key, and it is not editable: a contact whose
+    # timestamp can be retyped is a contact whose duplicate check means
+    # nothing, and it is the one field the operator did not type in the first
+    # place.
+    #
+    # The callsign IS editable, and is the whole reason this function exists. A
+    # call taken down wrong is wrong in the exported ADIF and in every upload
+    # made from it. It is only the lookup GUARD, not part of the key -- the
+    # caller passes the old one to find the contact and the new one in
+    # `changes`.
+    rec["when"] = when
+    if not rec.get("call"):
+        rec["call"] = records[hit].get("call", "")
+    records[hit] = rec
+
+    _rewrite(path, records)
+    return rec
+
+
+def _rewrite(path, records):
+    """Replace the log with `records`, atomically. Shared by update and remove.
+
+    Never written in place: a temp file beside it, `fsync`, then `os.replace`,
+    which is atomic within a filesystem. A power cut leaves either the old file
+    or the new one and never part of one, which is the property the original
+    append-only design was protecting and the only one worth keeping.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp = os.path.join(directory, f".{os.path.basename(path)}.rewrite")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for one in records:
+                fh.write(format_record(one) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        # The rename is metadata. Without this the new file's CONTENTS are on
+        # the card and the fact that it is now the log is not.
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def remove(path, when, call):
+    """Delete one logged contact. Returns the record removed, or None.
+
+    Found and guarded exactly as `update` finds and guards: by timestamp, with
+    the callsign as a check, never by a line number. The whole file is replaced
+    the same atomic way.
+
+    Deliberately not a "deleted" marker or a move to a second file. A contact
+    logged by mistake -- a test transmission, a duplicate typed twice, somebody
+    else's callsign fumbled in -- is not history worth keeping, and a log that
+    carries tombstones exports them or needs code everywhere to skip them. The
+    confirmation on the panel is what makes this safe; see `_delete_qso`.
+    """
+    records = read(path)
+    for i, rec in enumerate(records):
+        if rec.get("when") != when:
+            continue
+        if call and rec.get("call", "").upper() != str(call).upper():
+            return None
+        gone = records.pop(i)
+        _rewrite(path, records)
+        return gone
+    return None
+
+
 def read(path):
     """Every record in the file, oldest first.
 

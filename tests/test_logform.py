@@ -43,8 +43,18 @@ def names(form):
 
 
 print("the tab order puts typing first and prefill last")
+# Typed first, so the common contact is call, reports, name, Enter. Then what
+# is not typed: the power off the radio, the standing comment, and the
+# frequency and mode last -- when those were second, tabbing off the callsign
+# landed on the frequency and the next thing typed went into it.
 equals("general logging", names(logform.LogForm(activities.GENERAL)),
-       ["call", "rst_s", "rst_r", "name", "qth", "comment", "freq", "mode"])
+       ["call", "rst_s", "rst_r", "name", "tx_power", "comment",
+        "freq", "mode"])
+# `comment` is in GENERAL's own field list now, and the form appends a comment
+# field to every activity that does NOT list one. Both firing put two Comment
+# fields on one form.
+equals("the comment appears once, not twice",
+       names(logform.LogForm(activities.GENERAL)).count("comment"), 1)
 equals("a park activation adds the reference and this station's own",
        names(logform.LogForm(activities.BUILTIN["POTA"])),
        ["call", "rst_s", "rst_r", "park", "name", "comment", "my_park",
@@ -274,7 +284,11 @@ for w, h in ((50, 12), (66, 20), (80, 24), (100, 30)):
     check(f"{w}x{h}: the form is on it", "K3PP" in flat, flat[:200])
     check(f"{w}x{h}: so is the contact already logged", "W3ABC" in flat,
           flat[:200])
-    check(f"{w}x{h}: and the footer says how to move", "Tab" in flat,
+    # The arrows, not Tab. Tab still works and always did; the arrows are what
+    # this screen gives field movement to now, and they are the ones a footer
+    # has to name because Tab is the guessable one.
+    check(f"{w}x{h}: and the footer says how to move",
+          "\u2190\u2192 field" in flat,
           flat[-120:])
 
 # With no form the old single-line entry is still drawn, which is what

@@ -102,8 +102,14 @@ for term in ("xterm", "linux"):
     check(f"{term}: the log screen is drawn", "LOG" in body, body[:120])
     check(f"{term}: the activity is named", "CONTEST" in body, body[:120])
     check(f"{term}: the form is there", "Call" in body, body[-300:])
-    check(f"{term}: the footer says how to move",
-          "Tab field" in body and "Esc back" in body, body[-120:])
+    check(f"{term}: the footer says how to move between fields",
+          "\u2190\u2192 field" in body, body[-120:])
+    check(f"{term}: and how to reach the contacts above",
+          "\u2191\u2193 pick" in body, body[-120:])
+    # Not guessable, so it has to be on the footer. Esc is, and came off it to
+    # make room -- all seven keys do not fit in 66 columns.
+    check(f"{term}: and how to clear the entry", "^X clear" in body,
+          body[-120:])
     check(f"{term}: this station's exchange came from the configuration",
           "CENT" in body, body[-300:])
     check(f"{term}: and is marked sticky", "*" in body, body[-300:])
@@ -643,7 +649,7 @@ check("Esc keeps it", "Pennsylvania QSO Party" in text, text)
 check("and it was not written alongside itself",
       text.count("[PAQP]") == 1, text)
 check("backing out returns to the name prompt, prefilled",
-      "Name for this activity" in body and "PAQP" in body, body[:200])
+      "Name for this activity type" in body and "PAQP" in body, body[:200])
 
 body, text = with_type(["\x0e", F1["linux"]] + RENAME + ["\r"],
                        "Enter replaces it")
@@ -690,9 +696,187 @@ body, left = with_activity(["\x0e", F2["linux"], "n", "F", "D", "\r",
 check("it backs out onto the log screen, not the activities list",
       "ACTIVITIES" not in body, body[:200])
 
+print("\nreading back and correcting a contact already logged")
+# The arrows pick a logged contact; Tab and Shift-Tab move between fields,
+# which is what they already did. The arrows used to be a redundant second way
+# to do the same thing, so reading back and correcting what was already logged
+# had no keys at all and could only be done over SSH.
+ARROW_UP, ARROW_DOWN = "\x1b[A", "\x1b[B"
+LOGGED = ("W1AW", "KD3CPP", "W3TM")
+
+
+def with_logged(keys, label, settle=3.2, lines=""):
+    """Run with three contacts on disk. Returns (body, the log file's text)."""
+    import datetime as _dt
+    with tempfile.TemporaryDirectory() as tmp:
+        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        log = os.path.join(tmp, "qso.log")
+        with open(log, "w") as fh:
+            for i, call in enumerate(LOGGED):
+                fh.write(f"when={stamp}T14:0{i}:00Z call={call} band=40m "
+                         f"mode=SSB rst_s=59 rst_r=59 name=N{i} state=PA "
+                         f"tx_power=6 my_rig=FTX-1 my_call=KD3CCO\n")
+        conf_path = os.path.join(tmp, "cyberdeck.conf")
+        with open(conf_path, "w") as fh:
+            fh.write(STATION + "LOGGING = yes\n"
+                     + f"LOG_PATH = {log}\n"
+                     + (f"LOG_LINES = {lines}\n" if lines else ""))
+        body = show(label, run(keys=keys, settle=settle, term="linux",
+                               conf=conf_path))
+        return body, open(log).read()
+
+
+body, _ = with_logged(["\x0e"], "nothing picked yet")
+check("the form has the keyboard", "Enter log" in body, body[-200:])
+check("and it says the arrows pick", "\u2191\u2193 pick" in body, body[-200:])
+
+body, _ = with_logged(["\x0e", ARROW_UP], "Up picks a contact")
+# The footer is the assertion, not the highlight: the picked row is drawn in
+# reverse video, which is an attribute and not text, so a screen scrape cannot
+# see it. What the footer says is what tells the operator Enter changed
+# meaning, and that is the part worth pinning.
+check("Enter now opens rather than logs", "Enter open" in body, body[-200:])
+check("and Esc deselects rather than leaving",
+      "Esc deselect" in body, body[-200:])
+check("the log screen is still what is drawn", "UTC" in body, body[:200])
+
+# Up from the form picks the NEWEST, because "did that last one go in" is
+# almost always the question.
+body, _ = with_logged(["\x0e", ARROW_UP, "\r"], "Up then Enter opens the newest")
+check("the contact screen opens", "CONTACT" in body, body[:120])
+check("on the newest contact", LOGGED[-1] in body, body[:120])
+check("and says where it is in the log", "3 of 3" in body, body[:120])
+
+body, _ = with_logged(["\x0e", ARROW_UP, ARROW_UP, "\r"],
+                      "Up twice walks back one")
+check("the arrows walk the list", "2 of 3" in body, body[:120])
+check("onto the contact before it", LOGGED[1] in body, body[:120])
+
+body, _ = with_logged(["\x0e", ARROW_UP, "\r"], "the contact, field by field")
+check("the timestamp is shown", "UTC" in body, body[:400])
+check("the callsign is shown", "Call" in body, body[:400])
+check("so are fields the list has no room for",
+      "My rig" in body and "FTX-1" in body, body[:400])
+check("and it says how to change one", "Enter edit" in body, body[-120:])
+
+# A mis-hit arrow must not cost the screen, and must not eat the first letter
+# of a callsign either.
+body, _ = with_logged(["\x0e", ARROW_UP, "\x1b"], "Esc deselects first")
+check("one Esc puts the keyboard back on the form",
+      "Enter log" in body, body[-200:])
+check("and does not leave the log screen", "UTC" in body, body[:200])
+
+body, _ = with_logged(["\x0e", ARROW_UP] + list("KD3ZZZ"),
+                      "typing returns to the form")
+check("the callsign is typed in full, first letter included",
+      "KD3ZZZ" in body, body[-400:])
+check("and the selection is gone", "Enter log" in body, body[-200:])
+
+print("\nan edit reaches the file")
+# Ctrl-U clears the line, then the corrected call is typed and saved. The FILE
+# is the assertion: the screen could say anything.
+body, text = with_logged(
+    ["\x0e", ARROW_UP, ARROW_UP, "\r", "\r", "\x15"]
+    + list("KD3CCP") + ["\r"], "correct a mis-taken callsign")
+check("the corrected callsign is in the file", "call=KD3CCP" in text, text)
+check("the wrong one is gone", "call=KD3CPP" not in text, text)
+check("the contacts either side are untouched",
+      "call=W1AW" in text and "call=W3TM" in text, text)
+equals("and there are still three of them",
+       len([l for l in text.splitlines() if l.strip()]), 3)
+
+print("\nlines per contact")
+# What the extra rows SHOW is the activity's own field order, carrying on from
+# where the first row stops, then anything else the record holds. The fixture
+# logs under general logging, whose four fields all fit on the first row, so
+# everything here comes from that second tier -- which is exactly why the
+# second tier exists.
+body, _ = with_logged(["\x0e"], "one line each", lines="1")
+check("one line shows the contact", "W3TM" in body, body[:300])
+check("and nothing below it", "State PA" not in body, body[:300])
+
+body, _ = with_logged(["\x0e"], "two lines each", lines="2")
+check("two lines carry on down the fields", "State PA" in body, body[:400])
+
+body, _ = with_logged(["\x0e"], "three lines each", lines="3")
+check("three lines reach what this station ran",
+      "My rig FTX-1" in body or "My W 6" in body, body[:400])
+# A contact is the same height whatever is filled in, because the arrows
+# select whole contacts.
+check("the contact's own band is shown, which the first row has no room for",
+      "Band 40m" in body, body[:400])
+
+print("\ndeleting a contact from the contact screen")
+# Behind a confirmation, like the activity and activity-type deletes, and for
+# a stronger reason: those throw away something the operator can rebuild and
+# this throws away a contact nothing on the deck can recover. The FILE is the
+# assertion -- the harness quits with Ctrl-Q and every key but Enter keeps the
+# contact, so the last screen is never the question.
+body, text = with_logged(["\x0e", ARROW_UP, "d"], "d alone deletes nothing")
+check("the question on its own destroys nothing",
+      f"call={LOGGED[-1]}" in text, text)
+
+body, text = with_logged(["\x0e", ARROW_UP, "d", "\x1b"], "Esc keeps it")
+check("Esc keeps the contact", f"call={LOGGED[-1]}" in text, text)
+
+body, text = with_logged(["\x0e", ARROW_UP, "\r", "d", "\r"],
+                         "Enter deletes it")
+check("the contact is gone from the file",
+      f"call={LOGGED[-1]}" not in text, text)
+check("the others are untouched",
+      f"call={LOGGED[0]}" in text and f"call={LOGGED[1]}" in text, text)
+equals("and two are left", len([l for l in text.splitlines() if l.strip()]), 2)
+
+print("\nthe duplicate warning is not squatted on")
+# One line carries three things: what the operator just did, the duplicate
+# warning, and the callbook's status. They shared one attribute, so whichever
+# was written last won -- and the callbook, which polls, was always last. The
+# dupe appeared for an instant and was then overwritten by "name=..., qth=...".
+#
+# A successful lookup now says nothing at all: the fields filling in IS the
+# message, and the one line this screen has is worth more than repeating it.
+
+
+def with_worked(keys, label, dupe="call", settle=3.0):
+    """Run with one contact already worked. Returns the message line."""
+    import datetime as _dt
+    with tempfile.TemporaryDirectory() as tmp:
+        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        log = os.path.join(tmp, "qso.log")
+        with open(log, "w") as fh:
+            fh.write(f"when={stamp}T14:00:00Z call=W1AW band=40m mode=PSK31 "
+                     f"rst_s=599 rst_r=599 my_call=KD3CCO\n")
+        conf_path = os.path.join(tmp, "cyberdeck.conf")
+        with open(conf_path, "w") as fh:
+            fh.write(STATION + "LOGGING = yes\nCALLBOOK = no\n"
+                     + f"DUPE_CHECK = {dupe}\n"
+                     + f"LOG_PATH = {log}\n")
+        scr = run(keys=keys, settle=settle, term="linux", conf=conf_path)
+        show(label, scr)
+        return "\n".join(scr.display)
+
+
+body = with_worked(["\x0e"] + list("W1AW"), "a callsign already worked")
+check("the duplicate warning is on the message line",
+      "** W1AW worked" in body, body[-300:])
+check("and says when, so it can be judged", "14:00" in body, body[-300:])
+
+body = with_worked(["\x0e"] + list("W9ZZZ"), "a callsign not worked")
+check("a station not worked gets no warning", "**" not in body, body[-300:])
+
+# The receipt for the last contact must not outlive it either: it sat on this
+# line through the next callsign and hid that contact's warning the same way.
+body = with_worked(["\x0e"] + list("W9ZZZ") + ["\r"] + list("W1AW"),
+                   "log one, then type a worked call", settle=3.4)
+check("the previous contact's receipt is gone once typing starts",
+      "logged W9ZZZ" not in body, body[-300:])
+check("and the new callsign's warning gets the line",
+      "** W1AW worked" in body, body[-300:])
+
 print("\nEsc returns to the conversation")
 body, _ = deck(["\x0e", "\x1b"], "LOGGING = yes\n", label="Ctrl-N then Esc")
 check("back on the conversation screen", "F1 menu" in body, body[-200:])
-check("and the log screen is gone", "Tab field" not in body, body[-200:])
+check("and the log screen is gone", "\u2190\u2192 field" not in body,
+      body[-200:])
 
 sys.exit(report())

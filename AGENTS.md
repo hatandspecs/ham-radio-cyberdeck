@@ -54,6 +54,35 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   restarted deck comes back on that carrier`). Re-run that file on its own
   before believing it: they pass in isolation. Never run two test files at
   once, for the same reason — they share the modem and the carrier.
+- **The log is no longer append-only, and is still never written in place**
+  (2026-10-14). `qsolog.update` corrects one field of a logged contact by
+  replacing the file WHOLE: temp file, `fsync`, `os.replace`, then an `fsync`
+  of the DIRECTORY, because the rename is metadata and is not durable without
+  it. A pulled plug leaves the old log or the new one, never part of one. The
+  contact is found by its timestamp and guarded by its callsign, never by a
+  line number — the file is hand-editable over SSH, so an index that shifted
+  would rewrite somebody else's contact, and a guard that does not match is a
+  refusal rather than a guess. `when` is the only field that cannot be edited;
+  the callsign can, and is the reason the feature exists. `docs/qso_log_design.md`
+  §7e carries the reversal and §12 records the decision as closed.
+- **On the log screen the arrows pick a contact, not a form field.** Tab and
+  Shift-Tab move between fields and always did; the arrows were a redundant
+  second way to do that, which is why reading the log back had no keys at all.
+  Three rules keep the fast path intact, and breaking any of them is a
+  regression: Esc deselects before it leaves the screen, typing always goes to
+  the form and drops the selection (so a nudged arrow cannot eat the first
+  letter of a callsign), and the footer says `Enter open` instead of
+  `Enter log` exactly when Enter has changed meaning. `LOG_LINES` is 1, 2 or 3
+  rows per contact, and a contact always takes exactly that many rows — blank
+  ones included — because a row height that varied with how much was filled in
+  could not be walked predictably.
+- **Logger messages do not go to the transcript.** `session.note` writes into
+  the keyboard-to-keyboard transcript, which is a record of what was said on
+  the air. Twenty logger notes were filling it with lines nobody ever sent, and
+  they were invisible where they mattered: the log screen draws `log_message`,
+  not the transcript. Use `self._log_note()` from anything in the logger, which
+  routes to the log screen and to the picker or activities list when that is
+  where the message was raised.
 - **A field can be stored, exported, and still invisible.** A log field needs
   an entry in THREE places: `activities.ENTRY_FIELDS` to be selectable,
   `qsolog._FIELD_ORDER` to be written to the line, and `qsolog._ADIF_FIELDS` to

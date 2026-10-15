@@ -261,8 +261,24 @@ class ActivityType:
 # The general activity: what the logger is when no activity is chosen. Its
 # grammar is the one the log has always had, so choosing nothing changes
 # nothing.
+# An ordinary contact, with nothing special being worked. The fields nobody
+# types are on it regardless -- the time, the callsign, and the band,
+# frequency and mode read from the radio -- so these are the ones that get
+# typed or come off the rig.
+#
+# `name` is here because the callbook lookup writes into it: with no `name` on
+# the form there is nowhere for a looked-up name to go and the feature reduces
+# to a line on the message bar. `qth` is not here, so a looked-up QTH does
+# exactly that; an operator who wants the field adds it from the selector.
+#
+# The order is not the order these get listed in conversation. What gets TYPED
+# leads, so the common contact is call, reports, name, Enter. `tx_power` is
+# read off the radio and `comment` is an afterthought by nature, so both
+# follow. The frequency and mode come last whatever an activity asks for,
+# because when they were second, tabbing off the callsign landed on the
+# frequency and the next thing typed went into it.
 GENERAL = ActivityType("GENERAL", label="General logging",
-                   entry=("rst_s", "rst_r", "name", "qth"))
+                   entry=("rst_s", "rst_r", "name", "tx_power", "comment"))
 
 BUILTIN = {
     "GENERAL": GENERAL,

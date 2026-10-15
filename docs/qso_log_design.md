@@ -106,7 +106,8 @@ the interface gets wrong. The field names are the ADIF names where ADIF has
 one, so the export is a rename rather than a translation.
 
 **Why not JSON or SQLite.** JSON requires rewriting the whole file to append,
-which is the opposite of what an append-only record wants. SQLite survives
+and appending is what happens on every contact — a correction (§7e) rewrites,
+but a correction is rare and a contact is not. SQLite survives
 power loss well but is not readable or repairable with the tools on the deck,
 and the failure mode of a corrupt database is worse than the failure mode of a
 truncated text file — the latter loses one line.
@@ -368,8 +369,9 @@ Two kinds of field, and the distinction is the reason the grammar is short:
 activity and adds one. There is no counter file, deliberately: a counter is a
 second source of truth that can disagree with the log, and its failure mode —
 a serial sent twice, or twenty skipped — is not noticed until the log is
-checked. The log is the append-only thing that survives a power pull, so the
-log is what the serial comes from. Scoped per activity, so two events in one
+checked. The log is the thing that survives a power pull, so the log is what
+the serial comes from. (It is no longer strictly append-only — §7e — but it is
+still never written in place, so this holds.) Scoped per activity, so two events in one
 weekend each count from their own start.
 
 ### 6b.4 Saving and reusing a definition
@@ -867,11 +869,14 @@ it seventy-nine more times while the operator watches. A *permanent* failure
 does not stop it — a single malformed record should not block the eighty
 behind it.
 
-**The outbox is a sidecar, not a flag in the log.** `qso.log` stays
-append-only; rewriting it to mark a contact uploaded would make it neither
-append-only nor trustworthy after a power cut mid-write. Entries are keyed by
-the contact's own identity — time, call, band, mode — rather than by line
-number, so hand-editing the log over SSH, which is the documented recovery
+**The outbox is a sidecar, not a flag in the log.** Upload state is not the
+log's business: it belongs to a particular upload to a particular service, and
+a contact can be sent to two of them. The log says what was worked. §7e added
+the ability to correct a contact, so "the log is never rewritten" is no longer
+the reason — the reason is that a flag per service per contact would make the
+log a record of this program's housekeeping rather than of the air. Entries are
+keyed by the contact's own identity — time, call, band, mode — rather than by
+line number, so hand-editing the log over SSH, which is the documented recovery
 path, does not silently re-upload everything after the edit. The sidecar can
 be deleted entirely and costs nothing but one round of duplicate detection,
 which QRZ handles.
@@ -914,6 +919,49 @@ EXTENDED=
 and look for `RESULT=OK`. Nothing else about the design changes — the outbox,
 the drain, the three outcomes and the operator-initiated trigger were all
 built around an API that behaves exactly as documented here.
+
+## 7e. Reading back and correcting a contact
+
+The list has one row per contact and a contact has up to forty fields, so most
+of what is recorded cannot be seen on the panel at all. `LOG_LINES` gives a
+contact one, two or three rows — the contact, then where the other station is,
+then what this station ran — and a contact always occupies exactly that many
+rows, blank ones included, because the arrows select whole contacts and a row
+height that varied with how much happened to be filled in could not be walked
+predictably.
+
+The arrows pick a contact; Tab and Shift-Tab move between form fields, which
+is what they already did. The arrows were previously a second, redundant way
+to do the same thing, which is why reading the log back had no keys at all.
+Enter on a picked contact opens it field by field; Enter on a field edits it;
+Esc steps back out one level at a time. Three rules keep the fast path intact:
+Esc deselects before it leaves the screen, typing always goes to the form and
+drops the selection, and the footer says `Enter open` rather than `Enter log`
+exactly when Enter has changed meaning.
+
+`when` is the only field that cannot be changed. It is the key the contact is
+found by, and the one field the operator did not type. The callsign *is*
+editable, and is the reason this exists.
+
+### The log is no longer append-only, and is still never written in place
+
+§4 chose append-only, and the reason was sound: an append cannot damage what is
+already in the file, and this deck's whole power story is that the plug gets
+pulled. What that reasoning missed is that a wrong record is also damage, and
+one the operator can see and could not fix.
+
+`qsolog.update` replaces the file WHOLE: a temp file beside it, `fsync`,
+`os.replace`, then an `fsync` of the directory because the rename is metadata
+and is not durable until that happens. `os.replace` is atomic within a
+filesystem, so a power cut leaves either the old log or the new one and never
+part of one. The property that mattered — no torn write survives a pulled plug
+— is kept; the one that was given up is that the file only ever grows.
+
+The contact is found by its timestamp and guarded by its callsign, never by a
+line number. An index is a promise about a file this program does not own: the
+log is documented as hand-editable over SSH, and an index that had shifted by
+one would rewrite a different contact. A guard that does not match is a
+refusal, not a guess.
 
 ## 8. Time
 
@@ -1317,8 +1365,10 @@ and in batch mode it cannot, so an unset value is called out at export time.
   `lotw.upload()` usable in the field. It also puts a private key on an SD
   card that travels, to save a step that can be done at home the same evening.
   Currently no, and there is deliberately no setting for it.
-* **Whether the comment field wants to be editable after commit.** It is the
-  one field whose content is often thought of a minute later. Editing it means
-  the log is no longer append-only, which §4 chose deliberately; the current
-  answer is to hand-edit the file over SSH, which §4 already names as the
-  recovery path for everything else.
+* ~~Whether the comment field wants to be editable after commit.~~ **Decided
+  2026-10-14: every field of a logged contact is editable on the panel.** See
+  §7e. The question was framed too narrowly — the field that most needs
+  correcting is the callsign, not the comment, because a call taken down wrong
+  is wrong in the exported ADIF and in every upload made from it. "Hand-edit
+  the file over SSH" is no recovery path from a park bench, which is where the
+  mistakes get made.
