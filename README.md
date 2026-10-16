@@ -1,9 +1,13 @@
-# Keyboard-to-Keyboard Cyberdeck
+# Ham Radio Cyberdeck
 
-A self-contained HF station terminal. fldigi does the modem work invisibly; a
-purpose-built terminal is the only thing on the screen. No window manager, no
-mouse, no pointer, nothing to click — the feel of a dedicated 1980s packet
-terminal over modern digital modes.
+A self-contained HF station terminal. It started as a keyboard-to-keyboard
+digimode terminal and outgrew the name: the digital modes are now one of three
+applications on it, beside the contact log and the station's own settings.
+
+fldigi does the modem work invisibly; a purpose-built terminal is the only
+thing on the screen. No window manager, no mouse, no pointer, nothing to
+click — the feel of a dedicated 1980s packet terminal over modern digital
+modes.
 
 **Three applications of equal standing**, walked with `^O` and `^P`:
 
@@ -18,6 +22,10 @@ made the digimode screen the deck's home by accident rather than by anyone's
 decision. They are peers now, each one keystroke from both others.
 
 ![The conversation screen](docs/screens/conversation-matrix.png)
+
+The conversation screen, which is one of the three. **The deck now opens on
+`DECK & RIG`** — what this station is set to, before any of it goes on the
+air.
 
 ## Start here
 
@@ -38,8 +46,10 @@ rather than a demo mode.
 
 Full design rationale is in [design_doc.md](docs/design_doc.md). There is a
 write-up of why it exists and what it is like to operate at
-**[hatandspecs.github.io/hamradio — A Keyboard-to-Keyboard Cyberdeck for the
-FTX-1](https://hatandspecs.github.io/hamradio/articles/keyboard-to-keyboard-cyberdeck/)**.
+**[A Keyboard-to-Keyboard Cyberdeck for the
+FTX-1](https://hatandspecs.github.io/hamradio/articles/keyboard-to-keyboard-cyberdeck/)**,
+and on what it became in **[The Cyberdeck Gets a Logbook, and Three Equal
+Applications](https://hatandspecs.github.io/hamradio/articles/cyberdeck-logger-and-function-ring/)**.
 
 ### Color schemes
 
@@ -109,7 +119,7 @@ contacts made under different activities, and what made the master log below
 possible without adding anything.
 
 It is a **general** log, not an activity log — but activities are configurable.
-An activity type is a named, ordered list of fields, and that list doubles as
+A log schema is a named, ordered list of fields, and that list doubles as
 the entry grammar:
 
 ```ini
@@ -162,16 +172,24 @@ rewriting the log.
 HamQTH's username is the **callsign**, not the email address — the email is
 refused in a way that looks like a wrong password.
 
-**It is reachable from the panel.** `Ctrl-N` opens it, or `^O` from the
-digimode screen. The whole of it is worked from the keyboard:
+**It is reachable from the panel.** `^O` and `^P` reach it the way they reach
+every application — there is no key that jumps to the log, because a second
+route to one of the three and not the others is a key to remember for no
+gain. The whole of it is worked from the keyboard:
 
-* **An activity is a session; an activity type is the template it uses.** A
-  park activation on a Tuesday is an activity, with its own dated log file;
-  POTA is the type. Both go into every record, because the name is what a log
-  is filtered back to and the type is what says how to read the fields in it.
-* **Types are built on the panel** from the type picker: `c` copies one,
+* **An activity is a session; a log schema is the template it uses.** A park
+  activation on a Tuesday is an activity, with its own dated log file; POTA is
+  the schema. Both go into every record, because the name is what a log is
+  filtered back to and the schema is what says how to read the fields in it.
+* **The master log is an activity too** — always there, always first on the
+  list, and not deletable, because it is where every contact ever made is
+  kept whatever activity made it. Going back to it is something you select.
+* **Schemas are built on the panel** from the schema picker: `c` copies one,
   `n` starts from nothing, `d` deletes one. Pick the fields, order them, name
-  it — and what it writes is the same INI an operator edits over SSH.
+  it — and what it writes is the same INI an operator edits over SSH. Editing
+  the schema an activity is already using takes effect on the next contact
+  without leaving the activity; contacts already logged keep what they were
+  given, and a field added now is simply blank on them.
 * **28 selectable fields over two pages.** Page one is general and POTA
   logging; page two is the contest exchange, the zones and the other
   programs. Six more are on every contact and are not selectable because they
@@ -225,7 +243,9 @@ the conversation screen too, which is where they belong — the decoded text is
 the only real confirmation that tuning worked. See §8 of the design document
 for why there is no software spectrum.
 
-![The menu, F1](docs/screens/menu.png)
+`F1` opens the menu for whichever application you are in — see the three
+tables under [Keys](#keys). The screenshot that used to be here showed a
+single menu holding all of them, which the program no longer has.
 
 ![The mode picker, F3](docs/screens/mode-picker.png)
 
@@ -248,7 +268,7 @@ cannot be told about, since every other way in is behind `F1`.
 
 ### The log
 
-No screenshot yet. `Ctrl-N`, or `^O` from the conversation:
+No screenshot yet. `^O` from the conversation:
 
 ```text
  LOG  Bald Eagle SP  (POTA)  US-5678  40m  SSB      2 QSOs  1412Z
@@ -268,11 +288,11 @@ No screenshot yet. `Ctrl-N`, or `^O` from the conversation:
 ```
 
 The header names what the log is for — the activity, its type in parentheses,
-this station's reference, then the radio — and says `casual logging` when
+this station's reference, then the radio — and says `master log` when
 there is no activity rather than going blank, because a blank header cannot be
 told apart from one that is not displaying the name.
 
-The form's fields are whatever the activity type asks for, in the order it
+The form's fields are whatever the log schema asks for, in the order it
 asks for them. `↑` `↓` picks a contact above; `Enter` on one opens it field by
 field for correction.
 
@@ -339,9 +359,8 @@ and `F2` / `F3` are that application's own two sub-views.
 
 | Key | The log |
 |---|---|
-| `Ctrl-N` | Open it from the conversation |
 | `F2` | Activities — start, resume or delete a session |
-| `F3` | Activity type — select, copy or create one |
+| `F3` | Log schema — select, copy or create one |
 | `←` `→` | Move between fields on the entry form; `Tab` does too |
 | `↑` `↓` | Pick a logged contact; typing returns to the form |
 | `Enter` | Log the contact — or open the one picked above |
@@ -450,7 +469,7 @@ One menu per application. A line belonging to one is not on another's.
 | `a` | Export ADIF |
 | `m` `d` | Where the mode comes from; the duplicate rule |
 | `c` | Callbook lookup — `on`, `off`, or `no wifi` |
-| `e` `v` `n` | The activity, its type, and how many lines a contact takes in the list |
+| `e` `v` `n` | The activity, its log schema, and how many lines a contact takes in the list |
 | `p` | This station's own reference, when the type uses one |
 
 | `F1` in **deck & rig** | |
@@ -510,7 +529,7 @@ Nothing else in the repository reaches the deck.
 | [`src/config.py`](src/config.py) | `cyberdeck.conf` — the station's own settings, message memories, remembered state |
 | [`src/rigctld_client.py`](src/rigctld_client.py) | Frequency and mode from the radio. Documents a hamlib bug and a raw-CAT workaround |
 | [`src/qsolog.py`](src/qsolog.py) | The contact log: parsing, records, ADIF, storage. No I/O beyond the file |
-| [`src/activities.py`](src/activities.py) | Activity types — a named field list that doubles as the entry grammar |
+| [`src/activities.py`](src/activities.py) | Log schemas — a named field list that doubles as the entry grammar |
 | [`src/callbook.py`](src/callbook.py) | Callsign lookup — callook.info, then HamQTH. Cached; silent with no network |
 | [`src/qrzlog.py`](src/qrzlog.py) | Queued upload to a QRZ logbook. Cannot lose a contact |
 | [`src/lotw.py`](src/lotw.py) | LoTW through `tqsl`, which hangs rather than failing — so, carefully |

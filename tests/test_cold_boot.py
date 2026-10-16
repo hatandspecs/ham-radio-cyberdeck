@@ -36,6 +36,11 @@ from harness import check, equals, report
 from fake_fldigi import FakeFldigi, free_port
 from test_screen import run
 
+# The deck opens on its own settings screen. One ^O reaches the conversation:
+# the ring is settings | log | digimodes and the log is not on it while
+# logging is off, which it is in these fixtures.
+TO_CHAT = "\x0f"
+
 
 def conf_pointing_at(tmp, url):
     """The project's own configuration, with fldigi moved to `url`.
@@ -83,7 +88,10 @@ if __name__ == "__main__":
 
         # settle_s 0.2 so the saver's settle window expires many times over
         # during the run. If it is going to overwrite, it has every chance.
-        screen = run(state_path=state, conf=conf, settle=3.0, settle_s="0.2")
+        # ^O to the conversation: the deck opens on DECK & RIG, and what is
+        # being read here is the transcript.
+        screen = run(keys=[TO_CHAT], state_path=state, conf=conf, settle=3.0,
+                     settle_s="0.2")
         body = "\n".join(screen.display)
 
         after = read_state(state)
@@ -109,7 +117,8 @@ if __name__ == "__main__":
         timer = threading.Timer(1.0, fake.start)
         timer.start()
 
-        screen = run(state_path=state, conf=conf, settle=5.0, settle_s="0.2")
+        screen = run(keys=[TO_CHAT], state_path=state, conf=conf, settle=5.0,
+                     settle_s="0.2")
         timer.cancel()
         body = "\n".join(screen.display)
 

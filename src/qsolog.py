@@ -668,6 +668,72 @@ def for_activity(records, activity):
     return out
 
 
+def session_of(rec):
+    """`(activity, activity_start)` for one record — the session it is in.
+
+    A record with a name and no start is from before sessions existed, or was
+    hand-written over SSH. It gets an empty start, which groups every such
+    contact of that name into one session rather than discarding them.
+    """
+    name, _kind = activity_of(rec)
+    return name, str(rec.get("activity_start", "") or "")
+
+
+def for_session(records, activity, start=""):
+    """The contacts of one session. Oldest first, as given.
+
+    An empty `activity` means the contacts belonging to no named activity.
+    An empty `start` with a name means every contact of that name whatever
+    its start, which is what the pre-session records need and what an
+    operator means by "show me this activity".
+    """
+    want = str(activity or "")
+    want_start = str(start or "")
+    out = []
+    for rec in records:
+        name, began = session_of(rec)
+        if name != want:
+            continue
+        if want_start and began != want_start:
+            continue
+        out.append(rec)
+    return out
+
+
+def sessions_in(records, forgotten=()):
+    """Every session in a log, newest first by its last contact.
+
+    `[{"name", "start", "type", "contacts", "last"}, ...]`. Derived from the
+    log rather than kept in a list beside it, for the reason serials are: a
+    file that records what happened cannot drift from what happened, and a
+    power cut cannot lose it.
+
+    `forgotten` is the set of `(name, start)` pairs the operator has deleted
+    from the deck's list. The records are NOT changed by that -- the label
+    stays on every contact, so the session is still exportable -- so a derived
+    list has to be told to leave them out or they come back the moment it is
+    rebuilt. See §7f.
+    """
+    skip = {(str(n), str(s)) for n, s in (forgotten or ())}
+    seen = {}
+    for rec in records:
+        name, start = session_of(rec)
+        if not name or (name, start) in skip:
+            continue
+        key = (name, start)
+        _n, kind = activity_of(rec)
+        entry = seen.setdefault(key, {"name": name, "start": start,
+                                      "type": kind, "contacts": 0,
+                                      "last": ""})
+        entry["contacts"] += 1
+        when = str(rec.get("when", "") or "")
+        if when > entry["last"]:
+            entry["last"] = when
+        if kind and not entry["type"]:
+            entry["type"] = kind
+    return sorted(seen.values(), key=lambda e: e["last"], reverse=True)
+
+
 def activities_in(records):
     """Every activity named in a log, newest first by last contact.
 
@@ -718,7 +784,7 @@ def next_serial(records, activity="", start=1):
 def make_record(parsed, when, freq_hz=None, mode="", my_call="", my_grid="",
                 my_park="", activity_type=None, activity="", serial_tx="",
                 exchange_tx="", my_rig="", my_antenna="", tx_power=0,
-                tx_backend=""):
+                tx_backend="", activity_start=""):
     """Assemble a complete record from a parsed entry and the deck's context.
 
     `when` is a datetime, which the caller supplies so this module needs no
@@ -795,6 +861,14 @@ def make_record(parsed, when, freq_hz=None, mode="", my_call="", my_grid="",
     # and the only reading that loses nothing.
     if activity:
         rec["activity"] = str(activity)
+        # The session this contact belongs to: an ISO timestamp pinned when
+        # the session began and identical on every contact in it. A session is
+        # `(activity, activity_start)`, which is what lets one park be
+        # activated twice and an activation cross UTC midnight without either
+        # being split or merged. See §7f -- the stamp used to live in the log
+        # file's NAME, which is why there used to be a log file per activity.
+        if activity_start:
+            rec["activity_start"] = str(activity_start)
     type_name = getattr(activity_type, "name", "") or ""
     if type_name and type_name != "GENERAL":
         rec["activity_type"] = type_name
@@ -823,7 +897,8 @@ def activity_of(rec):
 # Field order in the stored line. Fixed rather than dict order so a file is
 # diffable between versions and a human scanning it finds the same thing in
 # the same place on every line.
-_FIELD_ORDER = ("when", "call", "freq", "band", "mode",
+_FIELD_ORDER = ("activity_start",
+                "when", "call", "freq", "band", "mode",
                 "rst_s", "rst_r", "serial_rx", "exchange_rx",
                 "park", "name", "qth", "grid",
                 "state", "county", "country", "cq_zone", "itu_zone",

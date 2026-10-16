@@ -194,8 +194,11 @@ gen = lines(ORD, "", 66, 10, header={"count": 2})
 act = lines(ORD, "", 66, 10,
             header={"count": 2, "activity_type": "POTA",
                          "my_park": "US-5678"})
-check("casual logging says so rather than going blank",
-      "LOG" in gen[0] and "casual logging" in gen[0], gen[0])
+# The master log is a place rather than an absence: every contact ever made
+# is in it, whatever activity made it. A blank header could not be told apart
+# from one that was failing to show the name.
+check("the master log says so rather than going blank",
+      "LOG" in gen[0] and "master log" in gen[0], gen[0])
 check("and names no activity type it is not using",
       "POTA" not in gen[0], gen[0])
 check("the activity is named on the header", "POTA" in act[0], act[0])

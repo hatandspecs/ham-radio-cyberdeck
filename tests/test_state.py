@@ -29,7 +29,7 @@ import colors
 F1 = "\x1bOP"          # xterm F1: the menu
 F3 = "\x1bOR"          # xterm F3: the mode picker
 F4 = "\x1bOS"          # xterm F4: cycle the color scheme
-CTRL_N = "\x0e"        # the log screen
+TO_LOG = "\x10"         # ^P: one stop along the ring, the log
 
 
 if __name__ == "__main__":
@@ -114,8 +114,9 @@ if __name__ == "__main__":
             fh.write("CALLSIGN = KD3CCO\nLOGGING = yes\nLOG_LINES = 1\n"
                      + f"LOG_PATH = {os.path.join(d, 'qso.log')}\n")
         state = os.path.join(d, "state", "cyberdeck.json")
-        # Ctrl-N to the log screen, F1 for its menu, `n` to cycle the lines.
-        run(keys=[CTRL_N, F1, "n"], state_path=state, conf=conf, settle=1.6)
+        # ^P to the log, F1 for its menu, `n` to cycle the lines. There is
+        # no key that jumps to the log any more -- the ring reaches it.
+        run(keys=[TO_LOG, F1, "n"], state_path=state, conf=conf, settle=1.6)
         saved = {}
         if os.path.exists(state):
             with open(state) as fh:
@@ -125,7 +126,7 @@ if __name__ == "__main__":
 
         # A second process, same state file: it has to come back on 2 rather
         # than on the 1 the conf says.
-        second = run(keys=[CTRL_N, F1], state_path=state, conf=conf,
+        second = run(keys=[TO_LOG, F1], state_path=state, conf=conf,
                      settle=1.8, settle_s="0.2")
         body = "\n".join(second.display)
         check("and the restarted deck comes back on it",
@@ -170,7 +171,7 @@ if __name__ == "__main__":
     # destination: one cycle step from the same starting scheme, so a handler
     # that fired twice or not at all both show up here.
     equals("F4 on the log screen lands on the same one",
-           color_after([CTRL_N, F4]), moved)
+           color_after([TO_LOG, F4]), moved)
     equals("and F4 inside the settings menu too",
            color_after([F1, F4]), moved)
 

@@ -107,12 +107,13 @@ SCHEMA = {
     "LOG_LINES":       ("1", str, "1 | 2 | 3 — lines per contact in the log "
                                   "list; more shows more fields, fewer shows "
                                   "more contacts"),
-    # Every contact also goes to the file LOG_PATH names, whatever activity it
-    # was made under, so the master log accumulates and an activity deleted
-    # later does not take its contacts with it.
-    "MASTER_LOG":      ("yes", str, "yes | no — also write every contact to "
-                                    "the default log, so it accumulates no "
-                                    "matter which activity made it"),
+    # The session in progress, as an ISO timestamp. Written onto every
+    # contact of the session so that a session is (ACTIVITY, ACTIVITY_START)
+    # -- which is what lets one park be activated twice and an activation
+    # cross UTC midnight. Normally set on the panel and remembered in the
+    # state file; in the conf it pins a session for an unattended start.
+    "ACTIVITY_START":  ("", str, "the session's start, ISO 8601; blank means "
+                                 "the master log. Set on the panel"),
     # There is deliberately no POTA setting. POTA is an activity — ACTIVITY =
     # POTA — because a toggle and an activity that both mean "show the park
     # fields" are two controls for one thing, and they drift.

@@ -371,7 +371,8 @@ records what this station's data mode is — but nothing writes it to the radio.
 
 Working on the deck as of 2026-10-11:
 
-- Ctrl-N from the conversation screen opens the log screen.
+- `^O` / `^P` walk the three applications; there is no key that jumps to the
+  log. (Ctrl-N did, before the ring.)
 - The tabbed entry form: Tab and Shift-Tab between fields, frequency and mode
   prefilled from CAT, reports defaulted from the mode, sticky comment, sticky
   own-exchange, next serial counted from the log.

@@ -988,12 +988,16 @@ def log_screen(records, entry, width, height, header=None, message="",
     # names its own file, so this is only for casual logging.
     name = (f" LOG:{head['log_name']}"
             if not activity and head.get("log_name") else " LOG")
-    # Named either way. With an activity this is its name; without one it says
-    # so in the same words the logging menu uses, because a header that went
-    # blank left the operator unable to tell "logging to the casual log" from
-    # "the activity name is not being displayed" -- and those want opposite
-    # responses. The menu says `Activity  casual logging`; so does this.
-    parts = [activity or "casual logging"]
+    # Named either way. With an activity this is its name; without one it is
+    # the MASTER LOG, which is a place rather than an absence -- every contact
+    # ever made is in it, whatever activity made it. The caller passes the
+    # name, so the header, the logging menu and the activities list all say
+    # the same word.
+    #
+    # It used to go blank here, which left the operator unable to tell "no
+    # activity in progress" from "the activity name is not being displayed",
+    # and those want opposite responses.
+    parts = [activity or "master log"]
     if kind and kind != "GENERAL":
         parts.append(f"({kind})" if activity else kind)
     # In POTA mode the reference is drawn whether or not it is set, so that
@@ -1228,7 +1232,7 @@ def log_screen(records, entry, width, height, header=None, message="",
 
 
 def settings_screen(rows, width, height, selected=None, message="",
-                    footer=""):
+                    footer="", state=""):
     """The station, as a screen rather than a menu.
 
     `rows` is `[(label, token, value, config key), ...]` — every row editable,
@@ -1253,6 +1257,15 @@ def settings_screen(rows, width, height, selected=None, message="",
     head = " DECK & RIG"
     if pages > 1:
         head += f"  {page + 1}/{pages}"
+    # `state` on the right, because this is the screen the deck OPENS on and
+    # the messages that used to greet an operator there -- no connection to
+    # fldigi, transmit inhibited at startup -- go to the transcript, which is
+    # no longer what they are looking at. Without this, a deck with no modem
+    # and a deck working perfectly look identical on power-on.
+    if state:
+        right = f"{state} "
+        pad = max(1, width - len(head) - len(right))
+        head = head + " " * pad + right
     out = [[(head.ljust(width)[:width], "reverse")], rule(width)]
     label_w, token_w = 14, 8
     for i, (label, token, value, _key) in enumerate(shown,

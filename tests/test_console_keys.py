@@ -73,7 +73,9 @@ if __name__ == "__main__":
     check("xterm terminfo does not", cap("kspd", "xterm") is None)
 
     # And the behavior, driven through the real program under TERM=linux.
-    inserted = run(keys=[f5], term="linux")
+    # ^O first: the deck opens on DECK & RIG and the memories are a digimode
+    # key, inserted into the line being composed on the conversation screen.
+    inserted = run(keys=["\x0f", f5], term="linux")
     check("F5 inserts a memory on the console",
           CQ in compose_of(inserted), compose_of(inserted))
 

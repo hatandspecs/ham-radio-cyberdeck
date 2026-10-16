@@ -232,7 +232,7 @@ def activity_type_menu(names, current="", labels=None):
         label = labels.get(name, name)
         items.append((str(i + 1)[-1], f"{name:<12} {label[:28]}{mark}"))
     return {
-        "title": "ACTIVITY TYPE",
+        "title": "LOG SCHEMA",
         "items": items,
         # Three things can start here: select a type, copy one into a new type,
         # or begin a new type with nothing in it. Creating a type belongs here
@@ -252,6 +252,8 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
              activity="", dupe="band+mode", log_name="",
              activity_type="", callbook_state="", log_lines=1,
              master_log=True):
+    # `master_log` is accepted and ignored. It fed the removed Master log
+    # item; the parameter stays so a caller passing it is not a TypeError.
     # has_qrz_key and qrz_pending are accepted and ignored. They fed the
     # removed QRZ upload item; the parameters stay so that a caller passing
     # them is not a TypeError, and so that reinstating an upload item is a
@@ -289,22 +291,48 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
             "footer": "Esc back   Enter select",
         }
 
+    # Grouped, most-used first, and nothing shown that does not apply.
+    #
+    #   state      -- is it on, and how much is in it
+    #   session    -- what is being logged right now
+    #   entry      -- how what gets typed is read
+    #   the file   -- where it is and how it leaves
+    #
+    # The session group is second because it is what changes during an
+    # operating session; the file group is last because it is set once. The
+    # earlier order put the activity and its schema below the dupe rule and
+    # the mode source, which are the two things nobody touches twice.
     items = [
         ("l", f"Logging                      on — {count} "
               f"QSO{'' if count == 1 else 's'}"),
-        # The DEFAULT log, which is also the directory the per-activity logs
-        # sit beside. It is not the file in use unless logging is casual --
-        # an activity has its own, named after it. Which file is actually
-        # open is on the log screen's header, where it is read while typing
-        # into it rather than two keystrokes away.
-        ("f", f"Default log                  {log_name or 'qso.log'}"),
-        # Every contact into the default log as well as its activity's own, so
-        # the default accumulates and an activity deleted later does not take
-        # its contacts with it.
-        ("k", f"Master log                   "
-              f"{'on — every contact' if master_log else 'off'}"),
-        ("a", "Export ADIF"),
-        ("m", f"Mode from                    {_OPERATING_LABEL.get(operating, operating)}"),
+
+        # -- what is being logged ------------------------------------------
+        # Two lines, because these are two things. The ACTIVITY is the session
+        # -- this park, this contest weekend -- and carries the operator's own
+        # name for it. The SCHEMA is the template of fields it uses, edited
+        # once and reused by every activity that wants it.
+        #
+        # They were one setting called "Activity". That let an operator choose
+        # POTA but not say which activation it was, and made two weekends of
+        # one QSO party share a serial sequence.
+        ("e", f"Activity                     "
+              f"{activity or 'master log'}"),
+        # Creating a schema is not a line here. It belongs on the picker that
+        # lists them, where the operator can already see what exists and what
+        # is worth copying -- a menu item asked them to decide to create one
+        # before seeing the alternatives.
+        ("v", f"Log schema                   "
+              f"{activity_type or 'general logging'}"),
+    ]
+    if needs_reference(activity_type):
+        # Only when the schema has a reference field. Otherwise this station's
+        # own park is not an unset setting, it is a question that does not
+        # apply to the operating being done.
+        items.append(("p", f"My reference                 "
+                           f"{park or 'not set'}"))
+
+    items += [
+        # -- how what gets typed is read -----------------------------------
         ("d", f"Duplicates                   {_DUPE_LABEL(dupe)}"),
         # Three words from two settings: "off" is a decision, "no wifi" is a
         # condition the operator can fix, "on" is working. Showing "off" for a
@@ -312,44 +340,33 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # switched-off feature.
         ("c", f"Callbook lookup              "
               f"{callbook_state or ('on' if lookup else 'off')}"),
-        # Two lines, because these are two things. The ACTIVITY is the
-        # session being logged -- this park, this contest weekend -- and it
-        # carries the operator's name for it and a log file of its own. The
-        # ACTIVITY TYPE is the template of fields it uses, edited once and
-        # reused by every activity that wants it.
-        #
-        # They were one setting called "Activity". That let the operator
-        # choose POTA but not say which activation it was, and made two
-        # weekends of the same QSO party share one serial sequence.
-        ("e", f"Activity                     "
-              f"{activity or 'casual logging'}"),
-        # Creating a type is not a line here. It belongs on the picker that
-        # lists them, where the operator is already looking at what exists and
-        # can see what is worth copying -- a separate menu item asked them to
-        # decide to create one before seeing the alternatives.
-        ("v", f"Activity type                "
-              f"{activity_type or 'general logging'}"),
-        # How tall a contact is in the list. What the extra rows SHOW is
-        # deliberately not described here: it is the activity type's own field
-        # order, carrying on from where the first row stops, so it differs with
-        # the type and any description written here would be wrong for most of
-        # them.
+        ("m", f"Mode from                    "
+              f"{_OPERATING_LABEL.get(operating, operating)}"),
+        # How tall a contact is in the LIST, which is about reading the log
+        # rather than writing it. What the extra rows show is deliberately not
+        # described: it is the schema's own field order, so any description
+        # here would be wrong for most schemas.
         ("n", f"Lines per contact            "
               f"{log_lines} of 3"),
+
+        # -- the file, and getting out of it -------------------------------
+        # One log. An activity is a label on its records, so which file is in
+        # use is not a question any more -- this is the file.
+        ("f", f"Log file                     {log_name or 'qso.log'}"),
+        ("a", f"Export the whole log         "
+              f"{(log_name or 'qso.log').rsplit('.', 1)[0]}.adi"),
     ]
-    if needs_reference(activity_type):
-        # Only when the selected activity has a reference field. Otherwise
-        # this station's own park is not an unset field, it is a question that
-        # does not apply to the operating being done.
-        items.append(("p", f"My reference                 "
-                           f"{park or 'not set'}"))
-    extra = []
+    # Only with an activity running. Without one it would export the same
+    # records as the line above it under a different name, which is two menu
+    # items for one action and the reader left wondering what the difference
+    # is.
+    if activity:
+        items.append(("x", f"Export {activity[:21]}"))
     if has_tqsl:
         # Signing needs a callsign certificate and tqsl blocks rather than
         # failing without one, so this is an export-and-a-command, not a
         # one-key upload. The label says so: nothing is sent from here.
-        extra.append(("t", "Export + print the LoTW command"))
-    items[2:2] = extra
+        items.append(("t", "Export + print the LoTW command"))
     return {
         "title": "LOGGING",
         "items": items,

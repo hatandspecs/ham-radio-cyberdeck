@@ -542,6 +542,10 @@ held one — it drives the radio through fldigi — and a memory nobody has put
 
 ### 7.1 A screen of its own
 
+**Superseded by §7f and the area ring: there is no key that jumps to the log.**
+`^O` and `^P` reach it as they reach every application, and `Esc` backs out
+within it rather than leaving it. The original reasoning follows.
+
 **Ctrl-N** opens the log screen; **Esc** returns to the transcript. One key,
 not two, because on SSB the transcript has nothing on it worth reading and the
 whole display should be the log.
@@ -739,8 +743,8 @@ the reference alone is what the log and the upload need.
 
 ### 7.6 Menu
 
-Logging is an AREA, not a line on another area's menu: `Ctrl-N` opens it and
-`Ctrl-O`/`Ctrl-P` reach it from either side. Its own menu is `F1` from the log
+Logging is an AREA, not a line on another area's menu: `Ctrl-O` and `Ctrl-P`
+reach it from either side, and nothing else does. Its own menu is `F1` from the log
 screen, and the toggle is the first line of that:
 
 ```
@@ -971,6 +975,99 @@ line number. An index is a promise about a file this program does not own: the
 log is documented as hand-editable over SSH, and an index that had shifted by
 one would rewrite a different contact. A guard that does not match is a
 refusal, not a guess.
+
+## 7f. One log, and sessions inside it
+
+Decided 2026-10-16. This supersedes the per-activity files described above and
+the `MASTER_LOG` setting, both of which are removed.
+
+### There is one log file
+
+Every contact goes to the file `LOG_PATH` names and nowhere else. An activity
+is not a file; it is a **label on records**, and the activity screen is a
+**filter** over the one log.
+
+This is what the code was already half doing. Every record has carried
+`activity` and `activity_type` since activities existed, `qsolog.for_activity`
+has existed as long, and the log screen already called it in three places to
+decide what to show. The per-activity files were a second mechanism underneath
+a view that was already a filter.
+
+What the change removes, rather than adds:
+
+- **The duplicated write.** Two `append`s and two `fsync`s per contact, and
+  `update` and `remove` each having to find the same contact in two files — a
+  divergence waiting for the first write that half succeeded.
+- **`MASTER_LOG`.** Nothing to switch off: the log is the log.
+- **`activity_log_path`, `split_activity_stem`, `resolve_activity_log`,
+  `activity_logs`, and `activity_path` in the state file.** With no path to
+  stamp, the whole "stamp the date once or a contest weekend forks across UTC
+  midnight" problem stops existing.
+- **The asymmetry between deleting an activity and deleting a contact.**
+
+What it costs: `read()` parses the whole log on open and after every edit. At
+ten thousand contacts that is a couple of megabytes and a few hundred
+milliseconds on a Pi 3A+ — acceptable, because it is per-open and per-edit and
+never per-keystroke. The per-activity files kept each read small and that is
+given up deliberately. If it ever bites, the answer is an index beside the
+log, not a return to many files.
+
+### A session is `(activity, activity_start)`
+
+Records gain one field: **`activity_start`**, an ISO timestamp pinned when the
+session begins and identical on every contact in it. A session is the set of
+records sharing a name and a start.
+
+Derived session identity was considered and rejected. "Same name, same UTC
+day" cannot survive midnight: an activation from 23:50 to 00:30 would split in
+two, and a contest weekend likewise. That is the exact failure the dated
+filename was stamped once to avoid, so the stamp moves from the filename into
+the record where it belongs.
+
+A full date-time, not a date, because a date cannot tell a morning activation
+from an evening one and brings the midnight problem back. The activities
+screen *displays* only the date.
+
+| Case | Result |
+|---|---|
+| Activation 23:50 → 00:30 | One session; every record shares one `activity_start` |
+| Same park next weekend | A different `activity_start`; cleanly separate |
+| Resuming after a break | The operator's choice: resume keeps the start, starting fresh makes a new one |
+| Restart mid-activation | The state file holds `activity_start` instead of `activity_path` |
+
+`activity_start` is **not exported**. ADIF describes a contact, not a session,
+and there is no field for it.
+
+### Deleting an activity forgets it; the records keep the label
+
+Deleting an activity removes it from the deck's list and **changes no
+records**. The contacts keep their `activity` and `activity_start`, so the
+session remains identifiable and exportable afterwards.
+
+That needs state, because a list derived from the records would show the
+session again the moment it was rebuilt. The state file carries a
+**forgotten-sessions list** of `(activity, activity_start)` pairs, and the
+activities screen shows derived sessions minus that set.
+
+Three consequences, all wanted:
+
+- The requirement that started this — "delete an activity and still get the
+  contacts back" — stops being a feature with a mechanism and becomes a fact
+  about where the contacts are.
+- It is reversible, so an undelete is possible.
+- A session dismissed and then logged into again comes back, because logging
+  under a name is a clearer statement of intent than having dismissed it.
+
+**The confirmation wording changes with it.** "Permanently deleted" was true
+of a file and is false of a label. Deleting an activity is no longer
+destructive at all; the only way to destroy a contact is to delete that
+contact.
+
+### Export
+
+One function with an optional filter: the whole log, or one session. A POTA
+upload wants the latter and gets a cleaner file than before, because a
+filtered export cannot contain a stray contact that landed in the wrong file.
 
 ## 8. Time
 
@@ -1250,7 +1347,8 @@ test.
 
 **Needs the deck, and is listed rather than written:**
 
-* Ctrl-N is unbound when logging is off.
+* With logging off the log is not a stop on the ring: `^O` and `^P` walk two
+  applications instead of three.
 * No file is created when logging has never been switched on.
 * The log line refuses to open during an over.
 * Prefill from the transcript.

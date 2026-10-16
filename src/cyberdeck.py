@@ -48,6 +48,14 @@ LOG, FIELDS, ORDER = "log", "fields", "order"
 # were unreadable on the panel and correctable only over SSH -- which is no
 # use from the bench where the mistakes get made.
 ENTRY = "entry"
+# What the deck calls logging with no activity in progress. Internally that is
+# still an empty `ACTIVITY` writing to the file `LOG_PATH` names -- this is the
+# name on the screen, and the row on the activities list that selects it.
+#
+# It replaced "casual logging", which described the same state and sounded like
+# an absence of one. The master log is a place: every contact ever made is in
+# it, whatever activity made it.
+MASTER_LOG = "master log"
 # The deck and the radio: what this station is and what the panel does. A
 # screen rather than a menu because the settings are one of three AREAS, and an
 # area needs somewhere to land.
@@ -81,7 +89,7 @@ RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI)
 #
 # Ctrl-M was asked for first and cannot be bound: it IS byte 13, carriage
 # return, so no terminal can tell it from Enter and the ring would fire instead
-# of logging a contact. Ctrl-N is byte 14 and opens the log.
+# of logging a contact. Ctrl-N was byte 14 and once opened the log.
 #
 # Ctrl-O is `VDISCARD` in the tty line discipline and can be swallowed by it
 # while IEXTEN is set, which is why `tests/test_area_ring.py` drives both keys
@@ -108,7 +116,7 @@ AREA_LOCKED = (CONFIRM, PAIR, WIFI, NOKB)
 # this in step with the menus: a setting that is changeable and not listed here
 # silently reverts, which reads as the panel forgetting rather than as a bug.
 _REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
-               "MY_PARK", "EXCHANGE_TX", "MASTER_LOG")
+               "MY_PARK", "EXCHANGE_TX")
 
 # Releasing the post-over receive hold. Not configuration: these describe how
 # a decaying transient is told apart from a station answering, which is a
@@ -150,10 +158,16 @@ class Deck:
         self.scr = stdscr
         self.cfg = settings
         self.scheme = settings["COLOR"]
-        self.screen = CHAT
-        # Logging. Off means absent: no file is opened, no form is built and
-        # Ctrl-N falls through to the unhandled-key branch, exactly as an
-        # unused key does (docs/qso_log_design.md §1).
+        # The deck opens on its own settings rather than on the conversation.
+        # The conversation was the first screen written and so became the home
+        # screen by accident; what an operator wants on power-on is what this
+        # station is set to -- callsign, rig, antenna, power ceiling -- before
+        # any of it goes on the air. `^P` reaches the log and the conversation
+        # from here in one keystroke each.
+        self.screen = SET
+        # Logging. Off means absent: no file is opened, no form is built, and
+        # the log is not a stop on the ring at all -- `^O` and `^P` walk two
+        # applications instead of three (docs/qso_log_design.md §1).
         self.log_on = str(settings.get("LOGGING", "no")).lower() == "yes"
         self.log_form = None
         self.log_records = []
@@ -175,7 +189,9 @@ class Deck:
         # was created and then LEFT ALONE. Re-deriving it would fork a
         # multi-day activity across UTC midnight; see
         # qsolog.activity_log_path.
-        self.activity_path = ""
+        # Sessions the operator has deleted from the activities list. The
+        # records keep their labels -- see §7f -- so the list has to be told.
+        self.cfg.setdefault("FORGOTTEN_SESSIONS", [])
         # Rows the ACTIVITIES screen last drew, where the cursor is, and the
         # pending question: {"title", "lines", "action", "back"}.
         self.acts_sel = 0
@@ -1032,8 +1048,7 @@ class Deck:
         # session that happened to use the same type. The count follows the
         # list, because a count that disagrees with the screen is worse than
         # no count.
-        shown = (qsolog.for_activity(self.log_records, self._activity_name())
-                 if form is not None else self.log_records)
+        shown = self._log_shown() if form is not None else self.log_records
         header = {"count": len(shown),
                   # Only matters when there is no activity to name; an
                   # activity's file is named after the activity.
@@ -1122,18 +1137,22 @@ class Deck:
         here = self._area()
         self.area_screen[here] = self.screen
         self._close_menu()
-        where = RING[(RING.index(here) + step) % len(RING)]
+        # The ring holds the applications that EXIST right now. Logging is off
+        # by default and when off it has nothing to show -- no form, no file --
+        # so it is not on the ring at all and the ring is two stops instead of
+        # three. Switch it on from its menu and it joins.
+        #
+        # The alternative was tried and was worse: landing on the conversation
+        # with the logging menu over it. That put the operator in the digimode
+        # application while they were being shown a logging menu, so the ring's
+        # idea of where they were no longer matched the screen and the next
+        # press skipped the conversation entirely.
+        ring = [a for a in RING if a != AREA_LOG or self.log_on]
+        if here not in ring:
+            here = AREA_DIGI
+        where = ring[(ring.index(here) + step) % len(ring)]
         self.screen = self.area_screen.get(where, CHAT)
         if where == AREA_LOG:
-            # Logging can be switched off, and then its screens have no form
-            # to draw. Its MENU is where that is fixed, so that is where the
-            # ring lands -- rather than refusing to move, which reads as a
-            # dead key, or landing on a screen that bounces straight back.
-            if not self.log_on:
-                self.screen = CHAT
-                self._open_menu("logging")
-                self._log_note("logging is off — `l` switches it on")
-                return
             if self.log_form is None:
                 self._open_log()
                 return
@@ -1184,12 +1203,31 @@ class Deck:
     def _draw_settings(self, h, w):
         for i, line in enumerate(render.settings_screen(
                 self._settings_rows(), w, h, selected=self.set_sel,
-                message=self.set_message)):
+                message=self.set_message, state=self._deck_state())):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
         except curses.error:
             pass
+
+    def _deck_state(self):
+        """One word for the settings header: what the deck is doing.
+
+        Both readings are plain attributes, not round trips -- `connected` is
+        set by the fldigi client on every call it makes, and the inhibit is
+        the session's own flag. This screen is drawn five times a second and
+        must stay free of radio queries; see `_settings_rows`.
+
+        Worth being on the boot screen at all because the startup notes go to
+        the TRANSCRIPT, which the deck no longer opens on: "no connection to
+        fldigi -- waiting for it" is the most important thing the deck can say
+        on power-on and it was landing on a screen nobody was looking at.
+        """
+        if not self.fldigi.connected:
+            return "NO MODEM"
+        if self.session.inhibited:
+            return "TX INHIBITED"
+        return "TX ARMED"
 
     def _handle_settings(self, ch):
         rows = self._settings_rows()
@@ -1223,21 +1261,6 @@ class Deck:
             return self._quit()
         return True
 
-    def _master_path(self):
-        """The master log, or "" when there is nothing extra to write.
-
-        Empty when the setting is off, and empty when the activity's own file
-        IS the master -- which is the case for casual logging. Writing twice
-        to one path would record every casual contact twice, which is a
-        corrupted log rather than a thorough one.
-        """
-        if str(self.cfg.get("MASTER_LOG", "yes")).strip().lower() not in (
-                "yes", "on", "true", "1"):
-            return ""
-        master = qsolog.master_path(self.cfg.get("LOG_PATH", ""))
-        return "" if os.path.abspath(master) == os.path.abspath(
-            self._log_path()) else master
-
     def _log_lines(self):
         """Lines per contact in the list: 1, 2 or 3."""
         try:
@@ -1255,7 +1278,21 @@ class Deck:
         """
         if self.log_form is None:
             return self.log_records
-        return qsolog.for_activity(self.log_records, self._activity_name())
+        name = self._activity_name()
+        if not name:
+            # The master log is EVERY contact, not the ones belonging to no
+            # activity. `for_session` is a precise filter and answers the
+            # narrower question; the product decision is here.
+            #
+            # This was wrong and the symptom was sharp: a contact logged under
+            # an activity was invisible from the master log, so it could not
+            # be picked, opened or deleted from the one view that is supposed
+            # to hold everything -- while the activities list counted it. The
+            # semantic is a leftover from a file per activity, where the
+            # default file really did hold only the unlabelled contacts.
+            return self.log_records
+        return qsolog.for_session(self.log_records, name,
+                                  self._activity_start())
 
     def _log_pick(self, step):
         """Move the selection through the contacts. Returns False if there are
@@ -1394,19 +1431,6 @@ class Deck:
         except OSError as exc:
             self._log_note(f"could not write the log: {exc}")
             return
-        # From the master too. A contact deleted here was logged in error, and
-        # an archive that keeps the errors is not worth keeping.
-        #
-        # Deleting an ACTIVITY is the opposite and deliberately so: that only
-        # removes the activity's own file, and the master keeps every contact
-        # that was ever made under it. That asymmetry is the whole point of
-        # having a master log.
-        master = self._master_path()
-        if gone is not None and master:
-            try:
-                qsolog.remove(master, when, call)
-            except OSError as exc:
-                self._log_note(f"the master log kept it: {exc}")
         if gone is None:
             self._log_note("that contact is no longer in the log")
             return
@@ -1448,16 +1472,6 @@ class Deck:
         except OSError as exc:
             self.entry_message = f"could not write the log: {exc}"
             return
-        # The same correction in the master log. Found by the same timestamp,
-        # which is identical in both copies, so this is the same call against
-        # a second path -- and a contact the master has never seen is not an
-        # error, only a contact made before the setting was turned on.
-        master = self._master_path()
-        if got is not None and master:
-            try:
-                qsolog.update(master, when, call, {field: value})
-            except OSError as exc:
-                self._log_note(f"the master log kept the old value: {exc}")
         if got is None:
             self.entry_message = "that contact is no longer in the log"
             return
@@ -1509,7 +1523,7 @@ class Deck:
         for i, line in enumerate(render.field_select_screen(
                 self.picker.rows(), self.picker_sel, w, h,
                 title=("SELECT FIELDS — from " + self.picker_from
-                       if self.picker_from else "SELECT FIELDS — new type"),
+                       if self.picker_from else "SELECT FIELDS — new schema"),
                 footer=(self.picker_message
                         + "  ·  Space toggle  Enter order"
                         if self.picker_message else ""))):
@@ -1609,7 +1623,7 @@ class Deck:
             # activity is a session with a log file, a type is the template of
             # fields that session uses, and the screen that had just finished
             # choosing and ordering FIELDS was asking for the wrong one.
-            self._open_editor(None, "Name for this activity type",
+            self._open_editor(None, "Name for this log schema",
                               sink=self._save_activity)
         return True
 
@@ -1630,8 +1644,8 @@ class Deck:
         name = "".join(c for c in (name or "").strip().upper()
                        if c.isalnum() or c in "-_")
         if not name:
-            self.picker_message = "an activity type needs a name"
-            self._log_note("an activity type needs a name")
+            self.picker_message = "a log schema needs a name"
+            self._log_note("a log schema needs a name")
             return
         if name in ("GENERAL",):
             self.picker_message = "GENERAL is the built-in — pick another name"
@@ -1642,7 +1656,7 @@ class Deck:
             # case and the one worth confirming: it is the only one where
             # something an operator wrote goes away.
             self._ask_confirm(
-                "REPLACE ACTIVITY TYPE",
+                "REPLACE LOG SCHEMA",
                 [name, "",
                  f"A type named {name} is already in activities.conf.",
                  "Saving replaces it. Contacts already logged are",
@@ -1657,7 +1671,7 @@ class Deck:
             # the name stops meaning what it means everywhere else on the
             # deck, so it is still worth a keystroke.
             self._ask_confirm(
-                "REPLACE BUILT-IN TYPE",
+                "REPLACE BUILT-IN SCHEMA",
                 [name, "",
                  f"{name} is built in. Saving puts your version in",
                  "activities.conf, and it is used from then on.",
@@ -1678,7 +1692,7 @@ class Deck:
         answer to the question already did.
         """
         self.screen = ORDER
-        self._open_editor(None, "Name for this activity type",
+        self._open_editor(None, "Name for this log schema",
                           sink=self._save_activity, text=name)
 
     def _write_activity(self, name):
@@ -1703,6 +1717,12 @@ class Deck:
         self.picker = None
         self.picker_message = ""
         self._log_note(f"saved {name} to {path}")
+        # `_set_activity_type` rebuilds the form from the saved definition, so
+        # editing the schema an activity is already using takes effect on the
+        # next contact without leaving the activity -- which is what makes a
+        # schema editable mid-session. Contacts already logged keep what they
+        # were given; a field added now is blank on them, because the stored
+        # line carries only the fields that had a value.
         self._set_activity_type(name)
         self.screen = LOG if self.log_on else CHAT
 
@@ -1891,7 +1911,7 @@ class Deck:
         self.log_form.advance_serial(self.log_records, act.serial_start,
                                      activity=self._activity_name())
         self._save_state()
-        self._log_note(f"activity: {act.label}")
+        self._log_note(f"schema: {act.label}")
         self._ask_my_park()
 
     def _ask_my_park(self):
@@ -1943,14 +1963,33 @@ class Deck:
             self.log_form.set("my_park", self.cfg["MY_PARK"])
         self._save_state()
 
-    def _export_adif(self, lotw=False):
-        """Write the whole log beside itself as ADIF, and say where."""
+    def _export_adif(self, lotw=False, session_only=False):
+        """Write an ADIF beside the log, and say where.
+
+        The whole log, or -- with `session_only` -- just the session being
+        logged. There is one file either way: an activity is a label on
+        records, so a per-activity export is a FILTER, and a filtered one
+        cannot contain a stray contact that landed in the wrong file the way
+        a per-activity file could.
+        """
         path = self._log_path()
         records = qsolog.read(path)
+        name = self._activity_name()
+        if session_only and name:
+            records = qsolog.for_session(records, name,
+                                         self._activity_start())
         if not records:
-            self._log_note("nothing logged yet")
+            self._log_note("nothing logged yet" if not session_only
+                           else f"nothing logged under {name or MASTER_LOG}")
             return
         out = qsolog.export_path(path)
+        if session_only and name:
+            # Beside the log, named for the session, so two activations of one
+            # park do not overwrite each other's export.
+            stem = qsolog.activity_slug(name) or "activity"
+            day = (self._activity_start() or "")[:10]
+            out = os.path.join(os.path.dirname(out),
+                               f"{stem}{'_' + day if day else ''}.adi")
         try:
             with open(out, "w", encoding="utf-8") as fh:
                 fh.write(qsolog.adif_export(records))
@@ -1992,8 +2031,7 @@ class Deck:
         hang rather than as the end of the log.
         """
         form = self.log_form
-        shown = (qsolog.for_activity(self.log_records, self._activity_name())
-                 if form is not None else self.log_records)
+        shown = self._log_shown() if form is not None else self.log_records
         h, w = self._screen_size()
         top = render.log_scroll_max(shown, h, form, w, self._log_lines())
         self.log_scroll = max(0, min(self.log_scroll + int(rows), top))
@@ -2010,43 +2048,52 @@ class Deck:
         return str(self.cfg.get("ACTIVITY", "") or "").strip()
 
     def _log_path(self):
-        """The file this activity writes to.
+        """The log. There is one, whatever activity is in progress.
 
-        Each activity gets its own, so a park activation and a contest
-        weekend are separate files that can be exported one at a time with
-        nothing filtered out of them. LOG_PATH is the default log and the
-        base the activity directory sits beside.
-
-        The path is whatever was stored when the activity was created, not a
-        fresh derivation: a contest weekend crosses UTC midnight and must not
-        acquire a second file halfway through.
+        An activity is a LABEL on records and the activity screen is a filter
+        over this file -- see `docs/qso_log_design.md` §7f. There used to be a
+        file per activity and a duplicated write into this one; what that
+        bought was a per-activity export, which a filter gives for free, and
+        what it cost was two writes to keep in step and two places to find a
+        contact in when correcting one.
         """
-        name = self._activity_name()
-        if not name:
-            return qsolog.log_path(self.cfg.get("LOG_PATH", ""))
-        if self.activity_path:
-            return self.activity_path
-        # No stored path -- an activity named in cyberdeck.conf rather than
-        # started on the panel. Resume the newest file of that name if there
-        # is one, so a conf-named activity does not get a second file every
-        # day, and keep whatever comes back.
-        self.activity_path = qsolog.resolve_activity_log(
-            name, self.cfg.get("LOG_PATH", ""))
-        return self.activity_path
+        return qsolog.log_path(self.cfg.get("LOG_PATH", ""))
 
-    def _set_activity_session(self, name, path=""):
-        """Start a named activity, or resume one, and open its log.
+    def _activity_start(self):
+        """The session this activity began at, or "" for the master log."""
+        return str(self.cfg.get("ACTIVITY_START", "") or "").strip()
 
-        The file is stamped with today's date from the deck's clock -- a
-        DS3231 that is right with no network, which is the whole point at a
-        picnic table. Stamped ONCE: the path is stored here and read back by
-        `_log_path` rather than recomputed, so a contest weekend that crosses
-        UTC midnight stays one file.
+    def _forgotten(self):
+        """Sessions the operator has deleted from the deck's list.
 
-        The same name on the same day resumes -- that is one activation after
-        a break. The same name on a later day is a different activation and
-        gets its own file. `path` is passed when resuming one chosen from the
-        list, and is then used exactly as given.
+        A list of `[name, start]` pairs. The records keep their labels, so a
+        list derived from the log would show a deleted session again the
+        moment it was rebuilt -- this is what it is told to leave out.
+        """
+        out = []
+        for pair in (self.cfg.get("FORGOTTEN_SESSIONS") or []):
+            try:
+                name, start = pair
+            except (TypeError, ValueError):
+                continue
+            out.append((str(name), str(start)))
+        return out
+
+    def _set_activity_session(self, name, start=None):
+        """Start a named activity, or resume one.
+
+        `start` is the session key: an ISO timestamp pinned here and written
+        onto every contact of the session, so a session is `(name, start)`.
+        Passed when resuming one chosen from the list; stamped from the deck's
+        clock -- a DS3231 that is right with no network, which is the point at
+        a picnic table -- when starting a new one.
+
+        Stamped ONCE and then carried, for the reason the log file's name used
+        to be: an activation from 23:50 to 00:30 is one session, and anything
+        derived from the contacts' own dates would split it at midnight.
+
+        No file changes. There is one log and this only decides which records
+        the screen is filtered to.
         """
         name = str(name or "").strip()
         if name and not qsolog.activity_slug(name):
@@ -2054,23 +2101,23 @@ class Deck:
             return
         self.cfg["ACTIVITY"] = name
         if not name:
-            self.activity_path = ""
-        elif path:
-            self.activity_path = path
+            self.cfg["ACTIVITY_START"] = ""
+        elif start:
+            self.cfg["ACTIVITY_START"] = str(start)
         else:
-            self.activity_path = qsolog.activity_log_path(
-                name, self.cfg.get("LOG_PATH", ""))
+            self.cfg["ACTIVITY_START"] = datetime.datetime.now(
+                datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._save_state()
         self._switch_log()
-        where = os.path.basename(self._log_path())
         if not name:
-            self._log_note(f"casual logging — {where}")
-        elif self.log_records:
-            self._log_note(f"{name} resumed — {where}, "
-                              f"{len(self.log_records)} contact"
-                              f"{'' if len(self.log_records) == 1 else 's'}")
+            self._log_note(f"{MASTER_LOG} — {len(self.log_records)} contacts")
+            return
+        shown = len(self._log_shown())
+        if shown:
+            self._log_note(f"{name} resumed — {shown} contact"
+                           f"{'' if shown == 1 else 's'}")
         else:
-            self._log_note(f"{name} started — {where}")
+            self._log_note(f"{name} started")
 
     def _ask_confirm(self, title, lines, action, back=None, footer="",
                      cancel=None):
@@ -2114,8 +2161,32 @@ class Deck:
         return True
 
     def _activity_choices(self):
-        """Activities on disk that can be resumed, newest first."""
-        return qsolog.activity_logs(self.cfg.get("LOG_PATH", ""))
+        """What the activities screen lists: the master log, then the rest.
+
+        The master log is always first and is always there. Internally it is
+        still "no activity" -- `ACTIVITY` empty, writing to the file `LOG_PATH`
+        names -- and the row exists so that going back to it is a thing you can
+        SELECT rather than something that happens to you when an activity is
+        deleted. It carries `master=True`, which is what makes the delete
+        refuse: there is no file of its own to remove, and every contact ever
+        made is in it.
+        """
+        master = {"name": MASTER_LOG, "date": "", "start": "",
+                  "master": True, "contacts": len(self.log_records)}
+        rows = [master]
+        for s in qsolog.sessions_in(self.log_records, self._forgotten()):
+            rows.append({"name": s["name"], "start": s["start"],
+                         # The date only: the key is a full timestamp so that
+                         # two activations of one park on one day stay apart,
+                         # and the time of day is not what tells them apart on
+                         # a list the operator is reading.
+                         "date": s["start"][:10] or s["last"][:10],
+                         "contacts": s["contacts"], "master": False})
+        return rows
+
+    def _resume_activity_master(self):
+        """Back to the master log: no activity, the default file."""
+        self._set_activity_session("")
 
     def _resume_activity(self, index):
         """Resume the activity at `index` in the list the menu showed."""
@@ -2123,7 +2194,7 @@ class Deck:
         if not 0 <= index < len(rows):
             return
         row = rows[index]
-        self._set_activity_session(row["name"], path=row["path"])
+        self._set_activity_session(row["name"], start=row.get("start", ""))
 
     def _open_activities(self):
         self.acts_sel = 0
@@ -2152,24 +2223,44 @@ class Deck:
         elif ch == curses.KEY_DOWN and rows:
             self.acts_sel = (self.acts_sel + 1) % len(rows)
         elif ch in (10, 13, curses.KEY_ENTER) and rows:
-            self._resume_activity(self.acts_sel)
+            if rows[self.acts_sel].get("master"):
+                self._resume_activity_master()
+            else:
+                self._resume_activity(self.acts_sel)
             self.screen = LOG if self.log_on else CHAT
         elif ch in (ord("n"), ord("N")):
             self._open_editor(None, "Activity name",
                               sink=self._start_named_activity)
         elif ch in (ord("d"), ord("D")) and rows:
             row = rows[self.acts_sel]
+            if row.get("master"):
+                # The master log is every contact there is. An activity row is
+                # removed to tidy the list; this is the list's whole subject.
+                self.acts_message = (f"{MASTER_LOG} cannot be removed — it is "
+                                     f"every contact there is")
+                return True
             count = row["contacts"]
+            # "Remove", not "delete", and the wording says what actually
+            # happens. This used to delete a file and the contacts in it, so
+            # "permanently deleted" was true; now the records keep their
+            # labels and only the list forgets, so claiming otherwise would be
+            # frightening an operator about something harmless -- and would
+            # teach them to distrust the one confirmation that IS destructive,
+            # which is deleting a single contact.
             self._ask_confirm(
-                "DELETE ACTIVITY",
+                "REMOVE FROM THE LIST",
                 [f"{row['name']}  {row['date'] or ''}".strip(),
                  "",
-                 f"{count} contact{'' if count == 1 else 's'} will be "
-                 f"permanently deleted.",
-                 f"File: {os.path.basename(row['path'])}"],
-                lambda path=row["path"], name=row["name"]:
-                    self._delete_activity(path, name),
-                back=ACTS)
+                 f"Its {count} contact{'' if count == 1 else 's'} stay in the "
+                 f"log and keep this",
+                 "name, so it can still be exported. Only the list",
+                 "forgets it.",
+                 "",
+                 "Logging under the name again brings it back."],
+                lambda name=row["name"], start=row.get("start", ""):
+                    self._forget_session(name, start),
+                back=ACTS,
+                footer="Enter remove   any other key keeps it")
         return True
 
     def _start_named_activity(self, name):
@@ -2196,39 +2287,35 @@ class Deck:
         if name:
             self._open_menu("activity")
 
-    def _delete_activity(self, path, name):
-        """Remove one activity's log file. Confirmed before it gets here."""
-        try:
-            os.remove(path)
-        except OSError as exc:
-            self.acts_message = f"could not delete: {exc}"
-            self._log_note(f"could not delete {name}: {exc}")
-            return
-        self.acts_message = f"{name} deleted"
-        self._log_note(f"activity {name} deleted")
-        # If that was the activity in use, there is nothing to log into any
-        # more: fall back to casual logging rather than to a file that is
-        # gone, which would be recreated empty on the next contact.
-        #
-        # All the way back, not just the name. The name and the file reset on
-        # their own, but the TYPE and this station's reference did not -- so
-        # the header read `casual logging  POTA`, the form kept a Ref column
-        # for an activation that no longer existed, and `my_park` would have
-        # gone onto the next casual contact as though the activation were
-        # still running. Deleting the activity deletes the whole of it.
-        if name == self._activity_name():
+    def _forget_session(self, name, start):
+        """Take a session off the deck's list. Changes no records.
+
+        The contacts keep their `activity` and `activity_start`, so the
+        session stays identifiable and exportable -- which is what makes
+        "delete an activity and still have the contacts" a fact about where
+        they are rather than a feature with a mechanism behind it.
+
+        That is why this has to be remembered: a list derived from the log
+        would show the session again the moment it was rebuilt. Reversible for
+        the same reason, and a session logged into again comes back, because
+        logging under a name says more than having dismissed it once did.
+        """
+        pairs = [list(p) for p in self._forgotten()]
+        if [str(name), str(start)] not in pairs:
+            pairs.append([str(name), str(start)])
+        self.cfg["FORGOTTEN_SESSIONS"] = pairs
+        self._save_state()
+        self.acts_message = f"{name} removed from the list"
+        self._log_note(f"{name} removed from the list — its contacts are "
+                       f"still in the log")
+        # If that was the session in progress there is nothing to log into any
+        # more, so fall back to the master log. The reference goes with it: the
+        # activation is over and `my_park` on the next contact would be wrong.
+        # The SCHEMA stays -- POTA with no reference of your own is hunting.
+        if name == self._activity_name() and start == self._activity_start():
             self._set_activity_session("")
-            # This station's own reference goes: that activation is deleted,
-            # and leaving `my_park` set would write it onto the next contact
-            # as though the activation were still running.
             if self.cfg.get("MY_PARK"):
                 self._set_my_park("")
-            # The TYPE stays. A type is a template and outlives any one
-            # session -- and POTA with no activation of your own is exactly
-            # what HUNTING is: their park in `park`, nothing in `my_park`. An
-            # earlier version reset this to GENERAL and so threw away a
-            # perfectly good hunting setup every time an activation was
-            # deleted.
         self.acts_sel = 0
 
     def _delete_activity_type(self, name):
@@ -2335,6 +2422,7 @@ class Deck:
             my_grid=self.cfg.get("LOCATOR", ""),
             my_park=values.get("my_park", ""), activity_type=form.activity_type,
             activity=self._activity_name(),
+            activity_start=self._activity_start(),
             serial_tx=values.get("serial_tx", ""),
             exchange_tx=values.get("exchange_tx", ""),
             my_rig=self.cfg.get("RIG", ""),
@@ -2355,18 +2443,6 @@ class Deck:
             # and the form is left alone so it can be tried again.
             self.log_message = f"-- NOT LOGGED: {exc}"
             return
-
-        # And into the master log, so it accumulates whatever activity made
-        # the contact. Second, not first: the activity's own file is what is
-        # on screen and what the duplicate check reads, so it is the one that
-        # must not be lost. A master that cannot be written is reported and
-        # does not fail the contact -- the archive is worth less than the QSO.
-        master = self._master_path()
-        if master:
-            try:
-                qsolog.append(master, rec)
-            except OSError as exc:
-                self._log_note(f"logged, but the master log failed: {exc}")
 
         self.log_records.append(rec)
         self._looked_up = ""
@@ -2927,11 +3003,9 @@ class Deck:
                 log_name=os.path.basename(
                     qsolog.log_path(self.cfg.get("LOG_PATH", ""))),
                 callbook_state=self._callbook_state(),
-                activity=self._activity_name(),
+                activity=self._activity_name() or MASTER_LOG,
                 activity_type="" if act == "GENERAL" else act,
-                log_lines=self._log_lines(),
-                master_log=str(self.cfg.get("MASTER_LOG", "yes")
-                               ).strip().lower() in ("yes", "on", "true", "1"))
+                log_lines=self._log_lines())
         if m == "activity":
             table = self._activity_table()
             current = (self.log_form.activity_type.name if self.log_form
@@ -3014,6 +3088,13 @@ class Deck:
         if ch in (RING_BACK, RING_FWD) and self.screen not in AREA_LOCKED:
             self._ring(-1 if ch == RING_BACK else 1)
             return True
+
+        # There is deliberately no key that jumps to the log. `^O` and `^P`
+        # reach it the same way they reach everything else, and a second route
+        # to one application and not the others is a key to remember for no
+        # gain. Ctrl-N used to do it, from the conversation screen only --
+        # which also made it a dead key on power-on once the deck started on
+        # DECK & RIG instead.
 
         if self.menu:
             return self._handle_menu(ch)
@@ -3115,11 +3196,6 @@ class Deck:
             self._toggle_inhibit()
         elif ch == 24:                       # Ctrl-X
             self._clear_transcript()
-        # Ctrl-N opens the log. Bound only when logging is on: off, this falls
-        # through to the unhandled-key branch exactly as any unused key does,
-        # which is what "absent when off" means in practice.
-        elif ch == 14 and self.log_on:       # Ctrl-N
-            self._open_log()
         # On the conversation screen the arrows edit the line, as they would
         # in any terminal: left and right move the cursor, up and down recall
         # what was sent before.
@@ -3233,14 +3309,28 @@ class Deck:
             self.cfg["LOG_PATH"] = chosen
         # An activity outlives a restart, file and all: a flat battery during
         # an activation must resume it rather than start a second one.
+        # The remembered activity wins over the conf INCLUDING when it is
+        # empty, which is the whole point: deleting an activity sets it empty
+        # and saves, and a restore that skipped empty values let the conf's own
+        # `ACTIVITY` put the deleted one back on the header at the next
+        # restart. A deck ever configured with an activity in its conf could
+        # not get back to the master log and stay there.
         for key, field in (("activity", "ACTIVITY"),
                            ("activity_type", "ACTIVITY_TYPE")):
             value = state.get(key)
-            if isinstance(value, str) and value:
+            if isinstance(value, str):
                 self.cfg[field] = value
-        saved_path = state.get("activity_path")
-        if isinstance(saved_path, str) and saved_path:
-            self.activity_path = saved_path
+        # The session key, which replaced `activity_path`: there is one log
+        # now, so what has to survive a restart is which session is in
+        # progress rather than which file is open.
+        began = state.get("activity_start")
+        if isinstance(began, str):
+            self.cfg["ACTIVITY_START"] = began
+        forgotten = state.get("forgotten_sessions")
+        if isinstance(forgotten, list):
+            self.cfg["FORGOTTEN_SESSIONS"] = [
+                [str(p[0]), str(p[1])] for p in forgotten
+                if isinstance(p, (list, tuple)) and len(p) == 2]
         for key, field in (("rx_hold_ms", "RX_HOLD_MS"),
                            ("rx_hold_max_ms", "RX_HOLD_MAX_MS")):
             hold = state.get(key)
@@ -3293,7 +3383,8 @@ class Deck:
             # and a contest weekend resumed on Sunday would fork.
             "activity": self.cfg.get("ACTIVITY", ""),
             "activity_type": self.cfg.get("ACTIVITY_TYPE", ""),
-            "activity_path": self.activity_path,
+            "activity_start": self.cfg.get("ACTIVITY_START", ""),
+            "forgotten_sessions": [list(p) for p in self._forgotten()],
             "rx_hold_ms": self.cfg.get("RX_HOLD_MS", 0),
             "rx_hold_max_ms": self.cfg.get("RX_HOLD_MAX_MS", 0),
         }
@@ -3582,7 +3673,7 @@ class Deck:
                 self.log_on = not self.log_on
                 self.cfg["LOGGING"] = "yes" if self.log_on else "no"
                 self._save_state()
-                self._log_note("logging on — Ctrl-N opens it"
+                self._log_note("logging on — ^O ^P reach it"
                                if self.log_on else "logging off")
                 if not self.log_on and self.screen == LOG:
                     self.screen = CHAT
@@ -3609,14 +3700,9 @@ class Deck:
             elif key == "n":
                 self.cfg["LOG_LINES"] = str(self._log_lines() % 3 + 1)
                 self._save_state()
-            elif key == "k":
-                on = str(self.cfg.get("MASTER_LOG", "yes")).strip().lower() \
-                    not in ("yes", "on", "true", "1")
-                self.cfg["MASTER_LOG"] = "yes" if on else "no"
-                self._save_state()
-                self._log_note(
-                    "master log on — every contact goes to the default log too"
-                    if on else "master log off")
+            elif key == "x":
+                self._export_adif(session_only=True)
+                self._close_menu()
             elif key == "d":
                 rules = qsolog.DUPE_RULES
                 now = self.cfg.get("DUPE_CHECK", "band+mode")
@@ -3646,12 +3732,12 @@ class Deck:
             if key == "d":
                 self._pending_type_delete = True
                 self._pending_type_copy = False
-                self._log_note("press the number of the type to delete")
+                self._log_note("press the number of the schema to delete")
                 return True
             if key == "c":
                 self._pending_type_copy = True
                 self._pending_type_delete = False
-                self._log_note("press the number of the type to copy")
+                self._log_note("press the number of the schema to copy")
                 return True
             if key == "n":
                 self._pending_type_copy = False
@@ -3676,11 +3762,11 @@ class Deck:
                     return True
                 reset = activities.is_builtin(chosen)
                 self._ask_confirm(
-                    "RESET ACTIVITY TYPE" if reset else "DELETE ACTIVITY TYPE",
+                    "RESET LOG SCHEMA" if reset else "DELETE LOG SCHEMA",
                     [chosen, "",
                      (f"Your changes to {chosen} will be removed and the "
                       f"built-in definition restored.") if reset else
-                     f"The {chosen} type will be deleted from activities.conf.",
+                     f"The {chosen} schema will be deleted from activities.conf.",
                      "Contacts already logged are not touched."],
                     lambda n=chosen: self._delete_activity_type(n),
                     back=self.screen)

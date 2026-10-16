@@ -1,4 +1,8 @@
-# AGENTS.md — keyboard-to-keyboard cyberdeck
+# AGENTS.md — ham radio cyberdeck
+
+Renamed from "keyboard-to-keyboard cyberdeck" on 2026-10-16: the digital modes
+are one of three applications now, beside the contact log and the station's own
+settings. The git remote and the directory keep the old name.
 
 A single-purpose HF text terminal: a Raspberry Pi 3A+ behind a 5-inch DSI panel,
 66x20 characters, driving fldigi headless over XML-RPC. It also runs on an
@@ -152,6 +156,17 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   Inserting a field in the middle silently pushes the last of page one onto page
   two, where nobody will find it, so `tests/test_activities.py` asserts both
   pages as ordered lists.
+- **A pty assertion that greps the whole screen can match the FOOTER.** Three
+  checks in this suite passed without testing anything because of it: one
+  looked for `DELETE` to prove a confirmation was up and matched the
+  activities screen's own `d delete` footer; one used `"Tab field" not in
+  body` to prove the log screen was gone, which stopped meaning anything when
+  that hint left the footer; one asserted `"Tab" in flat` for the same reason.
+  **Assert the outcome, or scope the match** — `body[:200]` for a header,
+  `body[-120:]` for a footer, the file's contents for anything written. The
+  harness quits with Ctrl-Q and a confirmation treats every key but Enter as
+  "no", so a question is NEVER the last screen: what distinguishes a blocked
+  key from one that got through is which screen the deck ended up on.
 - **Never hardcode a row key or a picker number in a test.** Both move when
   `ENTRY_FIELDS` is reordered or a type is added. `type_key()` and
   `field_keys()` in `tests/test_log_panel.py` derive them. Hardcoding `"2"` once

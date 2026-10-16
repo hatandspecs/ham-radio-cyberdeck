@@ -82,12 +82,16 @@ keys = [k for k, _ in on["items"]]
 # decision. It is now the lines-per-contact setting, which belongs on this menu
 # because it is about reading the log rather than about one activity.
 equals("on opens the rest", keys,
-       ["l", "f", "k", "a", "m", "d", "c", "e", "v", "n"])
-# `k` sits next to the default log because it is about that file: every
-# contact goes there as well as to its activity's own, so an activity deleted
-# later does not take its contacts with it.
-check("the master log is offered beside the default log",
-      "Master log" in dict(on["items"])["k"], dict(on["items"])["k"])
+       ["l", "f", "x", "a", "m", "d", "c", "e", "v", "n"])
+# `x` where the master-log toggle used to be. There is one log now, so there
+# is nothing to switch on: an activity is a label on records and a
+# per-activity export is a filter over the one file.
+check("exporting this activity is offered",
+      "Export this activity" in dict(on["items"])["x"],
+      dict(on["items"])["x"])
+check("and it names what would be exported",
+      "the whole log" in dict(menus.log_menu(on=True)["items"])["x"],
+      dict(menus.log_menu(on=True)["items"])["x"])
 check("creating a type is not offered here",
       not any("New type" in label for _k, label in on["items"]),
       str(on["items"]))
