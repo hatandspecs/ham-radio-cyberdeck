@@ -48,22 +48,65 @@ def keyboard_modes(all_names):
     return out
 
 
-ROOT = {
-    "title": "MENU",
+# One menu per AREA, not one menu for the deck.
+#
+# There used to be a single ROOT holding Mode, Tune Settings, Band, Display,
+# Memories, Station, System and Logging -- three different concerns in one
+# list, and an entire area (logging) behind one of its lines. Reaching the
+# deck's own settings meant going through the digimode screen's menu, which is
+# what made the digimode screen the deck's home whether or not that was
+# intended.
+#
+# Now F1 opens the menu for wherever the operator is, and the three areas are
+# reached from each other with ^B and ^F. A line that belongs to one area is
+# not on another area's menu.
+#
+# The rule for adding a line: it goes in together with its handler in
+# cyberdeck.py. An entry whose Enter does nothing is worse than no entry,
+# because being discoverable is the line's only job and it then lies.
+DIGI = {
+    "title": "DIGIMODES",
     "items": [
         ("1", "Mode"),
         ("2", "Tune Settings"),
-        ("3", "Band"),
-        ("4", "Display"),
-        ("5", "Memories"),
-        ("6", "Station"),
-        ("7", "System"),
-        # Added together with its handler in cyberdeck.py, which is the rule:
-        # a root entry whose Enter does nothing is worse than no entry, since
-        # being discoverable is the line's only job and it then lies.
-        ("8", "Logging"),
+        ("3", "Memories"),
     ],
-    "footer": "Esc back to the conversation   ↑↓ move   Enter select",
+    "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P area",
+}
+
+# The deck and the radio: what this station is, what it is attached to, and
+# what the panel itself does. Nothing here is about digital modes, and nothing
+# here is about one contact.
+DECK = {
+    "title": "DECK & RIG",
+    "items": [
+        ("1", "Station"),
+        ("2", "Band"),
+        ("3", "Display"),
+        ("4", "System"),
+    ],
+    "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P area",
+}
+
+# Kept under its old name as well, because `ROOT` is what several tests and
+# `tools/` reach for and because a menu that vanished would fail at the point
+# of use rather than here. It is the digimode menu: that is the screen F1 used
+# to open it from.
+ROOT = DIGI
+
+# Which menu Esc goes up to. A menu absent from this map is a top-level one and
+# Esc closes it, returning to the screen underneath -- which is the screen of
+# the area it belongs to, so backing out never crosses an area boundary.
+MENU_PARENT = {
+    "mode": "digi",
+    "modes_all": "mode",
+    "tuning": "digi",
+    "memories": "digi",
+    "station": "deck",
+    "radio": "deck",
+    "display": "deck",
+    "system": "deck",
+    "activity": "logging",
 }
 
 DISPLAY = {

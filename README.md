@@ -617,7 +617,7 @@ tools/dev-fldigi.sh        # fldigi must be running; three tests drive it
 tools/run_tests.sh
 ```
 
-1743 checks across 24 files. `test_screen.py`, `test_menu_nav.py`,
+1879+ checks across 25 files. `test_screen.py`, `test_menu_nav.py`,
 `test_menu_arrows.py`, `test_console_keys.py`, `test_screen_toggles.py`,
 `test_log_panel.py` and `test_state.py` fork
 a pseudo-terminal, run the real application, and read the screen back with a

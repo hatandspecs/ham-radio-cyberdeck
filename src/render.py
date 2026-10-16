@@ -398,6 +398,12 @@ def plain(segments):
 # and 50 at the largest one, so the line has to shed bindings rather than be
 # truncated mid-word — a hint that reads "^C abor" is worse than no hint.
 _HINT_TIERS = (
+    # The two widest carry `^O ^P area`, which is the only place the ring is
+    # taught. At 66 columns -- the deck -- that costs `F5+ memory`, which the
+    # digimode menu still lists; `^C abort` stays, because a key that stops the
+    # transmitter is worth more on a footer than one that inserts a macro.
+    " F1 menu  F2 tune  F3 mode  F5+ memory  ^T over  ^Y hand  ^O ^P area",
+    " F1 menu  F2 tune  ^T over  ^Y hand  ^C abort  ^O ^P area",
     " F1 menu    F2 tune    F5+ memory    ^T over    ^Y hand    ^C abort",
     " F1 menu   F2 tune   F5+ memory   ^T over   ^Y hand   ^C abort",
     " F1 menu  F2 tune  F5+ memory  ^T over  ^Y hand  ^C abort",
@@ -1162,8 +1168,14 @@ def log_screen(records, entry, width, height, header=None, message="",
             # gives those jobs to now, and Esc means the same thing on every
             # screen of this deck. The selected-state footer above names Esc
             # anyway, which is where it matters.
-            footer = (" F1 menu  F2 activity  \u2191\u2193 pick"
-                      "  \u2190\u2192 field  Enter log  ^X clear")
+            # Seven hints in 66 columns, so the separators are single
+            # spaces and `F3 type` is the one left off -- the type picker is
+            # on this screen's own F1 menu as "Activity type", which none of
+            # the others are. With two-space separators and all eight this
+            # line came to 68 and was silently cut mid-word at `^O ^P ar`,
+            # which is worse than any of them being absent.
+            footer = (" F1 menu F2 acts \u2191\u2193 pick"
+                      " \u2190\u2192 field Enter log ^X clear ^O ^P area")
         if head.get("hint"):
             footer += f"   {head['hint']}"
         out.append([(footer[:width].ljust(width), "dim")])
@@ -1193,6 +1205,43 @@ def log_screen(records, entry, width, height, header=None, message="",
     if head.get("hint"):
         footer += f"   {head['hint']}"
     out.append([(footer[:width].ljust(width), "dim")])
+    return out[:height]
+
+
+def settings_screen(rows, width, height, message="", footer=""):
+    """The deck and the rig, as a screen rather than a menu.
+
+    `rows` is `[(label, value), ...]`, or `(None, heading)` for a divider.
+
+    A screen because the settings are one of the deck's three areas, and an
+    area needs somewhere to BE: the ring lands here, and `F1` opens the menu
+    over it. A menu alone could not be landed on -- it is drawn over whatever
+    screen was current, so arriving at "the settings" meant arriving at the
+    digimode screen with a menu on top of it.
+
+    Read-only, deliberately. Everything here is changed from the menu, and a
+    panel that both showed and edited would need its own cursor, its own
+    editing rules and its own idea of what Enter means on a row that cannot be
+    changed. What it is FOR is answering "what is this station set to" in one
+    place -- which nothing on the deck could do before, because the callsign
+    was in one menu, the rig in another and the log in a third.
+    """
+    out = [[((" DECK & RIG").ljust(width)[:width], "reverse")], rule(width)]
+    label_w = 14
+    for label, value in rows:
+        if label is None:
+            # A divider carries its text in `value` and no value of its own.
+            out.append([((" " + str(value)).ljust(width)[:width], "dim")])
+            continue
+        text = f" {str(label):<{label_w}} {value}"
+        out.append([(text[:width].ljust(width), "")])
+
+    while len(out) < height - 2:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + (message or footer or
+                 "F1 menu  F2 station  F3 band  F4 color  ^O ^P area"))
+                 [:width].ljust(width), "dim")])
     return out[:height]
 
 

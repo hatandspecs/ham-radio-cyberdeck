@@ -354,8 +354,10 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 
 ## Where it stands
 
-1743 checks across 24 files, all passing as of 2026-10-14 on the `logger`
-branch — a clean serial run, every file green. Run them serially and do not edit `src/` or `tests/` while a run is in
+1893 checks across 25 files, all passing as of 2026-10-15 on the
+`function-ring` branch — a clean serial run, every file green. The logger
+merged to `main` on 2026-10-14; `pre-logger` tags the commit before it, which
+is the rollback point for a deck that misbehaves. Run them serially and do not edit `src/` or `tests/` while a run is in
 flight: three successive runs during that session each reported a different
 single failure, because what executed was not what was on disk. A clean serial
 run had no flakes. The deck has worked real DX on PSK31 and RTTY. A DS3231 real-time
@@ -389,28 +391,75 @@ is pinned in `tests/test_menus.py` as a property of the source — no `qrzlog`
 import in `cyberdeck.py`, no `upload(` call, no QRZ menu item — because a
 comment does not fail when somebody wires a key to an uploader.
 
-**Open design decision, not yet built: three first-class areas.** Settings,
-logging and digimodes as peers on a ring, cycled with **Ctrl-B / Ctrl-F**
-(settings → log → digimodes, wrapping). Arrow keys were ruled out by terminfo,
-which is the whole point of recording it: `infocmp linux` has NO modified
-cursor-key entries, and `xterm-256color` defines only the SHIFT forms
-(`kLFT=\E[1;2D`). So Alt+arrow arrives on the framebuffer console as Esc
-followed by KEY_LEFT — and Esc is load-bearing on every screen — while
-Shift+arrow works in the laptop rig and is a dead key on the deck. Control
-characters are 7-bit and identical everywhere; free ones are Ctrl-B, E, F, G,
-K, O, P, V (Ctrl-Z is not free: linux terminfo maps `kspd=^Z`).
+**Three first-class areas, on branch `function-ring`.** Settings, logging and
+digimodes are peers. **Ctrl-O** and **Ctrl-P** walk the ring, which reads as a
+strip: `settings | log | digimodes`, wrapping, so every area is one keystroke
+from both others. Adjacent keys, O left of P, and both were unbound — which is
+why they won over the alternatives:
 
-The agreed F-key map, with F1 the menu and F4 the color cycle on every screen:
+- **Ctrl-M cannot be bound at all.** It IS byte 13, carriage return, so no
+  terminal distinguishes it from Enter.
+- **Ctrl-N** is byte 14 and opens the log.
+- **Home/End** are the cursor-to-the-ends keys in all three places text is
+  typed (log field, chat compose line, config editor), and since Left/Right
+  moved to field-switching they are the last in-field cursor control there is.
+- **PgUp/PgDn** page or scroll in four places: the transcript, the contact
+  list, the field selector and the all-modes list. The "a screen is a page"
+  mnemonic is good and the collision is what beat it.
+- **Ctrl-O is `VDISCARD`** in the tty line discipline and can be eaten by it
+  while IEXTEN is set. It is not, on this deck — `tests/test_area_ring.py`
+  drives both keys through a real pty for exactly that reason. Do not take
+  that on trust if the terminal setup changes.
+
+Key choices beyond this are deliberately out of scope until someone does them
+as one holistic pass; piecemeal rebinding is how a keymap stops being learnable.
+
+**Arrow keys were ruled out by terminfo, and this is why it is written down:**
+`infocmp linux` has NO modified cursor-key entries at all, and
+`xterm-256color` defines only the SHIFT forms (`kLFT=\E[1;2D`). So Alt+arrow
+reaches the framebuffer console as Esc followed by KEY_LEFT — and Esc is
+load-bearing on every screen — while Shift+arrow would work in the laptop rig
+and be a dead key on the deck, which is the exact fault class
+`tests/test_console_keys.py` exists to catch. Control characters are 7-bit and
+arrive identically everywhere. Still free: Ctrl-E, G, K, V. **Ctrl-Z is not
+free** — linux terminfo maps `kspd=^Z`.
 
 | | F1 | F2 | F3 | F4 | F5–F12 |
 |---|---|---|---|---|---|
-| Settings | menu | Station | Band / rig | color | — |
-| Logging | menu | Activities | Activity type | color | — |
-| Digimodes | menu | Tuner | Mode selector | color | Memories |
+| Settings | DECK & RIG menu | Station | Band | color | — |
+| Logging | logging menu | Activities | Activity type | color | — |
+| Digimodes | DIGIMODES menu | Tuner | Mode | color | Memories |
 
-F2 and F3 are always that area's two main sub-views. F5–F12 are to be scoped to
-digimodes: they are global today, so F7 on the log screen inserts a transmit
-macro into a log field.
+F1 is always the menu for the area you are in, F4 is always the color cycle,
+and F2 and F3 are always that area's two main sub-views. F5–F12 were already
+scoped to the digimode screen — they sit in the fallthrough below every screen
+guard, so a note in an earlier version of this file claiming they were global
+was wrong.
+
+Four things that are load-bearing:
+
+- **`menus.ROOT` is gone, split into `menus.DIGI` and `menus.DECK`.** `ROOT`
+  remains as an alias for `DIGI` so anything still asking by that name gets the
+  menu it used to get. A line belonging to one area is not on another's menu.
+- **`menus.MENU_PARENT` is what Esc walks up.** A menu absent from it is
+  top-level and Esc closes it, landing on its own area's screen — so backing
+  out can never cross an area boundary, which it did when every menu's parent
+  was one shared root.
+- **`AREA_OF` must list every screen, and is defined after all of them.** It
+  referred to `ACTS` and `CONFIRM` before those were assigned, which raised
+  `NameError` on import — and `py_compile` does not catch it, because compiling
+  is not running. Only the pty tests saw it.
+- **`AREA_LOCKED`** keeps the ring out of a confirmation, the pairing screen,
+  the WiFi screen and the no-keyboard notice. The ring is handled after the
+  editor and those screens so a half-typed field or an unanswered question
+  cannot be cycled away from and silently discarded.
+
+Settings is a **screen** (`SET`), not just a menu, because an area needs
+somewhere to land: a menu is drawn over whatever screen was current, so
+"arriving at the settings" used to mean arriving at the digimode screen with a
+menu on top. It is read-only and answers "what is this station set to" in one
+place, which nothing on the deck could do before — the callsign was in one
+menu, the rig in another and the log in a third.
 
 `docs/qso_log_design.md` carries the design and the open decisions.
 **`docs/logger_branch_deploy.md` carries the deploy sequence and the recovery

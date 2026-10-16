@@ -18,7 +18,8 @@ from fldigi_client import Fldigi
 GRIDS = [(66, 20), (80, 24), (50, 15), (100, 30)]
 
 print("-- every menu fits every grid --")
-for name, menu in [("root", menus.ROOT), ("display", menus.DISPLAY),
+for name, menu in [("digi", menus.DIGI), ("deck", menus.DECK),
+                   ("display", menus.DISPLAY),
                    ("tuning", menus.tuning_menu(True, False, 5.0, True, True)),
                    ("radio", menus.band_menu()),
                    ("system", menus.SYSTEM),
@@ -165,10 +166,27 @@ print("\nit is reachable from the root menu")
 # whose Enter does nothing is worse than an absent one. test_menu_arrows
 # catches the dead case, because Up-Enter from the first item lands on
 # whatever is last -- which is now this.
-equals("one line, in the root menu",
-       [l for _, l in menus.ROOT["items"] if l == "Logging"], ["Logging"])
-check("and the menu it opens is built", 
+check("logging is not a line on either area menu",
+      not any(l == "Logging"
+              for _k, l in menus.DIGI["items"] + menus.DECK["items"]),
+      str(menus.DIGI["items"] + menus.DECK["items"]))
+check("and the menu it opens is still built",
       menus.log_menu(on=False)["title"] == "LOGGING")
+# The two area menus carry what belongs to their own area and nothing else.
+equals("the digimode menu is the digimode settings",
+       [l for _k, l in menus.DIGI["items"]],
+       ["Mode", "Tune Settings", "Memories"])
+equals("the deck menu is the deck and the radio",
+       [l for _k, l in menus.DECK["items"]],
+       ["Station", "Band", "Display", "System"])
+# Every menu with a parent backs out INSIDE its own area, so Esc can never
+# cross from one area's menus into another's.
+import render as _r
+for _child, _parent in menus.MENU_PARENT.items():
+    check(f"{_child} backs out to {_parent}", bool(_parent), _child)
+check("both area menus say how to reach the others",
+      "^O ^P" in menus.DIGI["footer"] and "^O ^P" in menus.DECK["footer"],
+      menus.DIGI["footer"] + " / " + menus.DECK["footer"])
 
 print("\nand it renders at every width")
 for w in (50, 66, 80, 100):

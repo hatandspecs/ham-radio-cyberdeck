@@ -97,6 +97,42 @@ if __name__ == "__main__":
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    print("\nsettings a menu can change outlive a restart")
+    # Every one of these already called `_save_state` and not one was in the
+    # saved dict, so the panel wrote a state file that did not contain the
+    # thing just changed. Lines-per-contact set to 3 came back as 1, and a
+    # reference typed for an activation was gone after a flat battery --
+    # during the activation it was typed for.
+    import cyberdeck as _deck
+    check("the list of them is not empty", bool(_deck._REMEMBERED),
+          str(_deck._REMEMBERED))
+
+    d = tempfile.mkdtemp(prefix="cyberdeck-remember-")
+    try:
+        conf = os.path.join(d, "cyberdeck.conf")
+        with open(conf, "w") as fh:
+            fh.write("CALLSIGN = KD3CCO\nLOGGING = yes\nLOG_LINES = 1\n"
+                     + f"LOG_PATH = {os.path.join(d, 'qso.log')}\n")
+        state = os.path.join(d, "state", "cyberdeck.json")
+        # Ctrl-N to the log screen, F1 for its menu, `n` to cycle the lines.
+        run(keys=[CTRL_N, F1, "n"], state_path=state, conf=conf, settle=1.6)
+        saved = {}
+        if os.path.exists(state):
+            with open(state) as fh:
+                saved = json.load(fh)
+        equals("the line count is written to the state file",
+               saved.get("LOG_LINES"), "2")
+
+        # A second process, same state file: it has to come back on 2 rather
+        # than on the 1 the conf says.
+        second = run(keys=[CTRL_N, F1], state_path=state, conf=conf,
+                     settle=1.8, settle_s="0.2")
+        body = "\n".join(second.display)
+        check("and the restarted deck comes back on it",
+              "2 of 3" in body, body[:400])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
     print("\nF4 cycles the color scheme from every area")
     # It was bound in one place, on the fallthrough BELOW the screen handlers,
     # so it worked on the conversation and was a dead key on the log screen,

@@ -24,6 +24,10 @@ import menus
 import wifi
 
 F1 = "\x1bOP"
+# The deck's own settings are an area of their own now: ^B ^B reaches its
+# screen, F1 opens its menu, and System is the fourth line. WiFi, pairing, the
+# transmit inhibit and quit are all behind it.
+DECK_SYSTEM = ["\x0f", "\x0f", F1, "4"]
 
 
 def plain(segments):
@@ -296,7 +300,7 @@ if __name__ == "__main__":
         check(f"the hint fits the panel ({secret}, {revealed})", len(h) <= 65, len(h))
 
     print("\nOpening the by-name editor in the real application")
-    screen = run(keys=[F1, "7", "w", "n"], settle=2.0, settle_s="600")
+    screen = run(keys=DECK_SYSTEM + ["w", "n"], settle=2.0, settle_s="600")
     body = "\n".join(screen.display)
     check("it exited cleanly rather than crashing", screen.exited_cleanly,
           body[:200])
@@ -313,7 +317,7 @@ if __name__ == "__main__":
     # network anywhere in range, which is the only deterministic way to get a
     # masked field in front of the real application.
     print("\nThe passphrase field masks, and Ctrl-R reveals")
-    screen = run(keys=[F1, "7", "w", "n", "H", "i", "\r",
+    screen = run(keys=DECK_SYSTEM + ["w", "n", "H", "i", "\r",
                        "s", "e", "c", "r", "3", "t"],
                  settle=2.0, settle_s="600")
     body = "\n".join(screen.display)
@@ -326,7 +330,7 @@ if __name__ == "__main__":
         check("bullets are", "••••••" in body, body[:300])
         check("and the hint offers to show it", "^R" in body, body[:400])
 
-    screen = run(keys=[F1, "7", "w", "n", "H", "i", "\r",
+    screen = run(keys=DECK_SYSTEM + ["w", "n", "H", "i", "\r",
                        "s", "e", "c", "r", "3", "t", "\x12"],
                  settle=2.0, settle_s="600")
     body = "\n".join(screen.display)

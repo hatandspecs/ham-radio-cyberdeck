@@ -106,6 +106,8 @@ for term in ("xterm", "linux"):
           "\u2190\u2192 field" in body, body[-120:])
     check(f"{term}: and how to reach the contacts above",
           "\u2191\u2193 pick" in body, body[-120:])
+    check(f"{term}: and how to reach the other areas",
+          "^O ^P area" in body, body[-120:])
     # Not guessable, so it has to be on the footer. Esc is, and came off it to
     # make room -- all seven keys do not fit in 66 columns.
     check(f"{term}: and how to clear the entry", "^X clear" in body,
@@ -281,7 +283,9 @@ check("in the order it was put into", "entry = name," in written, written)
 check("carrying what the copy inherited", "serial = yes" in written, written)
 check("and the renamed label", "label_exchange_rx" in written, written)
 
-check("the deck switched to it", "LOG  PAQP" in body, body[:120])
+check("the deck switched to it", "PAQP" in body.splitlines()[0], body[:120])
+check("and the header still says what the log is for",
+      "casual logging" in body.splitlines()[0], body[:120])
 check("and the form rebuilt in the new order",
       body.index("Name") < body.index("Nr"), body[-400:])
 

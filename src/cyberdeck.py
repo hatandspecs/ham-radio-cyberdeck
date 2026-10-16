@@ -34,11 +34,67 @@ LOG, FIELDS, ORDER = "log", "fields", "order"
 # were unreadable on the panel and correctable only over SSH -- which is no
 # use from the bench where the mistakes get made.
 ENTRY = "entry"
+# The deck and the radio: what this station is and what the panel does. A
+# screen rather than a menu because the settings are one of three AREAS, and an
+# area needs somewhere to land.
+SET = "settings"
+
 # Activities on disk, and the question asked before anything is
 # destroyed. The confirmation is a screen of its own because deleting a
 # log deletes contacts, and a prompt sharing a screen with the thing it
 # is about gets answered by reflex.
 ACTS, CONFIRM = "activities", "confirm"
+
+# The three areas, and the ring `^B` and `^F` walk. In that order, though in a
+# three-ring the order only decides which direction is shorter: every area is
+# one step from both others.
+#
+# Why control characters and not the arrows. `infocmp linux` defines NO
+# modified cursor keys, so Alt+Left reaches the framebuffer console as Esc
+# followed by KEY_LEFT -- and Esc is load-bearing on every screen here, so it
+# would fire first. `xterm-256color` defines only the SHIFT forms, which means
+# Shift+Left would work in the laptop rig and be a dead key on the deck: the
+# exact fault class `tests/test_console_keys.py` exists to catch. Control
+# characters are 7-bit and arrive identically on every terminal.
+AREA_SETTINGS, AREA_LOG, AREA_DIGI = "settings", "logging", "digimodes"
+RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI)
+# Ctrl-O and Ctrl-P: adjacent keys, O left of P, so back and forward map onto
+# the ring the way they sit under the hand. Both were unbound, which is what
+# makes them the cheap answer -- PgUp and PgDn keep the paging and scrolling
+# they already do on the transcript, the contact list, the field selector and
+# the all-modes list, and Home and End keep the cursor-to-the-ends job they do
+# in all three places something is typed.
+#
+# Ctrl-M was asked for first and cannot be bound: it IS byte 13, carriage
+# return, so no terminal can tell it from Enter and the ring would fire instead
+# of logging a contact. Ctrl-N is byte 14 and opens the log.
+#
+# Ctrl-O is `VDISCARD` in the tty line discipline and can be swallowed by it
+# while IEXTEN is set, which is why `tests/test_area_ring.py` drives both keys
+# through a real pty rather than calling the handler: the only proof that a
+# control character reaches the application is watching it arrive. It does.
+RING_BACK, RING_FWD = 15, 16                     # Ctrl-O, Ctrl-P
+
+# Which area each screen belongs to. Anything missing belongs to digimodes,
+# which is where the deck starts and where a screen with no better home goes.
+AREA_OF = {
+    SET: AREA_SETTINGS,
+    LOG: AREA_LOG, ACTS: AREA_LOG, ENTRY: AREA_LOG,
+    FIELDS: AREA_LOG, ORDER: AREA_LOG,
+    CHAT: AREA_DIGI, TUNE: AREA_DIGI,
+}
+
+# Screens the ring must not leave. A question has to be answered and a field
+# being typed has to be finished or abandoned deliberately; cycling away from
+# either would discard it silently.
+AREA_LOCKED = (CONFIRM, PAIR, WIFI, NOKB)
+
+# Settings a menu can change, which therefore have to outlive a restart. The
+# conf file is where each one STARTS; the state file is what it is now. Keep
+# this in step with the menus: a setting that is changeable and not listed here
+# silently reverts, which reads as the panel forgetting rather than as a bug.
+_REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
+               "MY_PARK", "EXCHANGE_TX")
 
 # Releasing the post-over receive hold. Not configuration: these describe how
 # a decaying transient is told apart from a station answering, which is a
@@ -115,6 +171,13 @@ class Deck:
         # the contacts on screen -- None when the form has the keyboard, which
         # is almost always. Enter means two different things depending on this,
         # so it is drawn: the picked row is reversed and the footer changes.
+        # Where each area was left, so arriving back lands where the operator
+        # was rather than resetting. This is what makes the ring feel like tabs
+        # instead of three buttons.
+        self.area_screen = {AREA_SETTINGS: SET, AREA_LOG: LOG,
+                            AREA_DIGI: CHAT}
+        # The settings screen's own message line.
+        self.set_message = ""
         self.log_sel = None
         # What the callbook had to say, kept apart from `log_message` so that a
         # poll arriving between keystrokes cannot overwrite a duplicate warning
@@ -1018,6 +1081,105 @@ class Deck:
             curses.curs_set(0)
         except curses.error:
             pass
+
+    # -- the three areas ---------------------------------------------------
+
+    def _area(self):
+        """Which area the deck is in now."""
+        return AREA_OF.get(self.screen, AREA_DIGI)
+
+    def _ring(self, step):
+        """Move to the next area, landing where that area was left.
+
+        Remembers the screen on the way out, so leaving the activities list
+        and coming back arrives at the activities list. Menus are closed on
+        the way: a menu belongs to the area it was opened from, and carrying
+        one across would draw the wrong area's menu over the right area's
+        screen.
+        """
+        here = self._area()
+        self.area_screen[here] = self.screen
+        self._close_menu()
+        where = RING[(RING.index(here) + step) % len(RING)]
+        self.screen = self.area_screen.get(where, CHAT)
+        if where == AREA_LOG:
+            # Logging can be switched off, and then its screens have no form
+            # to draw. Its MENU is where that is fixed, so that is where the
+            # ring lands -- rather than refusing to move, which reads as a
+            # dead key, or landing on a screen that bounces straight back.
+            if not self.log_on:
+                self.screen = CHAT
+                self._open_menu("logging")
+                self._log_note("logging is off — `l` switches it on")
+                return
+            if self.log_form is None:
+                self._open_log()
+                return
+            if self.screen not in AREA_OF or AREA_OF[self.screen] != AREA_LOG:
+                self.screen = LOG
+        elif where == AREA_DIGI and self.screen not in (CHAT, TUNE):
+            self.screen = CHAT
+
+    def _settings_rows(self):
+        """What the settings screen shows. Labels and values only."""
+        cfg = self.cfg
+        rig = self.fldigi
+        rows = [(None, " STATION")]
+        for key, label in (("CALLSIGN", "Callsign"), ("LOCATOR", "Locator"),
+                           ("NAME", "Name"), ("QTH", "QTH")):
+            rows.append((label, cfg.get(key, "") or "(not set)"))
+        rows.append((None, " RADIO"))
+        rows.append(("Rig", cfg.get("RIG", "") or "(not set)"))
+        rows.append(("Antenna", cfg.get("ANTENNA", "") or "(not set)"))
+        power = self._power_now()
+        rows.append(("Power", power or "(not known)"))
+        hz = 0
+        try:
+            hz = int(rig.frequency() or 0)
+        except (TypeError, ValueError, AttributeError):
+            hz = 0
+        if not hz:
+            # Nothing from fldigi, so try the CAT path the log form uses.
+            hz = self._log_freq_hz()
+        rows.append(("VFO", render.frequency(hz) if hz else "(not known)"))
+        rows.append(("Mode", self._log_mode() or "(not known)"))
+        rows.append(("Carrier", f"{rig.carrier()} Hz"
+                                if rig.connected else "(no modem)"))
+        rows.append(("Transmit",
+                     "INHIBITED" if self.session.inhibited else "enabled"))
+        rows.append((None, " LOG"))
+        rows.append(("Logging", f"on — {len(self.log_records)} QSOs"
+                                if self.log_on else "off"))
+        rows.append(("Activity", self._activity_name() or "casual logging"))
+        rows.append(("Callbook", self._callbook_state()))
+        return rows
+
+    def _draw_settings(self, h, w):
+        for i, line in enumerate(render.settings_screen(
+                self._settings_rows(), w, h, message=self.set_message)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_settings(self, ch):
+        if ch == curses.KEY_F1:
+            self._open_menu("deck")
+        elif ch == curses.KEY_F2:
+            self._open_menu("station")
+        elif ch == curses.KEY_F3:
+            self._open_menu("radio")
+        elif ch == 27:
+            # Esc has meant "back to the conversation" on every screen of this
+            # deck since before there were areas, and the conversation is
+            # still what it boots to. Keeping that is worth more than making
+            # Esc a dead key here for the sake of symmetry.
+            self.area_screen[AREA_SETTINGS] = SET
+            self.screen = CHAT
+        elif ch == 17:
+            return self._quit()
+        return True
 
     def _log_lines(self):
         """Lines per contact in the list: 1, 2 or 3."""
@@ -2132,6 +2294,13 @@ class Deck:
         # one rather than two keystrokes through a menu.
         elif ch == curses.KEY_F2:
             self._open_activities()
+        # F3 is the activity TYPE, pairing with F2's activity the way the
+        # digimode screen pairs F2's tuner with F3's mode picker: on every
+        # area, F2 and F3 are that area's two main sub-views. It also stops
+        # the type picker being two keystrokes down a menu, which is where the
+        # whole create-and-copy flow now lives.
+        elif ch == curses.KEY_F3:
+            self._open_menu("activity")
         elif ch == 9:                                   # Tab
             # Leaving the callsign is the moment it is worth asking about.
             if form.current is not None and form.current.name == "call":
@@ -2514,6 +2683,8 @@ class Deck:
             self._draw_order(h, w)
         elif self.screen == ENTRY:
             self._draw_entry(h, w)
+        elif self.screen == SET:
+            self._draw_settings(h, w)
         elif self.screen == ACTS:
             self._draw_activities(h, w)
         elif self.screen == CONFIRM:
@@ -2599,8 +2770,10 @@ class Deck:
 
     def _current_menu(self, w, h):
         f, m = self.fldigi, self.menu
-        if m == "root":
-            return menus.ROOT
+        if m in ("digi", "root"):
+            return menus.DIGI
+        if m == "deck":
+            return menus.DECK
         if m == "display":
             return menus.DISPLAY
         if m == "tuning":
@@ -2709,6 +2882,14 @@ class Deck:
             self._apply_scheme(colors.cycle(self.scheme))
             return True
 
+        # The area ring. After the editor and the modal screens, so a question
+        # being answered or a field being typed cannot be cycled away from and
+        # silently discarded; before the per-screen handlers, so no screen can
+        # shadow it.
+        if ch in (RING_BACK, RING_FWD) and self.screen not in AREA_LOCKED:
+            self._ring(-1 if ch == RING_BACK else 1)
+            return True
+
         if self.menu:
             return self._handle_menu(ch)
 
@@ -2737,6 +2918,9 @@ class Deck:
         if self.screen == ENTRY:
             return self._handle_entry(ch)
 
+        if self.screen == SET:
+            return self._handle_settings(ch)
+
         # Before every other screen: a question that has to be answered is
         # the only thing a keystroke can mean while it is on screen.
         if self.screen == CONFIRM:
@@ -2749,7 +2933,10 @@ class Deck:
             return self._handle_tune(ch)
 
         if ch == curses.KEY_F1:
-            self._open_menu("root")
+            # The DIGIMODE menu, not a deck-wide one. What the deck and the
+            # radio are set to is its own area, one `^B` away, and mixing the
+            # two is what made this screen the deck's home by accident.
+            self._open_menu("digi")
         elif ch == curses.KEY_F3:
             self._open_menu("mode")
         elif ch == curses.KEY_F2:
@@ -2934,6 +3121,12 @@ class Deck:
             hold = state.get(key)
             if isinstance(hold, int) and 0 <= hold <= 5000:
                 self.cfg[field] = hold
+        # Blank is a real value for some of these -- an activation that has
+        # ended has no reference -- so an empty string is restored and only a
+        # missing key falls back to the conf.
+        for key in _REMEMBERED:
+            if key in state and isinstance(state[key], str):
+                self.cfg[key] = state[key]
         scheme = state.get("color")
         if scheme in colors.SCHEMES:
             self.scheme = scheme
@@ -2979,6 +3172,19 @@ class Deck:
             "rx_hold_ms": self.cfg.get("RX_HOLD_MS", 0),
             "rx_hold_max_ms": self.cfg.get("RX_HOLD_MAX_MS", 0),
         }
+        # Settings the MENUS change. Every one of them already called
+        # `_save_state` and not one of them was in this dict, so the panel
+        # wrote a state file that did not contain the thing just changed:
+        # lines-per-contact set to 3 was back at 1 after a restart, a dupe rule
+        # switched to call-only was back to band+mode, and a reference typed
+        # for an activation was gone after a flat battery -- during the
+        # activation it was typed for.
+        #
+        # The rule the rest of this function follows: anything reachable from
+        # a menu outlives a restart, because the operator changed it on purpose
+        # and the conf file is only where it starts.
+        for key in _REMEMBERED:
+            state[key] = self.cfg.get(key, "")
         try:
             directory = os.path.dirname(path)
             os.makedirs(directory, exist_ok=True)
@@ -3110,9 +3316,15 @@ class Deck:
             return True
 
         if ch == 27:                                   # Esc
-            self._close_menu() if m in ("root",) else self._open_menu("root")
-            if m == "root":
-                return True
+            # Up to this menu's parent, or out to the screen underneath when
+            # it has none. The screen underneath belongs to the area the menu
+            # was opened from, so backing out never crosses an area boundary
+            # -- which it did when every menu's parent was one shared root.
+            parent = menus.MENU_PARENT.get(m)
+            if parent:
+                self._open_menu(parent)
+            else:
+                self._close_menu()
             return True
         if ch == 17:                                   # Ctrl-Q
             return False
@@ -3121,10 +3333,18 @@ class Deck:
         if ch == curses.KEY_NPAGE and m == "modes_all":
             self.menu_page += 1; return True
 
-        if m == "root":
-            dest = {"1": "mode", "2": "tuning", "3": "radio",
-                    "4": "display", "5": "memories", "6": "station",
-                    "7": "system", "8": "logging"}.get(key)
+        # One handler per area menu. `root` is accepted as the old name for
+        # the digimode menu so that anything still asking for it by that name
+        # gets the menu it used to get rather than nothing.
+        if m in ("digi", "root"):
+            dest = {"1": "mode", "2": "tuning", "3": "memories"}.get(key)
+            if dest:
+                self._open_menu(dest)
+            return True
+
+        if m == "deck":
+            dest = {"1": "station", "2": "radio",
+                    "3": "display", "4": "system"}.get(key)
             if dest:
                 self._open_menu(dest)
             return True

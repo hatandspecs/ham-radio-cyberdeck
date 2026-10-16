@@ -552,10 +552,17 @@ key handler and a `self.screen` constant. The log screen is `LOG`, built the
 same way, which means it is testable as a pure function of its arguments like
 the others.
 
-F1-F4 are taken (root menu, tuning, mode, color cycle). Of the free control
-keys — 2, 5, 6, 7, 11, 14, 15, 16, 22 — Ctrl-N for "new QSO" is the least
-unmemorable. Bound **only when logging is on**; otherwise it falls through to
-the unhandled-key branch like any unused key.
+F1-F4 are taken on every screen: F1 the menu for the area, F2 and F3 that
+area's two sub-views, F4 the color cycle. Of the free control keys — 5, 7, 11,
+15, 16, 22 — Ctrl-N for "new QSO" is the least unmemorable. Bound **only when
+logging is on**; otherwise it falls through to the unhandled-key branch like
+any unused key.
+
+Ctrl-O and Ctrl-P are no longer free: they walk the area ring, which is the
+other way into the log. Ctrl-Z is not free either, whatever a count of unused
+bytes says — `linux` terminfo maps `kspd=^Z`, so ncurses returns KEY_SUSPEND
+on the deck and the byte never arrives. Nor is Ctrl-M, which is byte 13 and
+therefore Enter.
 
 Layout at 66x20:
 
@@ -732,13 +739,15 @@ the reference alone is what the log and the upload need.
 
 ### 7.6 Menu
 
-One entry in the root menu:
+Logging is an AREA, not a line on another area's menu: `Ctrl-N` opens it and
+`Ctrl-O`/`Ctrl-P` reach it from either side. Its own menu is `F1` from the log
+screen, and the toggle is the first line of that:
 
 ```
-Logging          off
+Logging          on — 14 QSOs
 ```
 
-Selecting it toggles. When on it reads `on — 14 QSOs` and opens a submenu:
+The rest of that menu:
 
 ```
 Logging                      on — 14 QSOs

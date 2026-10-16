@@ -24,26 +24,37 @@ F1, F3 = "\x1bOP", "\x1bOR"
 UP, DOWN, ENTER, ESC = "\x1bOA", "\x1bOB", "\r", "\x1b"
 
 body = show("F1, then Down Down", run(keys=[F1, DOWN, DOWN]))
-check("root menu still open after arrows", "MENU" in body)
+check("the menu is still open after arrows", "DIGIMODES" in body, body[:200])
 
-print("\n-- Down x2 then Enter should reach the third item, Radio --")
+print("\n-- Down x2 then Enter should reach the third item, Memories --")
 body = show("F1 Down Down Enter", run(keys=[F1, DOWN, DOWN, ENTER]))
-check("landed on BAND", "BAND" in body, body[:400])
+check("landed on MEMORIES", "MEMOR" in body.upper(), body[:400])
 
 print("\n-- Enter on the first item reaches Mode --")
 body = show("F1 Enter", run(keys=[F1, ENTER]))
 check("landed on MODE", "MODE" in body, body[:400])
 
 # Up from the first item wraps to the last, and Enter on it opens that
-# submenu. Both halves matter: a root entry with no handler still wraps to,
-# and then does nothing, which is how the Logging entry was caught.
-_LAST = menus.ROOT["items"][-1][1].upper()
+# submenu. Both halves matter: an entry with no handler still wraps to, and
+# then does nothing, which is how the Logging entry was caught.
+#
+# Derived from the menu rather than named, because F1 opens the menu for the
+# area the operator is in and the digimode screen is where the deck starts.
+CTRL_O = "\x0f"          # one area back on the ring
+# F1 from the digimode screen: Mode, Tune Settings, Memories.
+DIGI_MODE, DIGI_TUNE, DIGI_MEM = "1", "2", "3"
+# The deck's own settings are an area of their own: ^B ^B gets to its screen,
+# F1 opens its menu, then Station, Band, Display, System.
+DECK = [CTRL_O, CTRL_O, "\x1bOP"]
+DECK_STATION, DECK_BAND, DECK_DISPLAY, DECK_SYSTEM = "1", "2", "3", "4"
+
+_LAST = menus.DIGI["items"][-1][1].upper()
 print(f"\n-- Up from the first item wraps to the last, {_LAST.title()} --")
 body = show("F1 Up Enter", run(keys=[F1, UP, ENTER]))
 check(f"wrapped to {_LAST} and it opened", _LAST in body, body[:400])
 
 print("\n-- tuning menu now shows live state --")
-body = show("F1 then 2", run(keys=[F1, "2"]))
+body = show("F1 then 2", run(keys=[F1, DIGI_TUNE]))
 check("tuning menu shows AFC state", "AFC" in body and ("ON" in body or "off" in body), body[:400])
 check("squelch state shown", "Squelch" in body, body[:400])
 
@@ -54,52 +65,55 @@ check("fldigi on RTTY", Fldigi().modem() == "RTTY", Fldigi().modem())
 
 print("\n-- message memories are edited in place --")
 CTRL_U, ENTER = "\x15", "\r"
-body = show("F1 5 opens the list", run(keys=[F1, "5"], settle=1.3))
+body = show("F1 5 opens the list", run(keys=[F1, DIGI_MEM], settle=1.3))
 check("the list names every slot", all(f"F{n}" in body for n in range(5, 13)), body[:300])
 check("empty slots are marked", "(empty)" in body, body[:300])
 
-body = show("F1 5 3 edits F7", run(keys=[F1, "5", "3"], settle=1.4))
+body = show("F1 5 3 edits F7", run(keys=[F1, DIGI_MEM, "3"], settle=1.4))
 check("the editor opens on the chosen slot", "EDIT  F7" in body, body[:200])
 check("and loads its current text", "NAME HR IS" in body, body[:200])
 
 body = show("clear and save leaves it empty",
-            run(keys=[F1, "5", "3", CTRL_U, ENTER], settle=1.6))
+            run(keys=[F1, DIGI_MEM, "3", CTRL_U, ENTER], settle=1.6))
 check("back on the list", "MESSAGE MEMORIES" in body, body[:200])
 check("F7 is now empty", "F7  (empty)" in body, body[:400])
 
 body = show("type and save stores it",
-            run(keys=[F1, "5", "6", CTRL_U] + list("TEST MEMORY") + [ENTER], settle=1.8))
+            run(keys=[F1, DIGI_MEM, "6", CTRL_U] + list("TEST MEMORY") + [ENTER], settle=1.8))
 check("F10 holds the new text", "F10  TEST MEMORY" in body, body[:400])
 
-body = show("Esc discards", run(keys=[F1, "5", "2", CTRL_U] + list("XXX") + ["\x1b"], settle=1.8))
+body = show("Esc discards", run(keys=[F1, DIGI_MEM, "2", CTRL_U] + list("XXX") + ["\x1b"], settle=1.8))
 check("F6 is untouched", "F6  DE {call} {call} K" in body, body[:400])
 
 
 print("\n-- the station fields are editable, and show their tokens --")
-body = show("F1 6 — station", run(keys=[F1, "6"], settle=1.3))
+body = show("F1 6 — station", run(keys=DECK + [DECK_STATION], settle=1.6))
 check("every field carries its token",
       all(t in body for t in ("{call}", "{name}", "{qth}", "{grid}", "{rig}",
                               "{ant}", "{power}")), body[:400])
 check("and its current value", "KD3CCO" in body, body[:400])
 
-body = show("F1 6 2 — edit Name", run(keys=[F1, "6", "2"], settle=1.4))
+body = show("F1 6 2 — edit Name", run(keys=DECK + [DECK_STATION, "2"], settle=1.6))
 check("the editor names the field", "EDIT  Name" in body, body[:200])
 check("no memory-token hint here",
       "filled in when inserted" not in body, body[-200:])
 
 body = show("editing a memory does show the token hint",
-            run(keys=[F1, "5", "1"], settle=1.4))
+            run(keys=[F1, DIGI_MEM, "1"], settle=1.4))
 check("token hint present for a memory", "{call}" in body, body[-200:])
 check("and it says how to make a memory multi-line",
       "\\n" in body, body[-200:])
 
 body = show("change Name and save",
-            run(keys=[F1, "6", "2", CTRL_U] + list("DONALD") + [ENTER], settle=1.8))
+            run(keys=DECK + [DECK_STATION, "2", CTRL_U] + list("DONALD") + [ENTER], settle=2.0))
 check("the station list shows the new value", "DONALD" in body, body[:400])
 
 print("\n-- the renamed menu entries --")
-body = show("F1 root", run(keys=[F1], settle=1.2))
+body = show("F1 digimode menu", run(keys=[F1], settle=1.2))
 check("Tuning is now Tune Settings", "Tune Settings" in body, body[:300])
+# Band moved to the deck's own area along with the rest of the rig settings,
+# so it is checked on the menu it is on now rather than on this one.
+body = show("the deck menu", run(keys=DECK, settle=1.6))
 check("Radio is now Band", "Band" in body and "Radio" not in body, body[:300])
 
 
@@ -130,7 +144,7 @@ check("no radio restriction means nothing is marked",
       not any("not supported" in lbl for _k, lbl in menus.band_menu()["items"]),
       menus.band_menu()["items"])
 
-body = show("F1 3 — the band list", run(keys=[F1, "3"], settle=1.3))
+body = show("F1 3 — the band list", run(keys=DECK + [DECK_BAND], settle=1.6))
 check("titled BAND", "BAND" in body, body[:200])
 check("shows 70 cm", "432.200" in body, body[:400])
 
@@ -138,10 +152,14 @@ check("shows 70 cm", "432.200" in body, body[:400])
 print("\n-- the ^WASD note lives in Tune Settings, not on the main screen --")
 body = show("conversation screen", run(keys=[], settle=1.3))
 check("the hint line no longer mentions ^WASD", "^WASD" not in body, body[-120:])
-check("but still offers the menu and memories",
-      "F1 menu" in body and "F5+ memory" in body, body[-120:])
+# At 66 columns the hint line carries `^O ^P area`, which is the only place
+# the ring is taught, and that costs `F5+ memory` -- which the digimode menu
+# still lists. `^C abort` keeps its place: a key that stops the transmitter is
+# worth more on a footer than one that inserts a macro.
+check("but still offers the menu and the areas",
+      "F1 menu" in body and "^O ^P area" in body, body[-120:])
 
-body = show("F1 2 — tune settings", run(keys=[F1, "2"], settle=1.4))
+body = show("F1 2 — tune settings", run(keys=[F1, DIGI_TUNE], settle=1.4))
 check("the note is here instead", "Ctrl-A / Ctrl-D" in body, body[:500])
 check("and names the search keys", "Ctrl-W / Ctrl-S" in body, body[:500])
 
@@ -166,7 +184,7 @@ check("and no longer ^K", "^K hand" not in body, body[-120:])
 
 print("\n-- system hotkeys work outside the menu, and are advertised in it --")
 CTRL_X, CTRL_I = "\x18", "\x09"
-body = show("F1 7 — system", run(keys=[F1, "7"], settle=1.3))
+body = show("F1 7 — system", run(keys=DECK + [DECK_SYSTEM], settle=1.6))
 check("the inhibit hotkey is shown", "Ctrl-I" in body, body[:400])
 check("the Tab collision is named", "also Tab" in body, body[:400])
 check("the clear hotkey is shown", "Ctrl-X" in body, body[:400])
@@ -185,7 +203,7 @@ check("and it is recorded", "transmit enabled" in body, body[:400])
 
 
 print("\n-- The RX hold after an over is adjustable from Tune Settings --")
-body = show("F1 2", run(keys=[F1, "2"], settle=1.4))
+body = show("F1 2", run(keys=[F1, DIGI_TUNE], settle=1.4))
 check("both bounds are listed with their values",
       "RX hold least" in body and "RX hold most" in body, body[:700])
 check("the default window is 1000 to 4000 ms",

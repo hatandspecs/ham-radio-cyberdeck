@@ -1,11 +1,16 @@
-# The `logger` branch on the deck — deploying it, and getting back
+# Putting a branch on the deck — deploying it, and getting back
 
-Working notes for the branch that adds the contact log. Two things live here:
-the deploy sequence that is known to work, and the recovery sequence that puts
-the deck back on `main` when it does not.
+Working notes for moving code onto the panel. Two things live here: the deploy
+sequence that is known to work, and the recovery sequence that puts the deck
+back on `main` when it does not.
 
 Everything in this file was measured on the deck, not reasoned about. Dates
 mark when, because a note without one cannot be checked.
+
+Started as notes for the `logger` branch, which **merged to `main` on
+2026-10-14** — §2 is kept because the conf keys it appends are what a deck set
+up before that merge is missing. §2a is the current sequence and the one to
+use.
 
 ---
 
@@ -13,11 +18,16 @@ mark when, because a note without one cannot be checked.
 
 This is first because it is the thing wanted in a hurry.
 
-**Both halves have to move together.** `main`'s `config.py` refuses the keys
-the logger adds (`ANTENNA`, `CALLBOOK`, `DUPE_CHECK`, `LOGGING`, …) because an
-unknown key is a refused key. New conf plus old code is a `ConfigError` at
-startup and a dead panel — reverting only the `.py` files produces exactly the
-failure the revert was meant to undo.
+**Since the logger merged to `main` on 2026-10-14, this is a plain file copy
+and NOTHING is done to the conf.** `main`'s `config.py` now accepts every key
+the logger added, so the conf and the code no longer have to move together and
+the `sed` that used to strip those keys must not be run — it would delete
+settings the deck needs. The version of this section that said otherwise was
+true only while the logger was an unmerged branch.
+
+`pre-logger` tags the commit before the merge. Going back **that** far is the
+one case where the conf still has to be stripped, and it is not what a
+misbehaving deck usually needs.
 
 On the laptop:
 
@@ -36,14 +46,13 @@ On the deck:
 
 ```bash
 sudo cp /tmp/deckrevert/*.py /opt/cyberdeck/
-sudo sed -i '/^ANTENNA\|^TX_POWER\|^LOGGING\|^ACTIVITY\|^EXCHANGE_TX\|^MY_PARK\|^CALLBOOK\|^DUPE_CHECK\|^OPERATING/d' /opt/cyberdeck/cyberdeck.conf
 sudo systemctl restart cyberdeck-ui
-systemctl is-active cyberdeck-ui
+journalctl -u cyberdeck-ui -n 20 --no-pager
 ```
 
-Prints `active`, and the panel comes up on the conversation screen.
-
-`is-active` printing `active` is **not** proof of a working deck — see §4.
+The panel comes up on the conversation screen. **Read the journal, not
+`is-active`** — see §4: a unit crash-looping every three seconds reports
+`active`.
 
 ---
 
@@ -157,6 +166,73 @@ OPERATING = auto
 `TX_POWER_MAX` scales the CAT power reading. Verified on the radio
 2026-10-11 at three points: 6 W read `0.6`, 10 W read `1.0`, 0.5 W read
 `0.05` — linear from zero, so one multiplier is correct.
+
+---
+
+## 2a. The deploy sequence — any branch, after the logger merge
+
+This is the short one, and the one to use. Since the logger is on `main`,
+`config.py` accepts every key the deck's conf already has, so **the conf is not
+touched at all**: only the modules and the credentials move. Confirmed on
+`function-ring`, 2026-10-15.
+
+On the laptop. The rsync copies the WORKING TREE, so uncommitted work deploys —
+which is the point, since the deck is where it gets tested:
+
+```bash
+cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+git rev-parse --abbrev-ref HEAD      # say out loud which branch this is
+rsync -av src/*.py cyberdeck.secrets deck@cyberdeck.local:/tmp/deckupd/
+```
+
+On the deck. **The `chown` is load-bearing**: a root-owned `cyberdeck.secrets`
+at mode 600 cannot be read by the service user, and `config.load()` raises
+before curses starts — a dead panel with no message on it. That happened once.
+
+```bash
+sudo cp /tmp/deckupd/*.py /opt/cyberdeck/
+sudo cp /tmp/deckupd/cyberdeck.secrets /opt/cyberdeck/
+sudo chown "$(id -un):$(id -gn)" /opt/cyberdeck/cyberdeck.secrets
+sudo chmod 600 /opt/cyberdeck/cyberdeck.secrets
+ls -l /opt/cyberdeck/cyberdeck.secrets
+```
+
+Prints `-rw-------` owned by your login, not `root`.
+
+Then the preflight, **before** the restart, because a restart into a broken
+import takes the console with it. Import `cyberdeck` itself and not only its
+dependencies: on 2026-10-15 it raised `NameError` at module level because a
+dict named screen constants assigned further down the file, and `py_compile`
+passes that happily — compiling is not running. Only the pty tests saw it.
+
+```bash
+cd /opt/cyberdeck && python3 -c "
+import config, cyberdeck, menus, activities, render
+s = config.load()
+print('conf ok:', s['CALLSIGN'] or '(NO CALLSIGN)', '| logging', s['LOGGING'], '| lines', s['LOG_LINES'])
+print('ring keys:', cyberdeck.RING_BACK, cyberdeck.RING_FWD, '(15 16 = ^O ^P)')
+print('areas:', cyberdeck.RING, '|', len(cyberdeck.AREA_OF), 'screens mapped')
+print('digi menu:', [l for _k, l in menus.DIGI['items']])
+print('deck menu:', [l for _k, l in menus.DECK['items']])
+print('remembered:', cyberdeck._REMEMBERED)
+print('secrets readable:', bool(s['HAMQTH_USER']))
+for n in config.NOTES: print('NOTE:', n)
+"
+```
+
+A traceback, `(NO CALLSIGN)`, or any `NOTE:` line is a reason to fix before
+restarting, not after.
+
+Only then:
+
+```bash
+sudo systemctl restart cyberdeck-ui
+sleep 3
+journalctl -u cyberdeck-ui -n 20 --no-pager
+```
+
+**Read the journal, not `systemctl is-active`.** A unit crash-looping every
+three seconds reports `active`; see §4.
 
 ---
 
