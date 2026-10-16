@@ -48,7 +48,7 @@ print("the tab order puts typing first and prefill last")
 # frequency and mode last -- when those were second, tabbing off the callsign
 # landed on the frequency and the next thing typed went into it.
 equals("general logging", names(logform.LogForm(activities.GENERAL)),
-       ["call", "rst_s", "rst_r", "name", "tx_power", "comment",
+       ["call", "rst_s", "rst_r", "name", "qth", "tx_power", "comment",
         "freq", "mode"])
 # `comment` is in GENERAL's own field list now, and the form appends a comment
 # field to every activity that does NOT list one. Both firing put two Comment
@@ -438,5 +438,46 @@ f.kill()
 f.type("14.0706")
 equals("a hand-typed megahertz value is read as megahertz",
        qsolog.parse_freq(f.value("freq")), 14070600)
+
+print("\n`typed` counts the operator's work and nothing the deck filled in")
+# This is what a schema change is refused over -- §7i -- so a false positive
+# refuses every change on a form nobody has touched, and a false negative
+# throws away a half-typed contact. Both halves are asserted.
+f = logform.LogForm(activities.GENERAL)
+equals("a fresh form has nothing typed in it", f.typed(), [])
+f.from_radio(freq="14.074.000", mode="FT8", power="5")
+f.from_station(rig="FTX-1", antenna="EFHW")
+equals("and the radio and the station settings do not count", f.typed(), [])
+f.focus("call")
+f.type("W3ABC")
+equals("a typed callsign counts", f.typed(), ["call"])
+f.focus("comment")
+f.type("5W to a wire")
+equals("a sticky comment does not -- it is carried across the change",
+       f.typed(), ["call"])
+f.commit()
+equals("and a committed contact leaves nothing behind", f.typed(), [])
+
+# The reports are prefilled from the mode. Untouched they are the deck's, and
+# edited they are the operator's: the same field, both answers.
+f = logform.LogForm(activities.GENERAL)
+equals("a prefilled report does not count", f.typed(), [])
+f.focus("rst_r")
+f.kill()
+f.type("57")
+equals("an edited one does", f.typed(), ["rst_r"])
+
+# A serial the LOG handed out is not typed either.
+c = logform.LogForm(activities.BUILTIN["CONTEST"])
+c.advance_serial([], 1)
+equals("an issued serial does not count", c.typed(), [])
+c.focus("exchange_rx")
+c.type("CENT")
+equals("a typed exchange does", c.typed(), ["exchange_rx"])
+
+# This station's own reference is sticky and survives the change.
+p = logform.LogForm(activities.BUILTIN["POTA"])
+p.set("my_park", "US-5678")
+equals("an own reference does not count", p.typed(), [])
 
 sys.exit(report())

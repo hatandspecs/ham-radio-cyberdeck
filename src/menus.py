@@ -116,7 +116,6 @@ MENU_PARENT = {
     "radio": "digi",
     "display": "deck",
     "system": "deck",
-    "activity": "logging",
     # Esc out of the danger zone goes back to the logging menu, not out to the
     # screen: arriving there is deliberate and leaving should be too.
     "danger": "logging",
@@ -237,16 +236,22 @@ def activity_type_menu(names, current="", labels=None):
     return {
         "title": "LOG SCHEMA",
         "items": items,
-        # Three things can start here: select a type, copy one into a new type,
-        # or begin a new type with nothing in it. Creating a type belongs here
-        # rather than on the logging menu, where it asked the operator to
-        # decide to create one before seeing what already exists.
+        # Five things can start here: select a schema, edit one in place,
+        # copy one into a new schema, begin one with nothing in it, or delete
+        # one. Creating belongs here rather than on the logging menu, where it
+        # asked the operator to decide to create one before seeing what
+        # already exists.
         #
-        # `c` and `d` each take a number after them. Two keystrokes and, for
-        # the delete, a confirmation as well -- a type an operator spent a
-        # contest getting right should not go on one.
-        "footer": ("Esc back  Enter select  c+n copy  n new  "
-                   "d+n delete  * in use"),
+        # `e`, `c` and `d` each take a number after them. Two keystrokes and,
+        # for the delete, a confirmation as well -- a schema an operator spent
+        # a contest getting right should not go on one.
+        #
+        # **"Esc keep", not "Esc back".** Naming a new activity opens this
+        # picker by itself, so Esc is the route for "the schema I am already
+        # using is the right one" -- which is a choice, not a retreat, and it
+        # closes to the log screen exactly as selecting one does. 62 of 66.
+        "footer": ("Esc keep  Enter select  e+n edit  c+n copy  "
+                   "n new  d+n delete"),
     }
 
 
@@ -405,7 +410,7 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
     return {
         "title": "LOGGING",
         "items": items,
-        "footer": "Esc back   ↑↓ move   Enter select   ^N the log screen",
+        "footer": "Esc back   ↑↓ move   Enter select   ^O ^P areas",
     }
 
 

@@ -266,10 +266,12 @@ class ActivityType:
 # frequency and mode read from the radio -- so these are the ones that get
 # typed or come off the rig.
 #
-# `name` is here because the callbook lookup writes into it: with no `name` on
-# the form there is nowhere for a looked-up name to go and the feature reduces
-# to a line on the message bar. `qth` is not here, so a looked-up QTH does
-# exactly that; an operator who wants the field adds it from the selector.
+# `name` and `qth` are both here because the callbook lookup writes into
+# them: with neither on the form there is nowhere for a looked-up name or QTH
+# to go and the feature reduces to a line on the message bar. `qth` was left
+# off at first for exactly that reason reversed -- "an operator who wants it
+# adds it from the selector" -- and it turned out to be the field most wanted
+# next to the name on an ordinary contact, which is where the lookup puts it.
 #
 # The order is not the order these get listed in conversation. What gets TYPED
 # leads, so the common contact is call, reports, name, Enter. `tx_power` is
@@ -278,7 +280,8 @@ class ActivityType:
 # because when they were second, tabbing off the callsign landed on the
 # frequency and the next thing typed went into it.
 GENERAL = ActivityType("GENERAL", label="General logging",
-                   entry=("rst_s", "rst_r", "name", "tx_power", "comment"))
+                   entry=("rst_s", "rst_r", "name", "qth", "tx_power",
+                          "comment"))
 
 BUILTIN = {
     "GENERAL": GENERAL,

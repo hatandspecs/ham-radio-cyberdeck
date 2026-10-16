@@ -723,14 +723,21 @@ def sessions_in(records, forgotten=()):
         key = (name, start)
         _n, kind = activity_of(rec)
         entry = seen.setdefault(key, {"name": name, "start": start,
-                                      "type": kind, "contacts": 0,
-                                      "last": ""})
+                                      "type": kind, "park": "",
+                                      "contacts": 0, "last": ""})
         entry["contacts"] += 1
         when = str(rec.get("when", "") or "")
-        if when > entry["last"]:
+        # `type` and `park` are taken from the NEWEST contact in the session,
+        # not the first one with a value. A session can hold contacts logged
+        # under more than one schema -- §7g makes that possible and §7i
+        # resumes the session under the latest, because that is the
+        # operator's most recent decision about how it is read. Reported as
+        # "" when the newest contact carries no schema, which means GENERAL:
+        # `make_record` writes no `activity_type` for it.
+        if when >= entry["last"]:
             entry["last"] = when
-        if kind and not entry["type"]:
             entry["type"] = kind
+            entry["park"] = str(rec.get("my_park", "") or "")
     return sorted(seen.values(), key=lambda e: e["last"], reverse=True)
 
 
@@ -1351,6 +1358,37 @@ def remove(path, when, call):
         _rewrite(path, records)
         return gone
     return None
+
+
+def rename_session(path, activity, start, new_name):
+    """Rename one session. Returns how many contacts were relabeled.
+
+    `activity_start` is left alone, so the session keeps its identity and only
+    its name changes -- which is what makes this a correction rather than a
+    move. Renaming it back undoes it exactly.
+
+    The whole file is replaced the same atomic way one correction is: temp
+    file, fsync, `os.replace`. So this either happens or it does not, and a
+    pulled plug halfway cannot leave half a session under each name.
+    """
+    new_name = str(new_name or "").strip()
+    if not new_name or not activity_slug(new_name):
+        return 0
+    records = read(path)
+    mine = for_session(records, activity, start)
+    if not mine:
+        return 0
+    marked = {id(r) for r in mine}
+    out, changed = [], 0
+    for rec in records:
+        if id(rec) in marked and str(rec.get("activity", "")) != new_name:
+            rec = dict(rec)
+            rec["activity"] = new_name
+            changed += 1
+        out.append(rec)
+    if changed:
+        _rewrite(path, out)
+    return changed
 
 
 def remove_session(path, activity, start=""):

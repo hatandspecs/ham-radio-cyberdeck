@@ -113,7 +113,15 @@ if __name__ == "__main__":
 
         # The stand-in comes up a second after the deck does, holding CW the
         # way a freshly started fldigi does. This is the cold boot.
-        fake = FakeFldigi(modem="CW", carrier=1000, port=port)
+        #
+        # `rig_mode` is a DATA mode deliberately. The deck parks the decoder
+        # on the `NULL` modem whenever the radio is not in one, so a stand-in
+        # answering "USB" would end up holding NULL and this would read as a
+        # failed restore -- which is what it did until the two were told
+        # apart. What is under test here is the restore, so the radio has to
+        # be somewhere the decoder is allowed to run.
+        fake = FakeFldigi(modem="CW", carrier=1000, port=port,
+                          rig_mode="PKTUSB")
         timer = threading.Timer(1.0, fake.start)
         timer.start()
 
@@ -151,7 +159,10 @@ if __name__ == "__main__":
         # below cancelled the restore on the strength of that keystroke and
         # left the deck in fldigi's own mode — the original fault, reached by
         # a different route.
-        fake = FakeFldigi(modem="CW", carrier=1000, port=port)
+        # A data mode, for the reason given above: the park would otherwise
+        # leave the stand-in on NULL and hide what is being tested.
+        fake = FakeFldigi(modem="CW", carrier=1000, port=port,
+                          rig_mode="PKTUSB")
         timer = threading.Timer(2.5, fake.start)
         timer.start()
 

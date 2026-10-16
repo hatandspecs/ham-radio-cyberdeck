@@ -93,14 +93,18 @@ on exit.
   attached, because that is the one situation it cannot be told about.
 * **Touch, minimally**: drag the transcript to scroll it, tap to choose on the
   pairing screens. No pointer, no cursor, nothing else is selectable.
-* **A contact log whose grammar the operator defines** — 28 selectable fields,
-  per-activity log files, contacts read back and corrected on the panel, ADIF
-  export, and a master log that accumulates everything. See below.
+* **A contact log whose grammar the operator defines** — 28 selectable
+  fields, one log with named sessions inside it, contacts read back and
+  corrected on the panel, and ADIF export of the whole log or one session.
+  See below.
 * **The station's own settings edited on their own screen**, each field shown
   with the `{call}`-style token a message memory substitutes it into.
-* **A transmit interlock tied to the radio's mode.** The deck reports what the
-  radio is in and never sets it, and inhibits transmit by itself the moment
-  the radio leaves a data mode.
+* **Transmit and decoding both tied to the radio's mode.** The deck reports
+  what the radio is in and never sets it. The moment the radio leaves a data
+  mode, transmit is inhibited and **the decoder is stopped** — fldigi's DSP is
+  the largest thing running on a Pi 3A+ and in SSB or FM everything it decodes
+  is noise. Decoding comes back by itself when the radio does; arming
+  transmit stays a deliberate `Ctrl-I`.
 
 It deliberately does **not** do Cabrillo, weak-signal modes, waterfall
 display, image modes, or packet. Contest exchanges, serials and duplicate
@@ -178,18 +182,36 @@ route to one of the three and not the others is a key to remember for no
 gain. The whole of it is worked from the keyboard:
 
 * **An activity is a session; a log schema is the template it uses.** A park
-  activation on a Tuesday is an activity, with its own dated log file; POTA is
-  the schema. Both go into every record, because the name is what a log is
-  filtered back to and the schema is what says how to read the fields in it.
+  activation on a Tuesday is an activity; POTA is the schema. Both go into
+  every record, because the name is what a log is filtered back to and the
+  schema is what says how to read the fields in it. **Resuming a session
+  brings its schema and its reference back with it** — a session is not just
+  a name, it is how that operating was being logged, and the activities list
+  says which schema each row will resume in. Switching to the master log
+  leaves the schema alone, because it spans every schema there has ever been,
+  and drops the reference, because the activation is over. There is one log
+  file —
+  an activity is a label on its records and the activity view is a filter over
+  that file, so an export of an activity is a filtered export and cannot
+  contain a stray contact that landed in the wrong place. A session is
+  `(activity, start)`, with the start pinned when the session begins, so an
+  activation running from 23:50 to 00:30 is one session and not two.
 * **The master log is an activity too** — always there, always first on the
   list, and not deletable, because it is where every contact ever made is
   kept whatever activity made it. Going back to it is something you select.
-* **Schemas are built on the panel** from the schema picker: `c` copies one,
-  `n` starts from nothing, `d` deletes one. Pick the fields, order them, name
-  it — and what it writes is the same INI an operator edits over SSH. Editing
-  the schema an activity is already using takes effect on the next contact
-  without leaving the activity; contacts already logged keep what they were
-  given, and a field added now is simply blank on them.
+* **Schemas are built and edited on the panel** from the schema picker:
+  `e` edits one in place, `c` copies one, `n` starts from nothing, `d`
+  deletes one, and `Esc` keeps the one already in use — which is how you
+  decline the picker that opens when a new activity is named. Pick the
+  fields, order them, name it, and what it writes is the same INI an operator
+  edits over SSH. Editing the schema an activity is already using takes
+  effect on the next contact without leaving the activity; contacts already
+  logged keep what they were given, and a field added now is simply blank on
+  them. A schema change is **refused while a contact is part-typed**, because
+  the change rebuilds the form — log it or `^X` first.
+* **A session can be renamed**, with `r` on the activities list. Every
+  contact of that session is relabeled and the session keeps its start, so
+  renaming back undoes it exactly.
 * **28 selectable fields over two pages.** Page one is general and POTA
   logging; page two is the contest exchange, the zones and the other
   programs. Six more are on every contact and are not selectable because they
@@ -200,12 +222,22 @@ gain. The whole of it is worked from the keyboard:
   after confirming. Only the timestamp is fixed — it is the key the contact is
   found by and the one field nobody typed. The callsign is editable, which is
   the reason the feature exists.
-* **A master log.** Every contact also goes to the default log, whatever
-  activity made it, so deleting an activity later does not take its contacts
-  with it. The format carries no schema, so one file holds a park activation,
-  a contest exchange and a satellite pass with their different field sets.
+* **Deleting an activity keeps its contacts.** It is forgotten from the
+  deck's list and no record changes, so the contacts are still exportable
+  under that name and logging under it again brings the session back. The one
+  place contacts are destroyed in bulk is the **danger zone** (`F1` → `z`):
+  forget all activities, delete this activity's QSOs, delete every QSO. Each
+  line states the count it would destroy and each asks before doing it. It is
+  there so a clean slate is available for testing and demonstration.
+* **The schema decides the columns.** The list shows the fields the selected
+  schema asks for and no others — switching schemas changes the display, and a
+  field a past contact never captured is simply blank. The automatic fields
+  (band, frequency, mode, power, rig, antenna) are shown under every schema
+  because nothing types them. A field no schema asks for is still in the
+  record and still in the ADIF; the contact screen is where a record is read
+  in full.
 * **One, two or three lines per contact in the list**, the extra rows
-  continuing down the activity's own field order.
+  continuing down the schema's own field order.
 
 The log file is no longer strictly append-only, and is still never written in
 place: an edit writes a temp file, `fsync`s, and `os.replace`s it, so a pulled
@@ -219,7 +251,7 @@ decisions, including §7e on reading back and correcting a contact.
 `tools/qso.py` still does all of it from a terminal or over SSH:
 
 ```bash
-qso.py log W3ABC 59 57 Bob Pittsburgh      # a contact
+qso.py log W3ABC 59 57 Bob Pittsburgh      # a contact: reports, name, QTH
 qso.py log --comment "5W to a wire" K2XYZ  # with a note
 qso.py log --lookup OK2CQR 59 55           # fill name/QTH/grid from a callbook
 qso.py log --pota --my-park US-5678 N3QQQ 59 57 US-1234
@@ -273,11 +305,11 @@ No screenshot yet. `^O` from the conversation:
 ```text
  LOG  Bald Eagle SP  (POTA)  US-5678  40m  SSB      2 QSOs  1412Z
 ──────────────────────────────────────────────────────────────────
- UTC    CALL       RST     REF       NAME      QTH
- 14:02  W1AW       59/59   US-1234   Hiram     Newington
-      Freq 7.185.000   Band 40m   Mode SSB   State CT
- 14:09  KD3CCP     59/57             Ryan      State College
-      Freq 7.185.000   Band 40m   Mode SSB   State PA
+ UTC    CALL       RST     REF       NAME
+ 14:02  W1AW       59/59   US-1234   Hiram
+      Band 40m   Freq 7.185.000   Mode SSB   My W 100
+ 14:09  KD3CCP     59/57             Ryan
+      Band 40m   Freq 7.185.000   Mode SSB   My W 100
 ──────────────────────────────────────────────────────────────────
     Call █                          Sent
     Rcvd                            Park
@@ -292,9 +324,23 @@ this station's reference, then the radio — and says `master log` when
 there is no activity rather than going blank, because a blank header cannot be
 told apart from one that is not displaying the name.
 
-The form's fields are whatever the log schema asks for, in the order it
-asks for them. `↑` `↓` picks a contact above; `Enter` on one opens it field by
-field for correction.
+The form's fields are whatever the log schema asks for, in the order it asks
+for them — and so are the **columns**. POTA asks for reports, a reference and
+a name, so those are the columns; there is no QTH column because the schema
+does not ask for one, and no serial column because it does not either.
+Switch to the contest schema and the columns switch with it, on the contacts
+already on screen as well as the next one. A contact that never captured a
+field the schema asks for is blank under it rather than missing from the list.
+The second and third rows carry on down the same field order, then the fields
+nobody types — band, frequency, mode, power, rig, antenna. The **comment**
+is always on a continuation row and never on the first: it is the one field
+whose length is unbounded, so on the first row it was always the one clipped,
+and it took the open-ended last column away from the QTH, which is short and
+is what gets read back beside a name.
+
+`↑` `↓` picks a contact above; `Enter` on one opens it field by field for
+correction, where every field the record holds is listed whatever schema is
+selected.
 
 ### Deck & rig
 
@@ -359,8 +405,8 @@ and `F2` / `F3` are that application's own two sub-views.
 
 | Key | The log |
 |---|---|
-| `F2` | Activities — start, resume or delete a session |
-| `F3` | Log schema — select, copy or create one |
+| `F2` | Activities — start, resume, rename or forget a session |
+| `F3` | Log schema — select, edit, copy or create one; `Esc` keeps the current one |
 | `←` `→` | Move between fields on the entry form; `Tab` does too |
 | `↑` `↓` | Pick a logged contact; typing returns to the form |
 | `Enter` | Log the contact — or open the one picked above |
@@ -465,12 +511,13 @@ One menu per application. A line belonging to one is not on another's.
 | `F1` in **the log** | |
 |---|---|
 | `l` | Logging on/off, with the contact count |
-| `f` `k` | The default log file; whether every contact also goes to it |
-| `a` | Export ADIF |
-| `m` `d` | Where the mode comes from; the duplicate rule |
-| `c` | Callbook lookup — `on`, `off`, or `no wifi` |
-| `e` `v` `n` | The activity, its log schema, and how many lines a contact takes in the list |
-| `p` | This station's own reference, when the type uses one |
+| `e` `v` | The activity, and the log schema it uses |
+| `d` `c` `m` | The duplicate rule; callbook lookup (`on`, `off`, `no wifi`); where the mode comes from |
+| `n` | How many lines a contact takes in the list — 1, 2 or 3 |
+| `p` | This station's own reference, when the schema uses one |
+| `f` `a` | The log file; export the whole log as ADIF |
+| `x` `t` | Export this activity only; export plus the LoTW `tqsl` command |
+| `z` | **Danger zone** — forget all activities, delete this activity's QSOs, delete every QSO. Each states its count and asks first |
 
 | `F1` in **deck & rig** | |
 |---|---|

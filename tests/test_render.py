@@ -206,9 +206,25 @@ check("fields the first row already shows are not repeated",
 # activity is named in the header above the list.
 check("and neither are the ones the header already says",
       not ({"my_call", "activity", "activity_type"} & set(order)), str(order))
-# What the activity never asked for still follows, so general logging -- whose
-# four fields all fit on the first row -- is not left with empty rows.
-check("anything else the record carries follows", "grid" in order, str(order))
+# What the SCHEMA does not ask for is not shown -- §7g. `grid` is in this
+# record and in neither schema, so neither shows it; switching schemas has to
+# change the display or switching is not something the operator can see. The
+# contact screen is where every field of a record is listed.
+check("a field no schema asked for is not shown", "grid" not in order,
+      str(order))
+# The automatic fields are the exception, and are not really one: nobody types
+# them so no schema lists them in its field order, and leaving them out would
+# drop the band, the frequency and the rig from the display entirely.
+for auto in ("band", "freq", "mode", "my_rig", "my_antenna"):
+    check(f"{auto} is shown without being asked for", auto in order,
+          str(order))
+check("and the schema's own fields come first",
+      order.index("sat_name") < order.index("band"), str(order))
+# With no schema there is nothing to ask, so the record decides -- which is
+# the only thing left to fall back on and what the unit tests above rely on.
+check("with no schema the record still decides",
+      "grid" in render.log_extra_fields(None, REC),
+      str(render.log_extra_fields(None, REC)))
 order = render.log_extra_fields(None, REC)
 check("with no activity at all, the stored order is used",
       order and "state" in order, str(order))

@@ -23,6 +23,24 @@ import menus
 F1, F3 = "\x1bOP", "\x1bOR"
 UP, DOWN, ENTER, ESC = "\x1bOA", "\x1bOB", "\r", "\x1b"
 
+CTRL_O = "\x0f"          # one area back on the ring
+# F1 from the digimode screen: Mode, Tune Settings, Band, Memories. Band is
+# here and not on the deck menu because it tunes to the digimode calling
+# frequency for the band, which is useless to anything else on the deck.
+DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
+# The deck's own settings are a screen of their own AND the screen the deck
+# opens on, so there is no hop to make: F1 from the boot screen is its menu.
+DECK = ["\x1bOP"]
+# And one ^O reaches the digimodes from there WHATEVER the logging state is:
+# the ring wraps, so the last stop is the conversation whether the log is on
+# it (settings | log | digimodes) or not (settings | digimodes).
+DIGI = CTRL_O
+# Station is gone from this menu: the screen behind it edits those fields
+# directly, each with its substitution token beside it. F1 on the boot screen
+# opens Display and System.
+DECK_DISPLAY, DECK_SYSTEM = "1", "2"
+
+
 body = show("F1, then Down Down", run(keys=[DIGI, F1, DOWN, DOWN]))
 check("the menu is still open after arrows", "DIGIMODES" in body, body[:200])
 
@@ -47,23 +65,6 @@ check("landed on MODE", "MODE" in body, body[:400])
 #
 # Derived from the menu rather than named, because F1 opens the menu for the
 # area the operator is in and the digimode screen is where the deck starts.
-CTRL_O = "\x0f"          # one area back on the ring
-# F1 from the digimode screen: Mode, Tune Settings, Band, Memories. Band is
-# here and not on the deck menu because it tunes to the digimode calling
-# frequency for the band, which is useless to anything else on the deck.
-DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
-# The deck's own settings are a screen of their own: ^O ^O gets to it, F1
-# opens its menu, then Station, Display, System.
-# The deck opens on DECK & RIG, so F1 from the boot screen is its menu.
-DECK = ["\x1bOP"]
-# And one ^O reaches the digimodes from there WHATEVER the logging state is:
-# the ring wraps, so the last stop is the conversation whether the log is on
-# it (settings | log | digimodes) or not (settings | digimodes).
-DIGI = CTRL_O
-# Station is gone from this menu: the screen behind it edits those fields
-# directly. ^O ^O lands on that screen; F1 opens Display and System.
-DECK_DISPLAY, DECK_SYSTEM = "1", "2"
-
 _LAST = menus.DIGI["items"][-1][1].upper()
 print(f"\n-- Up from the first item wraps to the last, {_LAST.title()} --")
 body = show("F1 Up Enter", run(keys=[DIGI, F1, UP, ENTER]))
@@ -75,7 +76,9 @@ check("tuning menu shows AFC state", "AFC" in body and ("ON" in body or "off" in
 check("squelch state shown", "Squelch" in body, body[:400])
 
 print("\n-- arrows still leave the single-key shortcuts working --")
-body = show("F3 then 4 (RTTY)", run(keys=[F3, "4"], settle=1.5))
+# `DIGI` first: F3 is the mode picker on the DIGIMODE screen, and on the
+# boot screen it is the System menu, where `4` is nothing.
+body = show("F3 then 4 (RTTY)", run(keys=[DIGI, F3, "4"], settle=1.5))
 check("fldigi on RTTY", Fldigi().modem() == "RTTY", Fldigi().modem())
 
 
@@ -103,9 +106,15 @@ check("F6 is untouched", "F6  DE {call} {call} K" in body, body[:400])
 
 
 print("\n-- the station fields are editable, and show their tokens --")
-# On the deck-and-rig SCREEN now, not behind a menu. ^O ^O lands on it and the
-# cursor starts on the first field.
-SETTINGS = [CTRL_O, CTRL_O]
+# On the deck-and-rig SCREEN, not behind a menu -- and that screen is the one
+# the deck OPENS on, so there is no hop to make and the cursor already starts
+# on the first field.
+#
+# This was `[CTRL_O, CTRL_O]`, from a conversation screen that opened first.
+# With `LOGGING = yes` in the project's config the ring is
+# settings | log | digimodes, so two backward steps land on the LOG, and
+# every check below read the contact list looking for station fields.
+SETTINGS = []
 body = show("the deck and rig screen", run(keys=SETTINGS, settle=1.6))
 check("every field on it carries its token",
       all(t in body for t in ("{call}", "{name}", "{qth}", "{grid}", "{rig}",
@@ -237,7 +246,7 @@ check("and none of them can be selected",
 
 
 print("\n-- Ctrl-Y hands back, not Ctrl-K --")
-body = show("hint line", run(keys=[], settle=1.2))
+body = show("hint line", run(keys=[DIGI], settle=1.2))
 check("the hint offers ^Y", "^Y hand" in body, body[-120:])
 check("and no longer ^K", "^K hand" not in body, body[-120:])
 
@@ -253,11 +262,12 @@ check("quit too", "Ctrl-Q" in body, body[:400])
 # after=2.5, longer than the fldigi client's two-second timeout: Ctrl-X calls
 # text.clear_rx before it writes its note, so a slow fldigi delays the note
 # rather than preventing it.
-body = show("Ctrl-X clears", run(keys=[CTRL_X], settle=1.6, after=2.5))
+body = show("Ctrl-X clears",
+            run(keys=[DIGI, CTRL_X], settle=1.6, after=2.5))
 check("the transcript is emptied", "transcript cleared" in body, body[:300])
 check("and the startup notes are gone", "fldigi 4.2" not in body, body[:300])
 
-body = show("Ctrl-I arms transmit", run(keys=[CTRL_I], settle=1.4))
+body = show("Ctrl-I arms transmit", run(keys=[DIGI, CTRL_I], settle=1.4))
 check("INH clears from the status line", " INH " not in body, body[:120])
 check("and it is recorded", "transmit enabled" in body, body[:400])
 

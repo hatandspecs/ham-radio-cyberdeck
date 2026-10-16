@@ -79,13 +79,21 @@ equals("the call sits under the CALL heading",
        ord_rows[FIRST].index("W3ABC"), ord_rows[HEADING].index("CALL"))
 equals("and the report under RST",
        ord_rows[FIRST].index("59/57"), ord_rows[HEADING].index("RST"))
-equals("the comment is on the row", "QRP 5W" in ord_rows[FIRST], True)
-equals("a comment with no name is too",
-       "first one on 40m" in ord_rows[SECOND], True)
-check("and the two trailing texts line up",
-      ord_rows[FIRST].index("QRP") > 30
-      and ord_rows[SECOND].index("first") > 30,
-      "\n".join(ord_rows[FIRST:SECOND + 1]))
+# The QTH is the last column and takes what is left of the row. The COMMENT
+# is not on the first row at all as of 2026-10-16: it is the one field whose
+# length is unbounded, so it was always the one clipped there, and it took
+# the open-ended last column away from the QTH -- which is short, scannable,
+# and what an operator reads back beside a name.
+equals("the QTH is on the row", "Pittsburgh" in ord_rows[FIRST], True)
+check("under its own heading", "QTH" in ord_rows[HEADING], ord_rows[HEADING])
+equals("and the comment is not", "QRP 5W" in ord_rows[FIRST], False)
+equals("nor on the row that has only a comment",
+       "first one on 40m" in ord_rows[SECOND], False)
+# Where it does appear: a continuation row, labelled, which is what two or
+# three lines per contact are for.
+two = lines(ORD, "", 66, 12, header={"count": 2}, lines=2)
+check("it is on a continuation row instead",
+      any("QRP 5W" in r for r in two), "\n".join(two))
 
 my_park_absent = lines(ORD, "", 66, 10, header={"count": 2, "my_park": ""})[0]
 check("an empty my_park is dropped, not drawn blank",
@@ -277,13 +285,13 @@ check("one contact is singular", "1 contact will" in one, one)
 # purpose -- revising a definition is what saving twice under one name means
 # -- but it did it silently, so the earlier type went with no sign of it.
 rep = [plain(l) for l in render.confirm_screen(
-    "REPLACE ACTIVITY TYPE",
-    ["PAQP", "", "A type named PAQP is already in activities.conf.",
+    "REPLACE LOG SCHEMA",
+    ["PAQP", "", "A schema named PAQP is already in activities.conf.",
      "Saving replaces it. Contacts already logged are", "not touched."],
     66, 12, footer="Enter replace   any other key picks a new name")]
 flat = "\n".join(rep)
-check("titled by what it will do", "REPLACE ACTIVITY TYPE" in rep[0], rep[0])
-check("it names the type", "PAQP" in flat, flat)
+check("titled by what it will do", "REPLACE LOG SCHEMA" in rep[0], rep[0])
+check("it names the schema", "PAQP" in flat, flat)
 check("it says the contacts are safe", "not touched" in flat, flat)
 check("Enter is the one key that replaces", "Enter replace" in rep[-1], rep[-1])
 check("and the footer no longer claims to delete",
@@ -307,7 +315,8 @@ check("and their counts", "12 QSOs" in flat and "1 QSO" in flat, flat)
 check("the one in use is marked", "* PAQP" in flat, flat)
 check("and the one being pointed at", "\u25b8" in flat, flat)
 check("the footer says what the keys do",
-      all(w in acts[-1] for w in ("Enter resume", "n new", "d delete")),
+      all(w in acts[-1] for w in ("Enter resume", "n new", "r rename",
+                                  "d forget")),
       acts[-1])
 for row in acts:
     equals("every activity row is padded", len(row), 66)

@@ -1069,6 +1069,201 @@ One function with an optional filter: the whole log, or one session. A POTA
 upload wants the latter and gets a cleaner file than before, because a
 filtered export cannot contain a stray contact that landed in the wrong file.
 
+## 7g. The schema decides the columns
+
+The log display shows the fields the **schema in use** asks for, and no
+others. A field the schema does not list is absent from the heading row, from
+the contact rows and from the continuation rows, whatever the records carry.
+A field the schema does list is shown blank on a contact that never captured
+it.
+
+That is what makes switching schemas visible. The rule it replaced was "the
+schema asks for it, or some contact on screen has it", which failed in both
+directions at once: the columns moved as the list scrolled, and they did not
+move when the schema changed. A contest session logged into the master log
+kept its `NR` and `EXCH` columns after the operator switched back to general
+logging, because the contacts still carried the fields.
+
+Nothing is hidden by this. The **contact screen** lists every field a record
+holds, whatever schema is selected, and that is where a record is read in
+full. The ADIF export is unaffected — it writes the record, not the screen.
+
+**The automatic fields are shown under every schema.** Band, frequency, mode,
+power, rig and antenna are filled in without being typed, so no schema lists
+them in its field order, and a strict reading of the rule above would have
+dropped them from the display entirely. They are appended to the continuation
+rows after the schema's own fields.
+
+**Name and QTH are two columns; the comment is on neither.** All three used
+to share a single trailing column headed `QTH`: the name padded to a fixed
+width, then the QTH and the comment joined with a space. General logging had
+no QTH field at the time, so every typed comment appeared in a column labeled
+QTH — the heading naming one field and the column holding another.
+
+The comment then came off the first row altogether. It is the one field whose
+length is unbounded, so it was always the one clipped there, and it took the
+open-ended last column away from the QTH — which is short, scannable, and
+what an operator reads back beside a name. A one-line list shows no comment;
+two lines show it on a continuation row under its own label, and the contact
+screen always shows it.
+
+**Columns are dropped from the right, not sliced.** A custom schema can ask
+for more than 66 columns will take — reports, both serials, an exchange, a
+reference, a name, a QTH and a comment come to 71 — and the heading used to
+be one concatenated string cut with a slice, which produced `QTH        COM`:
+a heading naming a column that was not drawn, and a word cut in half. The
+heading is now built as a list of whole columns and a column that will not
+fit whole is switched off for the contact rows as well, so the two cannot
+drift out of step. The loop goes on rather than stopping at the first
+failure, so a narrow column is not lost along with a wide one in front of it:
+a comment fits in the eight columns a dropped QTH needed ten for, and the
+comment is the field general logging is likeliest to have something in. The
+last column drawn takes whatever is left rather than a fixed width.
+
+**General logging has a QTH field as of 2026-10-16.** It did not at first,
+and the reasoning then was that an operator who wanted one could add it from
+the field selector. That was wrong about how often it is wanted: the QTH is
+the field most read back beside a name on an ordinary contact, and the
+callbook lookup returns one, so leaving it off meant the lookup's answer had
+nowhere to land and reduced to a line on the message bar — which is exactly
+the argument that put `name` on the form.
+
+**The field list is the entry grammar, so adding `qth` changed what a typed
+line means.** `W3ABC 59 57 Bob Pittsburgh` now logs a QTH where before the
+word after the name had nowhere to go. One word per field: `W3ABC 59 57 Bob
+Pittsburgh PA` drops the `PA`, because the parser is positional and a
+two-word QTH is typed into the field rather than onto the line.
+
+## 7h. Danger zone
+
+Three ways to throw contacts away, on a submenu of their own rather than on
+the logging menu. The logging menu is used on every contact and these are
+used while testing and demonstrating; a line that empties the log does not
+belong next to the one that changes how many rows a contact takes.
+
+| Key | Does | Destroys |
+|---|---|---|
+| `a` | Forget all activities | nothing — every contact keeps its label |
+| `s` | Delete this activity's QSOs | the contacts of the session on screen |
+| `m` | Delete EVERY QSO | the whole log |
+
+Each line states the **count** it would destroy, and so does its
+confirmation. "Clear the log" and "delete 412 contacts" are different
+sentences and only the second one says what is about to be lost. Enter does
+it and every other key keeps things as they are, the same rule the contact
+delete follows.
+
+`a` is first because it destroys nothing: it is `_forget_session` applied to
+every session at once, so the labels stay on the records and logging under
+one of those names again brings the session back (§7f). `s` acts on the
+activity **showing**, not one chosen from a list, so the screen behind the
+question is what it is about to empty.
+
+The empty cases say so instead of asking. An empty log, an activity with no
+contacts, and no activity selected each get a message on the bar — a
+confirmation for destroying nothing teaches the operator to press Enter
+through confirmations.
+
+This exists because of a real problem: after a stretch of testing there is no
+way to tell a state the current software can reach from a state left behind by
+an earlier iteration. A clean slate on demand is what makes the difference
+checkable.
+
+## 7i. What follows an activity, and what does not
+
+Seven changes decided 2026-10-16, after tracing the routes an operator
+actually takes through the logger. The governing idea: **an activity is a
+session, and the things that describe how that session is being logged should
+come back with it.** They did not. An activity and a schema were two
+independent global settings, so resuming last weekend's park activation left
+the operator logging it under whatever schema they happened to be using an
+hour ago.
+
+### The schema follows the activity
+
+Resuming a session applies the schema its contacts were logged under. Where a
+session holds contacts logged under more than one schema — which §7g makes
+possible and expects — the **latest** one wins, because that is the
+operator's most recent decision about how this session is read.
+
+A session whose contacts carry no schema resolves to GENERAL. That covers
+both a session logged under general logging, which writes no `activity_type`
+at all, and records from before schemas existed.
+
+Two cases deliberately keep the current schema rather than changing it:
+
+* **A session with no contacts yet.** There is nothing to infer from, and
+  guessing would undo the choice just made when the activity was named.
+* **The master log.** It is every contact there is, under every schema there
+  has ever been, so it has no schema of its own to restore. Switching to it
+  leaves the schema alone.
+
+### `my_park` follows it too
+
+Leaving an activity clears this station's own reference; resuming one
+restores the last reference its contacts carried. It used to survive a switch
+to the master log, so contacts made after an activation ended kept claiming
+the park — a wrong reference in an exported ADIF, which is worse than a
+missing one.
+
+### A session can be renamed
+
+`r` on the activities screen. It rewrites `activity=` on every contact of
+that session and leaves `activity_start` alone, so the session keeps its
+identity and only its name changes. The activity in progress is renamed with
+it. The master log cannot be renamed and a name with no letter or digit in it
+is refused, the same rule naming one follows.
+
+No confirmation: it is a correction, it destroys nothing, and renaming back
+undoes it. The deck says how many contacts were relabeled.
+
+### Esc keeps the current schema
+
+The schema picker has ONE exit by both routes now. Choosing a schema closes
+to the log screen; Esc keeps what is already set and also closes to the log
+screen. It used to go UP to the logging menu, so naming a new activity —
+which opens the picker by itself — left an operator who wanted their current
+schema on a menu they never asked for.
+
+That is what makes "keep the current schema when naming a new activity" a
+route: name it, then Esc.
+
+### A schema can be edited in place
+
+`e` + number on the picker. The field selector opens seeded from that schema
+with its name already decided, so saving replaces it. The route before this
+was copy it, change it, then type the same name and answer a confirmation
+about replacing it — which works, and which nothing on screen suggested.
+
+Editing one of the operator's own schemas asks nothing: replacing it is the
+whole intent. Editing a **built-in** still asks, because it writes a section
+that shadows the name everywhere on the deck, and because the way back —
+delete yours and the built-in returns — is worth stating once.
+
+### Switching schema is refused while a contact is part-typed
+
+A schema change rebuilds the form and carries only the sticky fields across,
+so a typed callsign and reports were discarded without a word. Now the picker
+says what is in the way and leaves the form alone: log the contact, or `^X`
+to clear it, then change schema.
+
+What counts as part-typed is what the operator put there — `LogForm.typed()`
+— and not what the deck prefilled. A `599` nobody touched, a serial the log
+handed out, the frequency off the radio and the sticky own-side fields are
+all carried or recomputed, so none of them block a change.
+
+### "Logging under the name again brings it back" is now true
+
+It was not. Forgetting a session put `(name, start)` on a list that nothing
+ever took it off, so the session was unreachable from the panel for good
+while the confirmation claimed otherwise. Starting or resuming an activity
+now drops **every** forgotten pair carrying that name, so its sessions
+reappear in the list.
+
+Dropping by name rather than by `(name, start)` is deliberate: the operator
+types a name, not a timestamp, and "bring back the park I worked last month"
+cannot mean one activation of it and not another.
+
 ## 8. Time
 
 UTC from the system clock, which is RTC-backed on the deck. The RTC is the

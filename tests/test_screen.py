@@ -119,8 +119,15 @@ def show(title, screen):
     return "\n".join(screen.display)
 
 
+# The deck OPENS on DECK & RIG. `^O` steps backwards round the ring --
+# settings | log | digimodes -- and the log is not on it while logging is
+# off, so one `^O` wraps straight to the conversation. Every scenario below
+# is about the CONVERSATION screen, so each one hops there first; without it
+# they read the station fields and looked for a transcript.
+TO_CHAT = "\x0f"
+
 if __name__ == "__main__":
-    body = show("startup, 66x20", run())
+    body = show("startup, 66x20", run(keys=[TO_CHAT]))
     ok = []
     ok.append(("callsign in the status line", "KD3CCO" in body))
     ok.append(("hint line present", "F1 menu" in body))
@@ -132,16 +139,17 @@ if __name__ == "__main__":
     ok.append(("hint line is not truncated mid-word", "abor|" not in body and "F2 tune" in body))
 
     over = "NOCALL de KD3CCO  testing"
-    typed = show("after typing an over", run(keys=[over]))
+    typed = show("after typing an over", run(keys=[TO_CHAT, over]))
     ok.append(("typed text appears in compose", "testing" in typed))
     # Counted from the string rather than written in: the expected number
     # changed silently when the example callsign did.
     ok.append((f"indicator counts it ({len(over)})", f"[RX {len(over)}]" in typed))
 
-    tune = show("F2 tuning screen", run(keys=["\x1bOQ"]))   # F2 in xterm
+    tune = show("F2 tuning screen",
+                run(keys=[TO_CHAT, "\x1bOQ"]))   # F2 in xterm
     ok.append(("tuning screen reached", "quality" in tune or "TUNING" in tune))
 
-    narrow_scr = run(cols=50, rows=15)
+    narrow_scr = run(keys=[TO_CHAT], cols=50, rows=15)
     narrow = show("50x15 grid", narrow_scr)
     ok.append(("fits a 50-column deck", "KD3CCO" in narrow))
 
@@ -150,7 +158,7 @@ if __name__ == "__main__":
     # returns -1 within 200 ms and cancels itself, and every test above would
     # still pass — their processes die when the pty closes either way.
     ok.append(("Ctrl-Q twice leaves the main loop", narrow_scr.exited_cleanly))
-    single = run(keys=[])
+    single = run(keys=[TO_CHAT])
     ok.append(("and the confirmation is actually shown",
                "Ctrl-Q again" in "\n".join(single.display)))
 

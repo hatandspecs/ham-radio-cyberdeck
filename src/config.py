@@ -129,9 +129,10 @@ SCHEMA = {
     # a single setting holding the type name; a conf that still spells it that
     # way is read as both, and says so in config.NOTES.
     "ACTIVITY":        ("", str, "name of the current logging session, e.g. "
-                                 "'Bald Eagle SP'; blank is casual logging. "
-                                 "Each activity gets its own log file"),
-    "ACTIVITY_TYPE":   ("", str, "which activity type the current activity "
+                                 "'Bald Eagle SP'; blank is the master log. "
+                                 "An activity is a label on records in the "
+                                 "one log, not a file of its own"),
+    "ACTIVITY_TYPE":   ("", str, "which log schema the current activity "
                                  "uses: GENERAL, POTA, CONTEST or one of your "
                                  "own. See activities.conf and "
                                  "qso_log_design.md §6b"),

@@ -60,6 +60,11 @@ class Fldigi:
         self.last_error = ""
         self._rx_pos = 0
         self._proxy = None
+        # The modem and carrier put aside while the decoder is parked. See
+        # `park_decoder`.
+        self._parked_modem = ""
+        self._parked_carrier = 0
+        self._null_modem = None
         self._connect()
         # Probe once, so `connected` describes reality from the moment the
         # object exists rather than from the first call a caller happens to
@@ -182,10 +187,93 @@ class Fldigi:
         return self._call("modem.get_names", default=[]) or []
 
     def modem(self):
+        """The modem the OPERATOR is working in.
+
+        While the decoder is parked this is the modem put aside, not the
+        `NULL` actually loaded -- see `park_decoder`. Every caller wants the
+        first answer: the panel shows what the operator chose, the mode picker
+        marks it current, and the log records what a contact was made on.
+        `modem_loaded` is the raw question, for the one place that asks it.
+        """
+        return self._parked_modem or self.modem_loaded()
+
+    def modem_loaded(self):
+        """The modem fldigi actually has loaded, parked or not."""
         return self._call("modem.get_name", default="?")
 
     def set_modem(self, name):
+        """Load a modem, or change the one to come back to while parked.
+
+        Applying it while parked would start the decoder the park exists to
+        stop, and the next poll would park it again -- so the choice is
+        recorded and takes effect when the radio comes back to a data mode.
+        The caller is what tells the operator that; this only has to not
+        contradict itself.
+        """
+        if self._parked_modem:
+            self._parked_modem = str(name)
+            return None
         return self._call("modem.set_by_name", name, default=None)
+
+    # -- parking the decoder ----------------------------------------------
+    #
+    # fldigi decodes whatever is on its sound card whether or not the radio is
+    # in a mode that could be carrying it. On a Pi 3A+ that is real work --
+    # the DSP is the deck's largest continuous cost -- and it buys nothing
+    # when the radio is in SSB or FM: anything decoded is noise, and transmit
+    # is interlocked off anyway.
+    #
+    # fldigi has no "stop decoding" call. Loading the `NULL` modem is the
+    # nearest thing and does the job, because NULL has no decoder to run.
+
+    def park_decoder(self):
+        """Stop decoding, remembering the modem and carrier to come back to.
+
+        Returns True when the decoder is parked, so a caller can tell the
+        operator. False when fldigi offers no `NULL` modem -- older builds and
+        unusual ones -- in which case nothing is changed: a park that cannot
+        be undone cleanly is worse than a decoder left running.
+        """
+        if self._parked_modem:
+            return True
+        if self._null_modem is None:
+            names = [str(n) for n in (self.modem_names() or [])]
+            self._null_modem = next(
+                (n for n in names if n.upper() == "NULL"), "")
+        if not self._null_modem:
+            return False
+        current = self.modem_loaded()
+        if not current or current == "?" or current == self._null_modem:
+            return False
+        # The carrier goes with it. fldigi moves the carrier to the new
+        # modem's own sweet spot when a modem is loaded, so coming back
+        # without this would land the operator somewhere other than the
+        # signal they had tuned onto -- the same trap `_set_mode` works
+        # around when the operator changes modem deliberately.
+        self._parked_carrier = self.carrier()
+        self._parked_modem = current
+        self._call("modem.set_by_name", self._null_modem)
+        return True
+
+    def unpark_decoder(self):
+        """Load the remembered modem again. Returns its name, or "".
+
+        Nothing happens, and "" comes back, when the decoder was not parked --
+        so this is safe to call on every poll, which is how it is called.
+        """
+        name = self._parked_modem
+        if not name:
+            return ""
+        self._parked_modem = ""
+        self._call("modem.set_by_name", name)
+        if self._parked_carrier:
+            self._call("modem.set_carrier", int(self._parked_carrier))
+        self._parked_carrier = 0
+        return name
+
+    @property
+    def decoder_parked(self):
+        return bool(self._parked_modem)
 
     def carrier(self):
         return self._call("modem.get_carrier", default=0)

@@ -91,11 +91,12 @@ equals("received", both["rst_r"], "57")
 
 full = qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh PA", "USB")
 equals("name", full["name"], "Bob")
-# General logging has no `qth` field, so there is no position for one and the
-# words after the name have nowhere to go. The field list IS the grammar: an
-# operator who wants a QTH typed adds the field from the selector, and then
-# this line means something different, which is the whole design.
-equals("and nothing follows it under general logging", full["qth"], "")
+# General logging DOES have a `qth` field as of 2026-10-16, and the field list
+# IS the grammar, so the word after the name goes into it. One word per
+# field, so `PA` is dropped -- the parser is positional and a two-word QTH is
+# typed into the field, not onto the line.
+equals("the QTH follows the name under general logging",
+       full["qth"], "Pittsburgh")
 
 named = qsolog.parse_entry("W3ABC Bob", "USB")
 equals("a name where a report would be", named["name"], "Bob")

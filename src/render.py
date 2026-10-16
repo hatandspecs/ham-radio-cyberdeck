@@ -735,12 +735,18 @@ ACTIVITY_ROW0 = 2
 
 
 def activity_screen(rows, selected, width, height, current="", message=""):
-    """Activities on disk: resume one, start one, or delete one.
+    """The sessions in the log: resume one, start one, rename or forget one.
 
-    `rows` is qsolog.activity_logs() output. The one in use is marked, the
-    contact count is shown because it is what makes a delete consequential,
-    and the date is shown because it is what tells two activations of the
-    same park apart.
+    `rows` is `Deck._activity_choices()` output -- the master log first, then
+    a row per session. The one in use is marked, the contact count is shown
+    because it is what makes forgetting one consequential, and the date is
+    shown because it is what tells two activations of the same park apart.
+
+    The SCHEMA each session was logged under is shown too, because §7i makes
+    resuming one apply that schema: a list that did not say which would leave
+    the operator unable to predict what resuming does. Blank for the master
+    log, which spans every schema there has ever been and so has none of its
+    own, and `general` for a session whose contacts carry no schema at all.
     """
     out = [[(" ACTIVITIES".ljust(width)[:width], "reverse")], rule(width)]
     if not rows:
@@ -750,7 +756,11 @@ def activity_screen(rows, selected, width, height, current="", message=""):
         mark = "\u25b8" if i == selected else " "
         star = "*" if row["name"] == current else " "
         count = f"{row['contacts']} QSO{'' if row['contacts'] == 1 else 's'}"
-        line = (f"{mark}{star} {row['name'][:26]:<26} "
+        # The master log gets no schema word: it holds every contact under
+        # every schema, so naming one would be wrong rather than missing.
+        kind = "" if row.get("master") else (row.get("type") or "general")
+        line = (f"{mark}{star} {row['name'][:20]:<20} "
+                f"{kind.lower()[:8]:<8} "
                 f"{row['date'] or '':<10}  {count}")
         out.append([(line.ljust(width)[:width],
                      "bright" if i == selected else "")])
@@ -759,8 +769,11 @@ def activity_screen(rows, selected, width, height, current="", message=""):
     out.append(rule(width))
     out.append([((" " + message).ljust(width)[:width],
                  "dim" if message else "")])
-    out.append([((" Esc back   \u2191\u2193 move   Enter resume   "
-                  "n new   d delete").ljust(width)[:width], "dim")])
+    # 63 of 66. `r` is here because renaming is the one correction this
+    # screen can make to a session, and a key nobody can see is a key nobody
+    # uses -- the schema picker's `e` was invisible for the same reason.
+    out.append([((" Esc back  \u2191\u2193 move  Enter resume  "
+                  "n new  r rename  d forget").ljust(width)[:width], "dim")])
     return out[:height]
 
 
@@ -1068,36 +1081,76 @@ def log_screen(records, entry, width, height, header=None, message="",
     first = max(0, end - body_entries)
     shown = records[first:end] if records else []
 
-    # A column is drawn when a contact on screen uses it OR when the activity
-    # now selected asks for it. The second half is what shows the operator
-    # which columns they are about to fill: a contest started on a fresh log
-    # would otherwise show no serial column until the first contact was in,
-    # and the columns would appear underneath what had already been typed.
+    # A column is drawn when THE SCHEMA IN USE asks for it. Not when a
+    # contact on screen happens to carry the field: the schema is the
+    # operator's statement about what this log is for, so switching schemas
+    # has to change the columns or switching is not something you can see.
+    #
+    # It used to be "the schema asks for it OR some visible contact has it",
+    # which failed in both directions. The columns changed as the list
+    # scrolled, and they did NOT change when the schema did -- a contest
+    # session logged under the master log kept its serial and exchange
+    # columns after switching back to general logging, because the contacts
+    # still carried them.
+    #
+    # A field the schema does not ask for is therefore not shown, even when
+    # the record holds it. Nothing is lost: the contact screen lists every
+    # field a record carries, and switching back to the schema that asked for
+    # them brings the columns back. Blank where a contact of this schema
+    # never captured the field, which is the other half of the same rule.
+    #
+    # With no schema at all -- `form=None`, which is how the unit tests call
+    # this -- the records decide, because there is nothing else to ask.
     def _wanted(field):
-        if any(r.get(field) for r in shown):
-            return True
         if form is None:
-            return False
+            return any(r.get(field) for r in shown)
         if field == "serial_tx":
             return bool(form.activity_type.serial)
         return form.activity_type.wants(field)
 
     used = {field: _wanted(field)
-            for field in ("serial_tx", "serial_rx", "exchange_rx", "park")}
+            for field in ("rst_s", "rst_r", "serial_tx", "serial_rx",
+                          "exchange_rx", "park", "name", "qth")}
+    # One column for both reports, so it is there if either is asked for. A
+    # contest schema asks for neither -- in a contest the report is 59 every
+    # time -- and a column of bare `/` down the screen says nothing.
+    used["rst"] = used["rst_s"] or used["rst_r"]
     used["park"] = used["park"] or bool(head.get("my_park"))
 
     # Column headings, built from the same `used` and the same widths as the
     # rows below, so a heading can never name a column that is not there.
-    heading = f" {'UTC':<5}  {'CALL':<10} {'RST':<7}"
-    if used["serial_tx"]:
-        heading += f" {'MY#':<5}"
-    if used["serial_rx"]:
-        heading += f" {'NR':<5}"
-    if used["exchange_rx"]:
-        heading += f" {'EXCH':<8}"
-    if used["park"]:
-        heading += f" {'REF':<9}"
-    heading += f" {'NAME':<9} QTH"
+    #
+    # Built as a LIST of whole columns rather than one concatenated string
+    # cut with a slice, the same contract the header line above follows. A
+    # custom schema can ask for more columns than 66 will take -- reports,
+    # both serials, an exchange, a reference, a name, a QTH and a comment
+    # come to 71 -- and the slice produced `QTH        COM`: a heading
+    # naming a column that was not there and a word cut in half.
+    #
+    # A column that will not fit WHOLE is turned off in `used`, so the rows
+    # below lose it too and cannot drift out of step with the headings. The
+    # loop goes on rather than stopping, so a narrow column is not lost
+    # along with a wide one in front of it -- a comment still fits in the 8
+    # columns a dropped QTH would have needed 10 for, and the comment is the
+    # field general logging is most likely to have something in.
+    COLUMNS = (("rst", "RST", 7), ("serial_tx", "MY#", 5),
+               ("serial_rx", "NR", 5), ("exchange_rx", "EXCH", 8),
+               ("park", "REF", 9), ("name", "NAME", 9),
+               ("qth", "QTH", 10))
+    # The LAST column drawn takes whatever is left instead of its fixed
+    # width, so a QTH at the end of the row is not clipped to ten characters
+    # when there is half a screen free after it.
+    free = max((i for i, (f, _t, _w) in enumerate(COLUMNS) if used.get(f)),
+               default=-1)
+    heading = f" {'UTC':<5}  {'CALL':<10}"
+    for i, (field, title, pad) in enumerate(COLUMNS):
+        if not used.get(field):
+            continue
+        chunk = f" {title}" if i == free or not pad else f" {title:<{pad}}"
+        if len(heading) + len(chunk) > width:
+            used[field] = False
+            continue
+        heading += chunk
     if back:
         # Otherwise a scrolled list looks like a log that has stopped taking
         # contacts -- the one thing this screen exists to disprove.
@@ -1112,8 +1165,14 @@ def log_screen(records, entry, width, height, header=None, message="",
         picked = selected is not None and (first + offset) == selected
         when = (rec.get("when", "") or "")[11:16]
         line = f" {when}  {rec.get('call', ''):<10}"
-        rst = f"{rec.get('rst_s', '')}/{rec.get('rst_r', '')}"
-        line += f" {rst:<7}"
+        if used["rst"]:
+            sent, got = rec.get("rst_s", ""), rec.get("rst_r", "")
+            # Blank, not a bare `/`, on a contact that captured neither. The
+            # slash is a separator between two reports and means nothing with
+            # no report on either side of it -- and the column is there under
+            # this schema whether or not this particular contact filled it.
+            rst = f"{sent}/{got}" if (sent or got) else ""
+            line += f" {rst:<7}"
         # Sent serial first, then received: the same order they are said on
         # the air, and the same order they sit in the ADIF record.
         if used["serial_tx"]:
@@ -1126,24 +1185,24 @@ def log_screen(records, entry, width, height, header=None, message="",
         if used["park"]:
             line += f" {rec.get('park', ''):<9}"
 
-        # One name column, always the same width when a name column exists at
-        # all, so the trailing text lines up down the screen. The earlier
-        # version padded the name only when a QTH followed it, which left the
-        # comment on a name-only contact starting in a different place on
-        # every row.
-        name = rec.get("name", "")
-        trailing = " ".join(p for p in (rec.get("qth", ""),
-                                        rec.get("comment", "")) if p)
-        if name or trailing:
-            line += f" {name:<9}" if trailing else f" {name}"
-            if trailing:
-                # Clipped with `...`, not cut by the row width. A comment that
-                # ran off the end used to stop mid-word -- "worked him on the
-                # s" -- which reads as a rendering fault rather than as text
-                # that did not fit, and leaves the operator unsure whether
-                # there is more of it or the log is damaged. The dots say
-                # there is more, and the contact screen is where to read it.
-                line += " " + clip(trailing, max(0, width - len(line) - 1))
+        # Name and QTH each get their OWN column under their own heading.
+        # They used to share one with the comment: the name padded to a fixed
+        # width, then the QTH and the comment joined with a space and drawn
+        # together under a heading reading `QTH`. On general logging, which
+        # had no QTH field at all then, that put every typed comment in a
+        # column labeled QTH -- the heading naming one field and the column
+        # holding another.
+        if used["name"]:
+            line += f" {rec.get('name', ''):<9}"
+        if used["qth"]:
+            # Clipped with `...`, not cut by the row width. A value that ran
+            # off the end used to stop mid-word -- "State Colleg" -- which
+            # reads as a rendering fault rather than as text that did not
+            # fit, and leaves the operator unsure whether there is more of it
+            # or the log is damaged. The dots say there is more, and the
+            # contact screen is where to read it.
+            line += " " + clip(rec.get("qth", ""),
+                               max(0, width - len(line) - 1))
         out.append([(line[:width].ljust(width),
                      "reverse" if picked else "")])
 
@@ -1356,8 +1415,21 @@ LOG_LINES_MIN, LOG_LINES_MAX = 1, 3
 
 # What the first row already shows, so the continuation rows carry on from
 # there instead of repeating it. These are the columns the heading names.
+# `comment` is NOT here, so it falls to the continuation rows. It is the one
+# field whose length is unbounded, so on the first row it was always the one
+# clipped, and it took the last column -- the one that can use what is left
+# -- away from the QTH, which is short, scannable and what an operator
+# actually reads back beside a name. A one-line list therefore shows no
+# comment; two lines show it under its own label, and the contact screen
+# always does.
 _LINE1_FIELDS = ("when", "call", "rst_s", "rst_r", "serial_tx", "serial_rx",
-                 "exchange_rx", "park", "name", "qth", "comment")
+                 "exchange_rx", "park", "name", "qth")
+
+# Filled in without being typed, so no schema lists them, and shown on every
+# contact whatever its schema: the band, frequency and mode read off the radio
+# and the rig and antenna read off the Station settings. In the order the
+# operator reads them back -- what band, then where on it, then how.
+_AUTOMATIC = ("band", "freq", "mode", "tx_power", "my_rig", "my_antenna")
 
 # Never shown on a continuation row. The station's own call is the same on
 # every contact in the file, and the activity and its type are named in the
@@ -1398,12 +1470,21 @@ def log_extra_fields(activity_type, rec):
     second and a satellite type puts the bird second, and neither wants a row
     spent on a grid square it never asks for.
 
-    Anything the record carries that the activity does not ask for follows, in
-    the stored order. That is what makes this useful on general logging, whose
-    four fields all fit on the first row: a contact still carries a state, a
-    power and a rig, and those are worth the second row even though no activity
-    asked for them. It is also what keeps a contact logged under some other
-    type readable.
+    Then the AUTOMATIC fields, in `_AUTOMATIC` order. No schema lists them
+    because nobody types them, and every schema has them: the band, frequency
+    and mode come off the radio and the rig and antenna come off the Station
+    settings. Leaving them out would have dropped them from the display
+    entirely, since they are not in any schema's `entry`.
+
+    Nothing else. A field the schema does not ask for is not shown, for the
+    same reason the first row's columns are schema-driven: switching schemas
+    has to change what the display shows. This used to append everything the
+    record carried in stored order, which meant a contest contact kept
+    showing its exchange after the operator switched back to general logging.
+    The contact screen is where every field of a record is listed.
+
+    With no schema -- `activity_type=None` -- the record decides, because
+    there is nothing else to ask.
     """
     import qsolog as _q
     out, seen = [], set(_LINE1_FIELDS) | set(_LINE_SKIP)
@@ -1412,6 +1493,13 @@ def log_extra_fields(activity_type, rec):
             continue
         seen.add(name)
         out.append(name)
+    for name in _AUTOMATIC:
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    if activity_type is not None:
+        return out
     for name in _q._FIELD_ORDER:
         if name in seen:
             continue

@@ -30,6 +30,12 @@ F1 = "\x1bOP"          # xterm F1: the menu
 F3 = "\x1bOR"          # xterm F3: the mode picker
 F4 = "\x1bOS"          # xterm F4: cycle the color scheme
 TO_LOG = "\x10"         # ^P: one stop along the ring, the log
+# ^O: backwards round the ring from the boot screen, wrapping past the log to
+# the conversation. The deck OPENS on DECK & RIG, so every scenario about a
+# MODEM, a CARRIER or the digimode status line has to hop there first --
+# otherwise `display[0]` is the station fields' own header and the mode keys
+# land on a screen that has no modem.
+TO_DIGI = "\x0f"
 
 
 if __name__ == "__main__":
@@ -38,7 +44,7 @@ if __name__ == "__main__":
     path = os.path.join(tmp, "state", "cyberdeck.json")
     try:
         # A fresh deck, then RTTY chosen from the curated list (F3, then 4).
-        first = run(keys=[F3, "4"], state_path=path, settle=1.5)
+        first = run(keys=[TO_DIGI, F3, "4"], state_path=path, settle=1.5)
         body = "\n".join(first.display)
         check("the mode change took effect", "RTTY" in body, body[:200])
 
@@ -51,8 +57,11 @@ if __name__ == "__main__":
         check("it records a carrier", isinstance(saved.get("carrier"), int),
               repr(saved.get("carrier")))
 
-        # A second process, same state file, no keys at all.
-        second = run(state_path=path, settle=1.8, settle_s="0.2")
+        # A second process, same state file, and no keys but the hop: what
+        # is being tested is the mode it comes back in, which is read off the
+        # digimode status line.
+        second = run(keys=[TO_DIGI], state_path=path, settle=1.8,
+                     settle_s="0.2")
         body2 = "\n".join(second.display)
         check("the restarted deck comes back in RTTY", "RTTY" in body2,
               body2[:200])
@@ -75,7 +84,7 @@ if __name__ == "__main__":
     try:
         # Ctrl-D nudges the carrier +10 Hz; settle longer than STATE_SETTLE_S
         # so the deck has a chance to write it.
-        nudges = ["\x04"] * 6
+        nudges = [TO_DIGI] + ["\x04"] * 6
         first = run(keys=nudges, state_path=path, settle=1.5, settle_s="0.2")
         line = first.display[0]
         check("the nudges moved the carrier", "Hz" in line, line)
@@ -90,7 +99,8 @@ if __name__ == "__main__":
         check("and it is where the tuning left it, not the default",
               saved.get("carrier") not in (None, 1500), repr(saved.get("carrier")))
 
-        second = run(state_path=path, settle=1.8, settle_s="0.2")
+        second = run(keys=[TO_DIGI], state_path=path, settle=1.8,
+                     settle_s="0.2")
         check("the restarted deck comes back on that carrier",
               f"{saved.get('carrier')}Hz" in second.display[0],
               second.display[0])

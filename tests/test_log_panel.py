@@ -182,14 +182,13 @@ for term in ("xterm", "linux"):
     check(f"{term}: it offers the activity", "Activity" in body, body[:400])
     check(f"{term}: showing which one is selected", "CONTEST" in body,
           body[:400])
-    check(f"{term}: and the way back to the log", "^N the log screen" in body,
-          body[-120:])
+    check(f"{term}: and the way out", "^O ^P areas" in body, body[-120:])
 
 for term in ("xterm", "linux"):
     body, _ = deck([RING_FWD, F1[term], "v"],
                    "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n", term=term,
                    label=f"into the activity picker ({term})")
-    check(f"{term}: the picker opens", "ACTIVITY" in body, body[:120])
+    check(f"{term}: the picker opens", "LOG SCHEMA" in body, body[:120])
     check(f"{term}: general logging is offered first",
           "General logging" in body, body[:300])
     check(f"{term}: and the one in use is marked", "*" in body, body[:300])
@@ -198,9 +197,11 @@ print("\nchoosing an activity changes the form")
 # A contest form has a serial and an exchange; a general one has reports, a
 # name and a QTH. Switching has to rebuild it, or the fields on screen belong
 # to the activity that was just left.
-# Esc from the logging menu goes UP to the root menu rather than out, so
-# leaving takes two of them before Ctrl-N can reach the log screen again.
-body, _ = deck([RING_FWD, F1["linux"], "v", "g", "\x1b", "\x1b", RING_FWD],
+# No Esc and no second ^P: the schema picker has ONE exit and it closes to
+# the log screen however it was reached, so choosing general logging lands
+# back on the form. The old sequence added two Escs and another ring step and
+# so read the DIGIMODE screen while asserting about the entry form.
+body, _ = deck([RING_FWD, F1["linux"], "v", "g"],
                "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n",
                label="switch to general logging")
 check("the form now has reports", "Sent" in body and "Rcvd" in body,
@@ -290,7 +291,7 @@ check("and the renamed label", "label_exchange_rx" in written, written)
 
 check("the deck switched to it", "PAQP" in body.splitlines()[0], body[:120])
 check("and the header still says what the log is for",
-      "casual logging" in body.splitlines()[0], body[:120])
+      "master log" in body.splitlines()[0], body[:120])
 check("and the form rebuilt in the new order",
       body.index("Name") < body.index("Nr"), body[-400:])
 
@@ -360,41 +361,65 @@ check("the header is still the log screen", "LOG" in body, body[:120])
 print("\nthe logging menu offers the log file, and no uploader")
 body, _ = deck([RING_FWD, F1["linux"]], "LOGGING = yes\n", term="linux",
                label="the logging menu")
-check("the default log is offered", "Default log" in body, body[:400])
+# "Default log" was the name when there were per-activity files beside a
+# default one. There is one log now, so the line is just the file.
+check("the log file is offered", "Log file" in body, body[:400])
 check("and no QRZ upload", "QRZ" not in body, body[:400])
 check("and nothing claims contacts are waiting to be sent",
       "waiting" not in body, body[:400])
 
-print("\nthe list is this activity's contacts, under named columns")
-# One deck keeps one log file. Switching to a contest and still seeing the
-# morning's ordinary contacts put rows with no serial under a serial column,
-# and made the header count answer a question nobody asked.
+print("\nan activity filters the one log; the master log does not")
+# One log, and an activity is a LABEL on its records -- §7f. Selecting an
+# activity filters the list to that session; selecting the master log shows
+# everything, because every contact ever made is in it whatever activity made
+# it. The seeded log holds one labeled contact and one belonging to no
+# activity, so the two cases are different lists and not the same one twice.
 MIXED = ("when=2026-10-11T14:00:00Z call=W1AW band=40m mode=SSB "
          "rst_s=59 rst_r=59 my_call=KD3CCO\n"
          "when=2026-10-11T18:31:00Z call=K3PP band=40m mode=SSB rst_s=59 "
          "rst_r=59 serial_tx=55 serial_rx=101 exchange_rx=MONT "
          "activity=CONTEST my_call=KD3CCO\n")
 
-# A legacy ACTIVITY = CONTEST is a session named CONTEST, and the mixed log
-# below holds one contact in it and one belonging to no activity.
+# No `activity_log=`: the label is already on the one line that should carry
+# it. Passing it relabeled EVERY line, so both contacts ended up inside the
+# activity and "the one outside it is not listed" was testing a log that had
+# no outside.
 body, _ = deck([RING_FWD], "LOGGING = yes\nACTIVITY = CONTEST\n",
-               log_body=MIXED, activity_log="CONTEST",
+               log_body=MIXED,
                label="a named activity lists its own contacts")
 check("the contact in that activity is listed", "K3PP" in body, body[:400])
 check("the one outside it is not", "W1AW" not in body, body[:400])
 check("and the count is this activity's", "1 QSO" in body, body[:120])
 
 body, _ = deck([RING_FWD], "LOGGING = yes\n", log_body=MIXED,
-               label="a general form lists general contacts")
-check("casual logging lists the contact belonging to no activity",
-      "W1AW" in body, body[:400])
-check("and not the one inside an activity", "K3PP" not in body, body[:400])
+               label="the master log lists everything")
+# BOTH, which is the point of the master log and the opposite of what this
+# checked when every activity had a file of its own.
+check("the master log lists the unlabeled contact", "W1AW" in body,
+      body[:400])
+check("and the one inside an activity too", "K3PP" in body, body[:400])
+check("with the whole log's count", "2 QSO" in body, body[:120])
 
 print("\nthe columns say what is being filled in")
+# The SCHEMA decides them -- §7g. A contest schema asks for a serial and an
+# exchange and for neither report, because in a contest the report is 59
+# every time, so there is no RST column and a column of bare `/` down the
+# screen is not drawn. RST used to be in this list and unconditional in the
+# renderer.
 body, _ = deck([RING_FWD], "LOGGING = yes\nACTIVITY_TYPE = CONTEST\n",
                log_body=MIXED, label="contest column headings")
-for want in ("UTC", "CALL", "RST", "NR", "EXCH"):
+for want in ("UTC", "CALL", "MY#", "NR", "EXCH"):
     check(f"the {want} column is named", want in body, body[:300])
+check("and no RST column, which the schema does not ask for",
+      "RST" not in body, body[:300])
+
+# The other half of the same rule, so this cannot pass by the renderer having
+# dropped RST everywhere: general logging DOES ask for the reports.
+body, _ = deck([RING_FWD], "LOGGING = yes\n", log_body=MIXED,
+               label="general column headings")
+check("general logging names the RST column", "RST" in body, body[:300])
+check("and no serial column, which it does not ask for",
+      "NR" not in body and "MY#" not in body, body[:300])
 
 # On an EMPTY log the columns still have to appear, or the operator cannot see
 # which fields they are about to fill until the first contact is already in.
@@ -435,20 +460,24 @@ check("an old ACTIVITY = POTA still gives a POTA form",
 
 print("\nF2 opens the activities list")
 F2 = {"xterm": "\x1bOQ", "linux": "\x1b[[B"}
+F3 = {"xterm": "\x1bOR", "linux": "\x1b[[C"}
 for term in ("xterm", "linux"):
     body, _ = deck([RING_FWD, F2[term]], "LOGGING = yes\n", term=term,
                    label=f"Ctrl-N then F2 ({term})")
     check(f"{term}: the activities screen opens", "ACTIVITIES" in body,
           body[:120])
     check(f"{term}: it says how to start one", "n new" in body, body[-120:])
-    check(f"{term}: and how to delete one", "d delete" in body, body[-120:])
+    check(f"{term}: and how to forget one", "d forget" in body, body[-120:])
 
-# With nothing logged under an activity the screen says so rather than
-# showing an empty list that looks broken.
+# The list is never empty: the MASTER LOG is always on it, always first and
+# not deletable, because it is where every contact ever made is kept whatever
+# activity made it. So "nothing logged yet" is not a state this screen can be
+# in, and the message that used to say so is unreachable.
 body, _ = deck([RING_FWD, F2["linux"]], "LOGGING = yes\n",
                label="no activities yet")
-check("an empty list explains itself", "nothing logged under an activity"
-      in body, body[:200])
+check("the master log is on the list", "master log" in body, body[:200])
+check("with its count", "0 QSOs" in body, body[:200])
+check("and it is the only row", body.count("QSO") == 1, body[:300])
 
 print("\ndeleting an activity asks first, then does it")
 #
@@ -458,27 +487,38 @@ print("\ndeleting an activity asks first, then does it")
 # So the last screen is always the screen AFTER cancelling, and a test that
 # looked for "DELETE ACTIVITY" on it could never pass. What the confirmation
 # SAYS is checked against render.confirm_screen in test_log_screen.py.
-SEED = ("when=2026-10-11T14:00:00Z call=W1AW band=40m mode=SSB rst_s=59 "
+# One log, and the activity is a label on a record in it -- §7f. There is no
+# per-activity file to seed or to count afterwards, so the fixture writes the
+# one log and the assertions read the records left in it.
+SEED = ("activity_start=2026-10-11T13:00:00Z "
+        "when=2026-10-11T14:00:00Z call=W1AW band=40m mode=SSB rst_s=59 "
         "rst_r=59 my_call=KD3CCO activity=Testpark activity_type=POTA\n")
 
 
 def with_activity(keys, label, settle=3.0):
-    """Run with one activity already on disk. Returns (body, files left)."""
-    import datetime as _dt
+    """Run with one session already in the log. Returns (body, records left).
+
+    Deleting an activity is now `_forget_session`: the label comes off the
+    deck's LIST and every record keeps it, so what this returns is the log,
+    and "deleted" means "gone from the list" rather than "gone from disk".
+    """
     with tempfile.TemporaryDirectory() as tmp:
-        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
-        adir = os.path.join(tmp, "activities")
-        os.makedirs(adir)
-        with open(os.path.join(adir, f"Testpark_{stamp}.log"), "w") as fh:
+        log_path = os.path.join(tmp, "qso.log")
+        with open(log_path, "w") as fh:
             fh.write(SEED)
         conf_path = os.path.join(tmp, "cyberdeck.conf")
         with open(conf_path, "w") as fh:
             fh.write(STATION + "LOGGING = yes\n"
-                     + f"LOG_PATH = {os.path.join(tmp, 'qso.log')}\n")
+                     + f"LOG_PATH = {log_path}\n")
         body = show(label, run(keys=keys, settle=settle, term="linux",
                                conf=conf_path))
-        return body, sorted(os.listdir(adir))
+        with open(log_path) as fh:
+            return body, [l.strip() for l in fh if l.strip()]
 
+
+# Down one first: row 0 is the master log and `d` on it refuses, so without
+# this the delete never opens and the scenario tests nothing.
+DOWN_L = "\x1b[B"
 
 body, left = with_activity([RING_FWD, F2["linux"]], "the activity is listed")
 check("it appears in the list", "Testpark" in body, body[:300])
@@ -486,23 +526,32 @@ check("with its contact count", "1 QSO" in body, body[:300])
 check("and is marked as the one in use only when it is",
       "* Testpark" not in body, body[:300])
 
-body, left = with_activity([RING_FWD, F2["linux"], "d"], "d alone deletes nothing")
-check("the question alone destroys nothing",
-      any("Testpark" in f for f in left), str(left))
+body, left = with_activity([RING_FWD, F2["linux"], DOWN_L, "d"],
+                           "d alone forgets nothing")
+check("the question alone changes nothing",
+      any("activity=Testpark" in l for l in left), str(left))
 
-body, left = with_activity([RING_FWD, F2["linux"], "d", "\x1b"], "Esc keeps it")
-check("Esc keeps the activity", any("Testpark" in f for f in left), str(left))
+body, left = with_activity([RING_FWD, F2["linux"], DOWN_L, "d", "\x1b"],
+                           "Esc keeps it")
+check("Esc keeps the activity", any("Testpark" in l for l in left), str(left))
 check("and the list comes back", "ACTIVITIES" in body, body[:200])
 
-body, left = with_activity([RING_FWD, F2["linux"], "d", "x"],
+body, left = with_activity([RING_FWD, F2["linux"], DOWN_L, "d", "x"],
                            "another key keeps it")
 check("an unrelated key keeps it too — the default is to keep",
-      any("Testpark" in f for f in left), str(left))
+      any("Testpark" in l for l in left), str(left))
 
-body, left = with_activity([RING_FWD, F2["linux"], "d", "\r"],
-                           "Enter deletes it")
-equals("Enter deletes the file", left, [])
-check("and it says so", "deleted" in body, body)
+body, left = with_activity([RING_FWD, F2["linux"], DOWN_L, "d", "\r"],
+                           "Enter forgets it")
+# The CONTACT survives, with its label intact. That is the whole point of
+# the change: deleting an activity takes it off the deck's list and leaves
+# the records alone, so the session is still exportable by name and logging
+# under it again brings it back.
+equals("the contact is still in the log", len(left), 1)
+check("and still carries the label",
+      "activity=Testpark" in left[0], str(left))
+check("and the deck says it came off the list",
+      "removed from the list" in body, body)
 
 print("\ndeleting an activity type asks first, then does it")
 
@@ -574,10 +623,13 @@ check("the file is untouched", "[PAQP]" in text and "[KEEPME]" in text, text)
 
 # Selecting a type after pressing `d` and changing your mind must SELECT it,
 # not delete it: the pending flag has to clear.
-# Esc from the picker goes UP to the root menu, so getting back in is
-# 8 (Logging) then v.
+# Esc from the picker closes to the LOG SCREEN -- it has one exit however it
+# was reached -- so getting back in is F1 then v. The `8` is left in because
+# it is harmless on the log screen and because removing it is a change to a
+# scenario that passes; what it used to mean, "Logging on the root menu", is
+# gone, since F1 now opens the menu for the area the operator is in.
 body, text = with_type([RING_FWD, F1["linux"], "v", "d", "\x1b",
-                        "8", "v", PAQP_KEY],
+                        F3["linux"], PAQP_KEY],
                        "d then Esc then a number selects")
 check("the type still exists", "[PAQP]" in text, text)
 check("and was selected", "PAQP" in body, body[:200])
@@ -591,7 +643,8 @@ body, _ = deck([RING_FWD, F1["linux"], "8"], "LOGGING = yes\n",
                term="linux", label="the logging menu")
 check("the logging menu no longer offers to create a type",
       "New type" not in body, body)
-check("but it still leads to the picker", "Activity type" in body, body)
+# "Activity type" was renamed "log schema" in the interface on 2026-10-16.
+check("but it still leads to the picker", "Log schema" in body, body)
 
 body, text = with_type([RING_FWD, F1["linux"], "v"], "the picker advertises both")
 check("copy is offered", "c+n copy" in body, body[-160:])
@@ -613,7 +666,7 @@ check("the type survives", "[PAQP]" in text, text)
 check("and the field picker is what opened", "SELECT FIELDS" in body, body[:200])
 
 body, text = with_type([RING_FWD, F1["linux"], "v", "c", "\x1b",
-                        "8", "v", PAQP_KEY],
+                        F3["linux"], PAQP_KEY],
                        "c then Esc then a number selects")
 check("the type still exists", "[PAQP]" in text, text)
 check("and was selected rather than copied", "PAQP" in body, body[:200])
@@ -658,7 +711,7 @@ check("Esc keeps it", "Pennsylvania QSO Party" in text, text)
 check("and it was not written alongside itself",
       text.count("[PAQP]") == 1, text)
 check("backing out returns to the name prompt, prefilled",
-      "Name for this activity type" in body and "PAQP" in body, body[:200])
+      "Name for this log schema" in body and "PAQP" in body, body[:200])
 
 body, text = with_type([RING_FWD, F1["linux"]] + RENAME + ["\r"],
                        "Enter replaces it")
@@ -694,7 +747,7 @@ print("\nnaming a new activity asks which type it uses")
 
 body, left = with_activity([RING_FWD, F2["linux"], "n", "F", "D", "\r"],
                            "name an activity, then the type picker")
-check("the type picker comes up next", "ACTIVITY TYPE" in body, body[:200])
+check("the schema picker comes up next", "LOG SCHEMA" in body, body[:200])
 check("with the create paths on it", "n new" in body, body[-160:])
 
 # Esc out of the picker must not land back on the activities list: that list
@@ -795,17 +848,23 @@ equals("and there are still three of them",
        len([l for l in text.splitlines() if l.strip()]), 3)
 
 print("\nlines per contact")
-# What the extra rows SHOW is the activity's own field order, carrying on from
-# where the first row stops, then anything else the record holds. The fixture
-# logs under general logging, whose four fields all fit on the first row, so
-# everything here comes from that second tier -- which is exactly why the
-# second tier exists.
+# What the extra rows SHOW is the SCHEMA's own field order, carrying on from
+# where the first row stops, and then the AUTOMATIC fields -- band, frequency,
+# mode, power, rig, antenna -- which no schema lists because nobody types
+# them. The fixture logs under general logging, whose fields all fit on the
+# first row, so everything here comes from that automatic tier.
+#
+# It used to expect `State PA`. A state is in these records and in no
+# schema's field list, so under §7g it is not shown: the display follows the
+# schema, not the record. The contact screen is where every field is read.
 body, _ = with_logged([RING_FWD], "one line each", lines="1")
 check("one line shows the contact", "W3TM" in body, body[:300])
-check("and nothing below it", "State PA" not in body, body[:300])
+check("and nothing below it", "Band 40m" not in body, body[:300])
 
 body, _ = with_logged([RING_FWD], "two lines each", lines="2")
-check("two lines carry on down the fields", "State PA" in body, body[:400])
+check("two lines carry on down the fields", "Band 40m" in body, body[:400])
+check("and a field no schema asks for is not among them",
+      "State PA" not in body, body[:400])
 
 body, _ = with_logged([RING_FWD], "three lines each", lines="3")
 check("three lines reach what this station ran",
@@ -882,60 +941,64 @@ check("the previous contact's receipt is gone once typing starts",
 check("and the new callsign's warning gets the line",
       "** W1AW worked" in body, body[-300:])
 
-print("\nthe master log accumulates whatever activity made the contact")
-# The point of it: an activity deleted later must not take its contacts with
-# it. So deleting an ACTIVITY removes only that activity's own file, while
-# deleting a single CONTACT removes it from both -- a contact logged in error
-# should not survive in an archive, and an activity's contacts should.
+print("\nthe one log holds every activity's contacts")
+# There is one log -- §7f. An activity is a LABEL on a record in it, so a
+# contact made under an activity is one record carrying `activity=` and
+# `activity_start=`, and forgetting the activity later cannot take it with
+# it because there is nothing of the activity's to remove.
+#
+# This section used to drive the two-file design: a per-activity file in
+# `activities/` plus a duplicated write into a master, switched by a
+# `MASTER_LOG` setting that no longer exists. What that bought was a
+# per-activity export, which a filter gives for free; what it cost was two
+# writes to keep in step and two places to find a contact in when correcting
+# one.
 
 
-def with_master(keys, label, settle=3.4, master="yes"):
-    """Run under a named activity. Returns (the master, the activity file)."""
-    import datetime as _dt
+def with_master(keys, label, settle=3.4):
+    """Run under a named activity. Returns the records in the one log."""
     with tempfile.TemporaryDirectory() as tmp:
         base = os.path.join(tmp, "qso.log")
         conf_path = os.path.join(tmp, "cyberdeck.conf")
         with open(conf_path, "w") as fh:
             fh.write(STATION + "LOGGING = yes\nACTIVITY = Testpark\n"
-                     + f"MASTER_LOG = {master}\nLOG_PATH = {base}\n")
+                     "ACTIVITY_START = 2026-10-11T13:00:00Z\n"
+                     + f"LOG_PATH = {base}\n")
         show(label, run(keys=keys, settle=settle, term="linux",
                         conf=conf_path))
-        def lines(path):
-            if not os.path.exists(path):
-                return []
-            return [l for l in open(path).read().splitlines() if l.strip()]
-        adir = os.path.join(tmp, "activities")
-        act = [os.path.join(adir, f) for f in os.listdir(adir)] \
-            if os.path.isdir(adir) else []
-        return lines(base), lines(act[0]) if act else []
+        if not os.path.exists(base):
+            return []
+        with open(base) as fh:
+            return [l for l in fh.read().splitlines() if l.strip()]
 
 
 LOG_ONE = [RING_FWD] + list("W1AW") + ["\r"]
 
-mast, act = with_master(LOG_ONE, "one contact under an activity")
-equals("it is in the activity's own file", len(act), 1)
-equals("and in the master", len(mast), 1)
-check("the same contact in both", "call=W1AW" in act[0]
-      and "call=W1AW" in mast[0], f"{act}\n{mast}")
-check("the activity is named on the record", "activity=Testpark" in mast[0],
-      mast[0])
+logged = with_master(LOG_ONE, "one contact under an activity")
+equals("one record was written", len(logged), 1)
+check("it is the contact", "call=W1AW" in logged[0], str(logged))
+check("the activity is named on it", "activity=Testpark" in logged[0],
+      logged[0])
+# The session key, which is what makes the activity a session rather than a
+# name: an activation from 23:50 to 00:30 is one session, and anything
+# derived from the contacts' own dates would split it at midnight.
+check("and so is the session it began at",
+      "activity_start=2026-10-11T13:00:00Z" in logged[0], logged[0])
 
-mast, act = with_master(LOG_ONE, "with the master log off", master="no")
-equals("the activity file still gets it", len(act), 1)
-equals("and the master is not written", len(mast), 0)
-
-# Deleting the ACTIVITY keeps the contacts. This is the whole feature.
+# Forgetting the ACTIVITY keeps the contact. This is the whole feature.
 F2L = "\x1b[[B"
-mast, act = with_master(LOG_ONE + [F2L, "d", "\r"],
-                        "delete the activity", settle=3.8)
-equals("the activity's file is gone", len(act), 0)
-equals("and the master kept the contact", len(mast), 1)
+DOWN_M = "\x1b[B"
+logged = with_master(LOG_ONE + [F2L, DOWN_M, "d", "\r"],
+                     "forget the activity", settle=4.0)
+equals("the contact survived", len(logged), 1)
+check("with its label intact", "activity=Testpark" in logged[0], logged[0])
 
-# Deleting a CONTACT removes it from both: it was logged in error.
-mast, act = with_master(LOG_ONE + ["\x1b[A", "\r", "d", "\r"],
-                        "delete the contact itself", settle=4.0)
-equals("gone from the activity's file", len(act), 0)
-equals("and gone from the master too", len(mast), 0)
+# Deleting a CONTACT does remove it: it was logged in error, and an archive
+# that keeps a contact the operator said was wrong is worse than no archive.
+logged = with_master(LOG_ONE + ["\x1b[A", "\r", "d", "\r"],
+                     "delete the contact itself", settle=4.2)
+equals("the log is empty", len(logged), 0)
+
 
 print("\nEsc does not leave the logging application")
 # It used to go to the conversation, which made sense while the log hung off

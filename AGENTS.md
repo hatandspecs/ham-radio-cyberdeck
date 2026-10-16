@@ -41,6 +41,29 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   graphical seat is active takes down the seat. That is the second console this
   project has lost to a program claiming a tty it did not own. A real console is
   still the best place to judge glyphs — log into one by hand, Ctrl+Alt+F3.
+- **`code=exited, status=1/FAILURE` in the journal after a restart is
+  ncurses, not a crash** (diagnosed 2026-10-16). **ncurses installs its own
+  SIGTERM and SIGINT handlers in `initscr` and they call `exit(1)` from
+  inside the handler** — a plain curses program with no deck code in it does
+  exactly the same thing, which is how this was confirmed. So every
+  `systemctl restart` logged a FAILURE that looked precisely like the crash
+  loop the journal is read for. **Tell them apart by what comes FIRST:** a
+  `Stopping …` line before the exit is systemd stopping the unit, and a
+  `restart counter is at N` climbing with no `Stopping` is the real thing. A
+  unit that ran for hours and consumed minutes of CPU did not crash.
+
+  The consequence was the actual bug: `exit()` from a signal handler does not
+  unwind, so `main`'s `finally` never ran on a stop — transmit was not
+  aborted, the console palette was not restored for whatever owned tty1 next,
+  and the decoder was left parked on `NULL` whenever the radio happened to be
+  in SSB at that moment. `_leave_cleanly` raises `SystemExit(0)` instead, and
+  is installed **before `curses.wrapper`** because ncurses only claims a
+  signal whose disposition is still the default (`CatchIfDefault` in its own
+  source) — installed afterwards it would simply be overridden. SIGHUP too,
+  since the unit sets `TTYVHangup=yes`. `tests/test_decode_park.py` drives
+  both signals at the real program and checks the exit status and that the
+  modem came back.
+
 - **The deploy preflight cannot catch a crash that needs a keystroke.** It
   imports the modules and loads the config, which proves the code starts —
   and on 2026-10-16 it passed cleanly while the deck then crash-looped three
@@ -421,31 +444,198 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   before `_startup_done`, or a cold boot silently overwrites the saved mode
   with CW. There are tests for exactly this; run them before touching startup.
 
+- **An activity carries its schema and its own reference with it**
+  (2026-10-16, §7i). They used to be independent global settings, so resuming
+  last weekend's park activation left the operator logging it under whatever
+  schema they were using an hour before. `_follow_activity` applies the
+  schema and `my_park` the session's **newest** contact carries — newest,
+  because §7g lets one session hold contacts under several schemas and the
+  latest is the operator's most recent decision. Three rules that are easy to
+  get wrong here:
+
+  - **An empty `activity_type` means GENERAL, not "unknown".** `make_record`
+    writes no `activity_type` for the general schema, so `""` has to resolve
+    to the built-in rather than being treated as "leave the schema alone".
+  - **The reference is set BEFORE the schema.** `_set_activity_type` ends by
+    calling `_ask_my_park`, which opens an editor when the schema wants a
+    reference and none is set — so setting the park afterwards left that
+    editor open over the log screen on every resume of a park activation.
+  - **A session with no contacts, and the master log, keep what is set.**
+    There is nothing to infer from, and for a new activity guessing would
+    undo the choice the picker asked for a keystroke earlier.
+
+- **Leaving a menu must disarm a pending two-key action, not only arriving
+  at one.** `_open_menu` has always cleared `_pending_type_delete`; nothing
+  cleared it on the way OUT, and that was covered by accident while Esc from
+  the schema picker went UP to the logging menu, because that is an
+  `_open_menu` call. The moment Esc began closing the picker to the log
+  screen (§7i, so Esc can mean "keep the schema I have"), `d` then Esc left
+  the delete ARMED and the next number pressed in the picker deleted that
+  schema instead of selecting it. `_close_menu` disarms all three flags now.
+  The scenario that caught it is `test_log_panel`'s "d then Esc then a number
+  selects", and it caught it only because its key sequence had to be rewritten
+  for the new Esc — a test that had kept passing would have hidden it.
+
+- **`r` renames a session; `e` + number edits a schema in place.** Both were
+  missing and both were reachable only by a detour — renaming not at all, and
+  editing by copying a schema and then typing its own name back to trigger
+  the replace confirmation. `_editing_type` is what makes the save skip that
+  confirmation, and it has to be cleared on a copy, on a new schema and after
+  a successful write, or a later copy silently overwrites something.
+
+- **A schema change is refused over a part-typed contact**, because the
+  change rebuilds the form and carries only the sticky fields. `LogForm.typed`
+  decides what counts, and what it deliberately does NOT count is the point
+  of it: sticky fields, untouched radio fields, and anything still equal to
+  what the deck prefilled — a `599` nobody edited, a serial the log handed
+  out, a rig name off the Station settings. A guard that counted those would
+  refuse every schema change on a freshly cleared form.
+
+- **The log display is driven by the SCHEMA, not by the records** (2026-10-16,
+  `docs/qso_log_design.md` §7g). A field the selected schema does not ask for
+  is absent from the heading row, the contact rows and the continuation rows,
+  whatever the records carry; a field it does ask for is shown blank where a
+  contact never captured it. The rule it replaced was "the schema asks for it
+  OR a contact on screen has it", which failed in both directions at once: the
+  columns moved as the list scrolled and did NOT move when the schema changed,
+  so a contest session kept its `NR` and `EXCH` columns after switching back
+  to general logging. Nothing is hidden by this — the contact screen lists
+  every field a record holds, and ADIF export writes the record, not the
+  screen. The AUTOMATIC fields are the exception and barely one: band,
+  frequency, mode, power, rig and antenna are never typed, so no schema lists
+  them, and `render._AUTOMATIC` appends them to every schema's continuation
+  rows.
+
+- **Name, QTH and comment are three columns under three headings.** They used
+  to share one trailing column headed `QTH`, which put every typed comment in
+  a column labeled QTH on general logging — the schema asks for a comment and
+  deliberately does not ask for a QTH. If a column heading and the value under
+  it ever disagree again, this is the shape of the bug.
+
+- **`GENERAL` gained a `qth` field on 2026-10-16, and the entry grammar
+  changed with it.** It had none before, on the reasoning that an operator
+  who wanted one could add it from the field selector — wrong about how often
+  it is wanted, since the QTH is what gets read back beside a name and the
+  callbook lookup returns one. **The field list IS the grammar**, so
+  `W3ABC 59 57 Bob Pittsburgh` now logs a QTH where the trailing word used to
+  be dropped. One word per field, so `... Bob Pittsburgh PA` still drops the
+  `PA`: the parser is positional and a two-word QTH is typed into the field.
+  Four test files encode the general field tuple or the parse of that line —
+  `test_activities`, `test_logform`, `test_qsolog`, `test_log_screen` — so
+  changing `GENERAL.entry` means changing all four.
+
+- **The comment is never on the first row of the list.** It is the one field
+  whose length is unbounded, so there it was always the one clipped, and it
+  held the open-ended last column that the QTH needs. `render._LINE1_FIELDS`
+  is what decides this: a field named there is a first-row column and is
+  skipped on the continuation rows, and `comment` is deliberately absent. A
+  one-line list therefore shows no comment at all.
+
+- **A dropped CAT read is not a mode change.** `rig.mode()` returns `""` when
+  the read times out, and `""` is the absence of an answer, not a mode.
+  Treated as an answer it sent `resolve_mode` and `_shown_mode` to the MODEM,
+  so the logging screen showed `USB`, then `BPSK31`, then `USB` again every
+  several seconds — which is how often a read fails over a serial port on a
+  Pi, redrawn five times a second. `Deck._rig_mode_held` holds the last good
+  reading for `_RIG_MODE_HOLD` (8 s) and then admits the absence, so a radio
+  switched off is not asserted to be in the mode it was in an hour ago.
+
+- **Decoding stops with transmit when the radio leaves a data mode**
+  (2026-10-16). fldigi decodes whatever is on the sound card whether or not
+  the radio could be carrying it, and on a Pi 3A+ that DSP is the deck's
+  largest continuous cost. `fldigi_client.park_decoder` loads the `NULL`
+  modem, which is the nearest thing fldigi has to "stop decoding", and
+  remembers the modem AND the carrier to come back to — fldigi moves the
+  carrier to the new modem's sweet spot on every modem change, so without
+  that the operator comes back somewhere other than the signal they tuned
+  onto. Three things to know before touching it:
+
+  - **`modem()` reports the OPERATOR's modem, `modem_loaded()` the truth.**
+    While parked they differ. Every caller wants the first — the panel shows
+    what the operator chose, the picker marks it current, the log records what
+    the contact was made on — and a screen reading `NULL` would say the deck
+    had lost its mode.
+  - **`set_modem` while parked records the choice instead of applying it.**
+    Applying it would start the decoder the park exists to stop and the next
+    poll would park it again, so the deck would fight the operator.
+  - **Transmit and decoding resume differently, on purpose.** Decoding comes
+    back by itself the moment the radio is in a data mode — a running decoder
+    puts nothing on the air. Arming transmit stays the operator's act, which
+    is what `Ctrl-I` is for.
+
+  `_watch_rig_mode` used to `return` early whenever transmit was ALREADY
+  inhibited, which is the common case. Park before that check or the decoder
+  is never stopped.
+
+- **Three test traps around the logger, all of which produced vacuous
+  passes.** (1) A confirmation is never the last screen in a pty test: the
+  harness ends every run with Ctrl-Q and any key but Enter cancels a
+  confirmation, so assert the OUTCOME and check the wording against the pure
+  renderer. (2) A log value containing a space must be QUOTED in a seeded
+  fixture — the format is whitespace-separated `key=value`, so
+  `activity=Bald Eagle SP` parses as the activity "Bald" plus two keyless
+  words, and every session assertion then reports zero contacts. (3) F1 is
+  `\x1b[[A` under `TERM=linux` and `\x1bOP` under xterm; `deck()` in
+  `tests/test_log_panel.py` defaults to `linux`, so an xterm F1 is simply
+  typed into the callsign field.
+
 ## Where it stands
 
-1893 checks across 25 files, all passing as of 2026-10-15 on the
-`function-ring` branch — a clean serial run, every file green. The logger
-merged to `main` on 2026-10-14; `pre-logger` tags the commit before it, which
-is the rollback point for a deck that misbehaves. Run them serially and do not edit `src/` or `tests/` while a run is in
-flight: three successive runs during that session each reported a different
-single failure, because what executed was not what was on disk. A clean serial
-run had no flakes. The deck has worked real DX on PSK31 and RTTY. A DS3231 real-time
-clock is fitted and verified across a power cut with NTP disabled. The WiFi
-screen joins networks from the panel.
+**2124 checks across 29 files, all 29 green as of 2026-10-16** on the
+`function-ring` branch — a clean serial run with nothing edited while it was
+in flight. The two newest files are `test_decode_park.py` (60) and
+`test_activity_paths.py` (31), with `test_activity_follow.py` folded in as
+the pure half of the latter.
 
-A general-purpose QSO logger is on the local branch `logger` (2026-10-11),
-uncommitted, and **reachable from the panel**: Ctrl-N opens a tabbed entry
-form, Tab moves between fields, Enter logs, Esc returns. F1 on that screen
-opens the logging menu — activity, dupe rule, ADIF export — and F2 the
-activities list.
+The line this replaced claimed "1893 checks across 25 files, all passing as
+of 2026-10-15", and that was not true when it was written. Seven files were
+red: `test_log_panel` and `test_menu_arrows` from the single-log refactor and
+the schema rename, and five — `test_screen`, `test_screen_toggles`,
+`test_menu_nav`, `test_state`, `test_wifi` — from the boot screen moving to
+DECK & RIG, which left every scenario that assumed the deck opens on the
+conversation reading the wrong screen. **A suite summary is only as good as
+the run behind it**: count the files that printed `ALL PASS`, because a file
+that dies on an import prints no failures at all, which is how
+`test_menu_arrows` went a whole session with every check in it skipped.
 
-An ACTIVITY is a named operating session with its own dated log file; an
-ACTIVITY TYPE is the template of fields it uses. Creating a type happens on the
-TYPE PICKER (`F1` → `v`), not on a menu line: `c` + number copies that type,
-`n` starts one with no fields, `d` + number deletes one, and the picker has ONE
+The logger merged to `main` on 2026-10-14; `pre-logger` tags the commit
+before it, which is the rollback point for a deck that misbehaves. Run the
+tests serially and **do not edit `src/` or `tests/` while a run is in
+flight**: three successive runs during one session each reported a different
+single failure, because what executed was not what was on disk. The deck has
+worked real DX on PSK31 and RTTY. A DS3231 real-time clock is fitted and
+verified across a power cut with NTP disabled. The WiFi screen joins networks
+from the panel.
+
+The QSO logger merged to `main` on 2026-10-14 and is one of the three areas
+on the ring — there is no key that jumps to it. On the log screen the arrows
+move between fields and Enter logs; the arrows also select a logged contact,
+Enter opens it, and every field of it is editable, `d` deletes it. F1 opens
+the logging menu, F2 the activities list.
+
+An ACTIVITY is a named operating session; a LOG SCHEMA is the template of
+fields it uses. The word in the interface is "schema" — "activity type" was
+renamed on 2026-10-16 and survives only as internal identifiers
+(`ACTIVITY_TYPE`, `activities.ActivityType`). Creating a schema happens on the
+SCHEMA PICKER (`F1` → `v`), not on a menu line: `c` + number copies one, `n`
+starts one with no fields, `d` + number deletes one, and the picker has ONE
 exit — it closes to the log screen however it was reached. Naming a new
-activity leads straight into that picker, so the whole flow is name → type →
+activity leads straight into that picker, so the flow is name → schema →
 reference → log.
+
+**One log, with sessions inside it** (§7f). The master log is the only file;
+an activity is a label on its records and the activities screen is a filter
+over it, keyed by `(activity, activity_start)` — an ISO timestamp pinned at
+session start, so an activation running from 23:50 to 00:30 is one session
+rather than two. Deleting an activity forgets the label from the deck's list
+(`FORGOTTEN_SESSIONS` in the state file) and changes no record, so the
+contacts stay exportable and logging under that name again brings the session
+back. **`F1` → `z` is the danger zone** (§7h), which is the only place
+contacts are destroyed in bulk: forget all activities (destroys nothing),
+delete this activity's QSOs, delete every QSO. Each states its count and each
+asks first. It exists so a clean slate is available on demand — without it
+there is no telling a state the current software can reach from one left
+behind by an earlier iteration.
 `tests/test_log_panel.py` drives the real application through a pty under
 TERM=linux as well as xterm and checks a contact reaches the disk. The pure
 cores are `src/qsolog.py`, `src/activities.py`, `src/logform.py`,
@@ -468,7 +658,9 @@ why they won over the alternatives:
 
 - **Ctrl-M cannot be bound at all.** It IS byte 13, carriage return, so no
   terminal distinguishes it from Enter.
-- **Ctrl-N** is byte 14 and opens the log.
+- **Ctrl-N** was the jump to the log and is now free; the ring reaches every
+  area, so a second way in was one key spent on nothing. Ctrl-E, G, K and V
+  are the other unbound control characters.
 - **Home/End** are the cursor-to-the-ends keys in all three places text is
   typed (log field, chat compose line, config editor), and since Left/Right
   moved to field-switching they are the last in-field cursor control there is.

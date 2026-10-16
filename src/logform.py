@@ -408,6 +408,44 @@ class LogForm:
         """Every field's value, as a plain dict. Does not reset anything."""
         return {f.name: f.value.strip() for f in self.fields}
 
+    def typed(self):
+        """Field names the OPERATOR put something in, in form order.
+
+        What a schema change would throw away, and therefore what the deck
+        refuses to change schema over -- see `qso_log_design.md` §7i. A
+        schema change rebuilds the form and carries only the sticky fields
+        across, so a typed callsign and reports used to vanish without a
+        word.
+
+        Four kinds of value are deliberately NOT counted, because none of
+        them is the operator's work and all of them survive or are recomputed:
+
+        * **sticky fields** -- the comment, this station's own reference and
+          exchange -- which `_set_activity_type` carries across by hand,
+        * **radio fields the operator has not touched**, which the next poll
+          refills,
+        * **anything still equal to what the deck prefilled it with**: a
+          `599` nobody edited, a serial the log handed out, a rig name off
+          the Station settings,
+        * **empty fields**, obviously.
+
+        So this is empty on a form the operator has not typed into, whatever
+        the deck has filled in around them -- which is the common case, and
+        the one where a schema change has to just work.
+        """
+        out = []
+        for f in self.fields:
+            if not f.value:
+                continue
+            if f.sticky or f.name in STICKY_ANYWHERE:
+                continue
+            if f.from_radio and not f.touched:
+                continue
+            if not f.touched and f.value == f.prefill:
+                continue
+            out.append(f.name)
+        return out
+
     def commit(self):
         """Return the contact and clear the form for the next one.
 

@@ -81,17 +81,25 @@ keys = [k for k, _ in on["items"]]
 # lists them, where what already exists is in front of the operator making the
 # decision. It is now the lines-per-contact setting, which belongs on this menu
 # because it is about reading the log rather than about one activity.
+# Four groups, in the order an operator meets them: the state of logging,
+# then this session, then what a contact looks like, then the file and what
+# comes out of it. The danger zone is last and apart, because everything on
+# it destroys something.
 equals("on opens the rest", keys,
-       ["l", "f", "x", "a", "m", "d", "c", "e", "v", "n"])
-# `x` where the master-log toggle used to be. There is one log now, so there
-# is nothing to switch on: an activity is a label on records and a
-# per-activity export is a filter over the one file.
-check("exporting this activity is offered",
-      "Export this activity" in dict(on["items"])["x"],
-      dict(on["items"])["x"])
-check("and it names what would be exported",
-      "the whole log" in dict(menus.log_menu(on=True)["items"])["x"],
-      dict(menus.log_menu(on=True)["items"])["x"])
+       ["l", "e", "v", "d", "c", "m", "n", "f", "a", "z"])
+# `x` exports the activity in progress and is offered ONLY when there is one.
+# Without an activity it would export the same records as `a` under a
+# different name -- two menu items for one action, and the reader left
+# wondering what the difference is.
+check("exporting an activity is not offered without one",
+      "x" not in keys, str(keys))
+with_act = menus.log_menu(on=True, count=14, activity="Bald Eagle SP")
+check("and is offered with one, naming it",
+      "Bald Eagle SP" in dict(with_act["items"])["x"],
+      dict(with_act["items"])["x"])
+check("while `a` names the whole log either way",
+      "the whole log" in dict(on["items"])["a"],
+      dict(on["items"])["a"])
 check("creating a type is not offered here",
       not any("New type" in label for _k, label in on["items"]),
       str(on["items"]))
@@ -109,12 +117,17 @@ for n in (1, 2, 3):
           not any(w in shown.lower() for w in
                   ("where", "station", "contact's", "grid", "power")),
           shown)
-equals("the activity comes before its type",
+equals("the activity comes before its schema",
        keys.index("e") < keys.index("v"), True)
-# The log file sits directly under the toggle: which file is being written is
-# the first thing to know about a log, and switching it has to be a named
-# action rather than a restart with a different configuration.
-equals("the log file is second", keys[1], "f")
+# Last, and named so nobody arrives in it by accident.
+equals("the danger zone is last", keys[-1], "z")
+# The log file sits with the export rather than under the toggle. There is
+# one log now and an activity is a label on its records, so which file is in
+# use stopped being a question asked per session and became part of "where
+# does this end up".
+equals("the activity is second", keys[1], "e")
+check("and the file sits with the export",
+      keys.index("f") == keys.index("a") - 1, str(keys))
 check("and names the default when none is set",
       "qso.log" in dict(on["items"])["f"], dict(on["items"])["f"])
 check("or the one in use",
@@ -366,8 +379,11 @@ check("and no count of contacts 'waiting' to be sent",
       "waiting" not in labels, labels)
 check("the LoTW item says it exports and prints rather than sends",
       "print" in labels.lower(), labels)
+# Named for WHAT is exported rather than for the format. There is one log and
+# one activity-filtered export of it, and "Export ADIF" twice over said
+# nothing about which was which. The file extension is on the line anyway.
 check("ADIF export is still offered — it writes a local file",
-      "Export ADIF" in labels, labels)
+      "Export the whole log" in labels and ".adi" in labels, labels)
 
 # The parameters stay accepted so no caller breaks, and passing them changes
 # nothing: that is what makes reinstating an upload item a deliberate edit.

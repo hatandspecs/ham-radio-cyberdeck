@@ -17,10 +17,14 @@ from xmlrpc.server import SimpleXMLRPCServer
 
 
 class _Fldigi:
-    def __init__(self, modem="CW", carrier=1000):
+    def __init__(self, modem="CW", carrier=1000, rig_mode="USB"):
         self.modem = modem
         self.carrier = carrier
         self.trx = "RX"
+        # Settable, so a test can move the radio out of a data mode and watch
+        # the deck inhibit transmit and park the decoder. A fixed "USB" could
+        # only ever test one side of that.
+        self.rig_mode = rig_mode
         self.calls = []
 
     # SimpleXMLRPCServer asks the registered instance to resolve dotted names
@@ -43,7 +47,10 @@ class _Fldigi:
             self.carrier += int(params[0])
             return self.carrier
         if method == "modem.get_names":
-            return ["CW", "BPSK31", "BPSK63", "RTTY"]
+            # NULL is in the real list and is what `park_decoder` loads to
+            # stop the DSP. Without it here the park silently does nothing,
+            # which is exactly the condition it is supposed to detect.
+            return ["NULL", "CW", "BPSK31", "BPSK63", "RTTY"]
         if method == "main.get_trx_state":
             return self.trx
         if method in ("text.get_rx", "text.get_rx_length"):
@@ -51,7 +58,10 @@ class _Fldigi:
         if method == "main.get_rig_modes":
             return ["USB", "LSB", "CW"]
         if method == "main.get_rig_mode":
-            return "USB"
+            return self.rig_mode
+        if method == "main.set_rig_mode":
+            self.rig_mode = params[0]
+            return 0
         if method == "main.get_frequency":
             return 14070000.0
         if method in ("modem.get_bandwidth", "modem.get_quality"):
@@ -66,8 +76,8 @@ class _Fldigi:
 class FakeFldigi:
     """Start and stop the stand-in. `url` is what FLDIGI_URL should be set to."""
 
-    def __init__(self, modem="CW", carrier=1000, port=0):
-        self.state = _Fldigi(modem, carrier)
+    def __init__(self, modem="CW", carrier=1000, port=0, rig_mode="USB"):
+        self.state = _Fldigi(modem, carrier, rig_mode)
         self._server = None
         self._thread = None
         # A port chosen in advance, so a test can write it into a config file

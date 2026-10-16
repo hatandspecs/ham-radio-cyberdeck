@@ -15,13 +15,29 @@ from fldigi_client import Fldigi
 
 F1, F2, F3, F4 = "\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS"
 
+# The deck OPENS on DECK & RIG, and the ring reads settings | log | digimodes.
+# `LOGGING = yes` in the project's own config -- which `run()` uses -- so the
+# log IS on the ring and the hops are three-stop:
+#
+#   to the settings  no keys at all; it is the boot screen
+#   to the digimodes one `^O`, wrapping backwards past the log
+#
+# Named rather than counted at each call site, because the boot screen has
+# moved once already and every scenario in this file counts from it. The
+# scenarios that wanted the settings used to send `^O ^O` from a conversation
+# that opened first; now that lands on the LOG and they read the wrong
+# screen. The scenarios that want the digimodes sent nothing and read the
+# station fields.
+TO_SET = []
+TO_DIGI = ["\x0f"]
+
 f = Fldigi()
 f.set_modem("BPSK31")
 
 # F1 opens the menu for the AREA the operator is in. On the digimode screen
 # that is the digimode settings: the deck's own settings are their own area,
 # one ^B away, and mixing the two is what made this screen the deck's home.
-body = show("F1 digimode menu", run(keys=[F1]))
+body = show("F1 digimode menu", run(keys=TO_DIGI + [F1]))
 check("the digimode menu opens", "DIGIMODES" in body)
 check("its items are listed",
       all(w in body for w in ("Mode", "Tune Settings", "Memories")))
@@ -31,12 +47,12 @@ check("it says how to reach the other areas", "^O ^P" in body, body[-200:])
 
 # Ctrl-O from the digimode screen reaches the log, and again the deck's own
 # settings -- the ring order read as a strip: settings | log | digimodes.
-body = show("^B ^B -> the settings screen", run(keys=["\x0f", "\x0f"]))
+body = show("the boot screen is the settings screen", run(keys=TO_SET))
 check("the settings screen is its own screen", "DECK & RIG" in body, body[:200])
 check("and it answers what the station is set to",
       "Callsign" in body and "Rig" in body, body[:400])
 
-body = show("^B ^B then F1 -> the deck menu", run(keys=["\x0f", "\x0f", F1]))
+body = show("F1 on the boot screen -> the deck menu", run(keys=TO_SET + [F1]))
 check("F1 there opens the deck menu", "DECK & RIG" in body, body[:200])
 # Station is NOT on it: the screen behind the menu edits those fields in
 # place, every one with its substitution token beside it. A menu offering a
@@ -47,35 +63,36 @@ check("and not a second list of the station fields",
       "Station" not in body, body[:400])
 
 # The station fields are edited on the screen itself, not through a menu.
-body = show("^O ^O -> the station fields", run(keys=["\x0f", "\x0f"]))
+body = show("the station fields", run(keys=TO_SET))
 check("the callsign is on the screen", "Callsign" in body, body[:400])
 check("with the token a memory substitutes it into",
       "{call}" in body, body[:400])
 check("and Enter edits the row the cursor is on",
       "Enter edit" in body, body[-120:])
 
-body = show("F1 then 2 -> Tune Settings", run(keys=[F1, "2"]))
+body = show("F1 then 2 -> Tune Settings", run(keys=TO_DIGI + [F1, "2"]))
 check("tuning menu reached", "TUNING" in body or "AFC" in body, body[:300])
 
 # Display moved to the deck's own area with the rest of what the panel does,
-# so it is reached through that area now: ^B ^B to its screen, F1, then 3.
+# so it is reached through that area now -- which is the screen the deck
+# opens on, then F1, then 1.
 body = show("the deck menu then 1 -> Display",
-            run(keys=["\x0f", "\x0f", F1, "1"], settle=1.6))
+            run(keys=TO_SET + [F1, "1"], settle=1.6))
 check("display menu reached", "DISPLAY" in body, body[:200])
 check("all four schemes offered",
       all(w in body for w in ("Matrix", "Deckard", "Hal", "Tron")), body[:400])
 
-body = show("F3 mode picker", run(keys=[F3]))
+body = show("F3 mode picker", run(keys=TO_DIGI + [F3]))
 check("mode menu opens", "MODE" in body)
 check("current mode is marked", "BPSK31  <" in body, [l for l in body.splitlines() if "BPSK31" in l])
 check("'more modes' offered", "more modes" in body)
 
-body = show("F3 then m -> the full list", run(keys=[F3, "m"]))
+body = show("F3 then m -> the full list", run(keys=TO_DIGI + [F3, "m"]))
 check("paged list reached", "ALL MODES" in body and "page 1/" in body)
 check("single-key selection shown", " a " in body and " b " in body)
 
 print("\n-- selecting RTTY actually changes fldigi's modem --")
-run(keys=[F3, "4"], settle=1.5)
+run(keys=TO_DIGI + [F3, "4"], settle=1.5)
 after = f.modem()
 check("fldigi is now on RTTY", after == "RTTY", after)
 
@@ -84,14 +101,14 @@ check("fldigi is now on RTTY", after == "RTTY", after)
 # The marking has to be checked inside a single session: pick RTTY, reopen the
 # menu, and look.
 body = show("select RTTY then reopen the menu, one session",
-            run(keys=[F3, "4", F3]))
+            run(keys=TO_DIGI + [F3, "4", F3]))
 check("RTTY marked as current", "RTTY  <" in body,
       [l for l in body.splitlines() if "RTTY" in l])
 f.set_modem("BPSK31")
 
 print("\n-- the radio menu sets the VFO --")
 before = f.frequency()
-run(keys=[F1, "3", "1"], settle=1.5)          # menu -> Radio -> 14.070
+run(keys=TO_DIGI + [F1, "3", "1"], settle=1.5)   # menu -> Band -> 14.070
 after = f.frequency()
 check("VFO moved to 14.070", abs(after - 14_070_000) < 1000, f"{before} -> {after}")
 

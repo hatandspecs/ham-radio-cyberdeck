@@ -99,7 +99,7 @@ check("case does not matter", activities.get("pota").name == "POTA")
 # instead and an operator who wants the field adds it from the selector.
 equals("general logging is what gets typed, plus what the rig says",
        activities.GENERAL.entry,
-       ("rst_s", "rst_r", "name", "tx_power", "comment"))
+       ("rst_s", "rst_r", "name", "qth", "tx_power", "comment"))
 # The field list IS the entry grammar, so this is also what a typed one-line
 # entry means under general logging -- see test_qsolog.
 check("and the comment is one of its own fields, not an afterthought",
@@ -203,13 +203,14 @@ equals("and the sent one defaults",
 both = qsolog.parse_entry("W3ABC 59 57 Bob", "USB", G)
 equals("both reports and the name",
        (both["rst_s"], both["rst_r"], both["name"]), ("59", "57", "Bob"))
-# General logging has no `qth` field any more, and the field list IS the entry
-# grammar -- so there is no position for a QTH to be typed into and words after
-# the name have nowhere to go. The form cannot type one either, which is the
-# same fact seen from the other side.
+# `qth` is in general logging's field list as of 2026-10-16, and the field
+# list IS the entry grammar -- so the word after the name goes into it. One
+# word per field: `PA` has no position after the QTH and is dropped, which is
+# the positional parser working as specified and the reason an operator who
+# wants "Pittsburgh PA" types it into the field rather than onto the line.
 spare = qsolog.parse_entry("W3ABC 59 57 Bob Pittsburgh PA", "USB", G)
 equals("the name still lands", spare["name"], "Bob")
-equals("and there is no QTH to land in", spare["qth"], "")
+equals("and the QTH lands after it", spare["qth"], "Pittsburgh")
 equals("no activity argument at all is general logging",
        qsolog.parse_entry("W3ABC 59 57 Bob", "USB"),
        qsolog.parse_entry("W3ABC 59 57 Bob", "USB", G))

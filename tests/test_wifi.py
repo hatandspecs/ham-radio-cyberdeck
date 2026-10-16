@@ -24,10 +24,16 @@ import menus
 import wifi
 
 F1 = "\x1bOP"
-# The deck's own settings are an area of their own now: ^B ^B reaches its
-# screen, F1 opens its menu, and System is the fourth line. WiFi, pairing, the
-# transmit inhibit and quit are all behind it.
-DECK_SYSTEM = ["\x0f", "\x0f", F1, "2"]
+# The deck's own settings are an area of their own, and are the screen the
+# deck OPENS on -- so there is no hop to make: F1 opens its menu and System
+# is the second line. WiFi, pairing, the transmit inhibit and quit are all
+# behind it.
+#
+# This used to send `^O ^O` first, from a conversation screen that opened
+# first. With `LOGGING = yes` in the project's config the ring is
+# settings | log | digimodes, so two backward steps from the boot screen land
+# on the LOG, and F1 there opened the LOGGING menu -- where `2` is nothing.
+DECK_SYSTEM = [F1, "2"]
 
 
 def plain(segments):

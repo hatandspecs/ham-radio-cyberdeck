@@ -1296,6 +1296,39 @@ unmistakable and its stop path to be immediate.
   stop `main.tune`, which keyed for ten consecutive samples with the inhibit
   set. A safety property that depends on another process behaving as
   documented is not a safety property.
+* **Decoding is interlocked on the radio's mode as well as transmit**
+  (2026-10-16). fldigi decodes whatever is on the sound card whether or not
+  the radio is in a mode that could be carrying it, and on a Pi 3A+ that DSP
+  is the largest thing running. In SSB or FM it buys nothing: everything
+  decoded is noise and transmit is already inhibited. So the terminal loads
+  fldigi's `NULL` modem — there is no "stop decoding" call, and NULL has no
+  decoder to run — remembering the modem AND the carrier, because fldigi
+  moves the carrier to each new modem's own sweet spot and coming back
+  without it would land the operator somewhere other than the signal they
+  had tuned onto.
+
+  `Fldigi.modem()` keeps answering with the operator's modem while parked and
+  `modem_loaded()` answers with what fldigi holds, so no screen reads `NULL`
+  and no logged contact records it. Choosing a modem while parked records the
+  choice rather than loading it: applying it would start the decoder the park
+  exists to stop and the next poll would park it again.
+
+  The two resume differently, deliberately. Decoding comes back by itself the
+  moment the radio is in a data mode, because a running decoder puts nothing
+  on the air. Arming transmit stays the operator's act — `Ctrl-I` — because
+  it is the one that does.
+
+* **A stop signal unwinds rather than killing the process** (2026-10-16).
+  ncurses installs its own SIGTERM and SIGINT handlers in `initscr` and they
+  call `exit(1)` from inside the handler, so a `systemctl stop` tore the
+  terminal down without running its shutdown code: a keyed transmitter was
+  not aborted, the console palette was left as the deck had set it for
+  whatever owned tty1 next, and the decoder was left parked on fldigi's
+  `NULL` modem. `_leave_cleanly` raises `SystemExit(0)`, which unwinds, and
+  is installed before `curses.wrapper` because ncurses claims only a signal
+  still at its default disposition. The aborted transmit is the one that
+  makes this a safety property rather than tidiness.
+
 * **Startup is receive-only** until the rig reports a frequency, so a
   misconfigured rig cannot be keyed blind.
 

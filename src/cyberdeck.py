@@ -27,6 +27,7 @@ import curses
 import datetime
 import json
 import os
+import signal
 import sys
 import time
 
@@ -96,6 +97,12 @@ RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI)
 # through a real pty rather than calling the handler: the only proof that a
 # control character reaches the application is watching it arrive. It does.
 RING_BACK, RING_FWD = 15, 16                     # Ctrl-O, Ctrl-P
+
+# How long a dropped CAT read may keep reporting the last mode that was read.
+# Long enough to cover a handful of consecutive failures at five draws a
+# second, short enough that a radio switched off is admitted to quickly. See
+# `Deck._rig_mode_held`.
+_RIG_MODE_HOLD = 8.0
 
 # Which area each screen belongs to. Anything missing belongs to digimodes,
 # which is where the deck starts and where a screen with no better home goes.
@@ -192,6 +199,13 @@ class Deck:
         # Sessions the operator has deleted from the activities list. The
         # records keep their labels -- see §7f -- so the list has to be told.
         self.cfg.setdefault("FORGOTTEN_SESSIONS", [])
+        # The session `r` is renaming, as `(name, start)`. Held across the
+        # editor, which is what hands the new name back.
+        self._renaming = ("", "")
+        # The schema `e` is editing in place, so saving replaces it instead
+        # of asking whether to -- see `_save_activity`.
+        self._editing_type = ""
+        self._pending_type_edit = False
         # Rows the ACTIVITIES screen last drew, where the cursor is, and the
         # pending question: {"title", "lines", "action", "back"}.
         self.acts_sel = 0
@@ -212,6 +226,12 @@ class Deck:
         self.set_sel = 0
         # The radio's readings for the entry form, and when they were taken.
         self._radio_cache = ("", "", "")
+        # The last rig mode actually read, per SOURCE, and when. Keyed
+        # because there are two: fldigi's own CAT and the rigctld client the
+        # log uses. They should agree and a shared slot would make a
+        # disagreement into a fight. See `_rig_mode_held`.
+        self._rig_mode_last = {}
+        self._rig_mode_last_at = {}
         self._radio_at = 0.0
         self.log_sel = None
         # What the callbook had to say, kept apart from `log_message` so that a
@@ -1021,6 +1041,7 @@ class Deck:
                 rig_mode = rig.mode()[0]
             except Exception:
                 rig_mode = ""
+        rig_mode = self._rig_mode_held(rig_mode, source="rigctld")
         modem = ""
         try:
             if self.fldigi.connected:
@@ -1528,6 +1549,33 @@ class Deck:
         act = activities.get(name, self._activity_table())
         self.picker = activities.FieldPicker(act.entry)
         self.picker_from = act.name
+        self._editing_type = ""
+        self.picker_sel = 0
+        self.picker_message = ""
+        self.screen = FIELDS
+        self._close_menu()
+
+    def _edit_activity_type(self, name):
+        """Change a schema in place, keeping its name.
+
+        The route before this was copy it, change it, then type the same name
+        and answer a question about replacing it -- which works, and which
+        nothing on screen suggested. `_editing_type` is what makes the save
+        skip that question: replacing it is the whole intent, so asking is
+        noise.
+
+        A BUILT-IN still asks, because editing one writes a section that
+        shadows the name everywhere on the deck and the way back -- delete
+        yours and the built-in returns -- is worth stating once. That check
+        lives in `_save_activity`, which is where the file is looked at.
+        """
+        act = activities.get(name, self._activity_table())
+        self.picker = activities.FieldPicker(act.entry)
+        # `picker_from` is what the saved label claims descent from, and an
+        # edit descends from nothing -- it IS that schema. Left empty so the
+        # label does not come back as "PAQP (from PAQP)".
+        self.picker_from = ""
+        self._editing_type = act.name
         self.picker_sel = 0
         self.picker_message = ""
         self.screen = FIELDS
@@ -1544,6 +1592,7 @@ class Deck:
         """
         self.picker = activities.FieldPicker(())
         self.picker_from = ""
+        self._editing_type = ""
         self.picker_sel = 0
         self.picker_message = ""
         self.screen = FIELDS
@@ -1653,7 +1702,12 @@ class Deck:
             # activity is a session with a log file, a type is the template of
             # fields that session uses, and the screen that had just finished
             # choosing and ordering FIELDS was asking for the wrong one.
+            # Prefilled with the name when a schema is being EDITED, so the
+            # last step of an edit is Enter rather than retyping a name the
+            # operator never meant to change. Empty for a copy or a new one,
+            # where the name is the decision still to be made.
             self._open_editor(None, "Name for this log schema",
+                              text=self._editing_type,
                               sink=self._save_activity)
         return True
 
@@ -1680,6 +1734,12 @@ class Deck:
         if name in ("GENERAL",):
             self.picker_message = "GENERAL is the built-in — pick another name"
             self._log_note("GENERAL is the built-in; pick another name")
+            return
+        if name == self._editing_type and name in self._file_types():
+            # Editing that very schema in place. Replacing it is the whole
+            # intent, so the question that guards an accidental name
+            # collision has nothing to guard here.
+            self._write_activity(name)
             return
         if name in self._file_types():
             # Their own definition, in the file. Replacing it is the common
@@ -1746,6 +1806,7 @@ class Deck:
             return
         self.picker = None
         self.picker_message = ""
+        self._editing_type = ""
         self._log_note(f"saved {name} to {path}")
         # `_set_activity_type` rebuilds the form from the saved definition, so
         # editing the schema an activity is already using takes effect on the
@@ -2129,6 +2190,7 @@ class Deck:
         if name and not qsolog.activity_slug(name):
             self._log_note("that name needs a letter or a digit in it")
             return
+        leaving = self._activity_name()
         self.cfg["ACTIVITY"] = name
         if not name:
             self.cfg["ACTIVITY_START"] = ""
@@ -2137,8 +2199,24 @@ class Deck:
         else:
             self.cfg["ACTIVITY_START"] = datetime.datetime.now(
                 datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Logging under a name again brings its sessions back -- which is what
+        # the forget confirmation has always claimed and, until §7i, was not
+        # true: the pair went onto a list nothing ever took it off. Matched on
+        # the NAME, not the pair, because the operator types a name and "bring
+        # back the park I worked last month" cannot mean one activation of it
+        # and not another.
+        if name:
+            kept = [p for p in self._forgotten() if p[0] != name]
+            if len(kept) != len(self.cfg.get("FORGOTTEN_SESSIONS") or []):
+                self.cfg["FORGOTTEN_SESSIONS"] = [list(p) for p in kept]
         self._save_state()
         self._switch_log()
+        if name != leaving:
+            # What describes HOW this session is logged comes back with it --
+            # §7i. Only on an actual change of activity, so re-selecting the
+            # one already running does not undo a schema the operator has
+            # just picked by hand.
+            self._follow_activity(name)
         if not name:
             self._log_note(f"{MASTER_LOG} — {len(self.log_records)} contacts")
             return
@@ -2148,6 +2226,63 @@ class Deck:
                            f"{'' if shown == 1 else 's'}")
         else:
             self._log_note(f"{name} started")
+
+    def _follow_activity(self, name):
+        """Apply the schema and own-reference the session was logged under.
+
+        An activity is a session, and the things that describe how it is being
+        logged belong to it -- see §7i. They used to be independent global
+        settings, so resuming last weekend's park activation left the operator
+        logging it under whatever schema they happened to be using an hour
+        before, with the park column gone and no field to type a reference in.
+
+        Two cases keep what is already set rather than changing it:
+
+        * **A session with nothing logged into it.** There is nothing to infer
+          from, and guessing would undo the choice just made when the activity
+          was named -- which is the choice the picker had only asked for a
+          keystroke earlier.
+        * **The master log.** It holds every contact under every schema there
+          has ever been, so it has none of its own to restore.
+
+        The reference is cleared on the way OUT of an activity either way.
+        Keeping it is how contacts made after an activation ended went on
+        claiming the park, which is a wrong reference in an exported ADIF and
+        worse than a missing one.
+        """
+        if not name:
+            # Leaving for the master log. The schema stays -- there is nothing
+            # to restore -- but the reference goes, because this is not an
+            # activation any more.
+            if self.cfg.get("MY_PARK"):
+                self._set_my_park("")
+            return
+        here = None
+        for ses in qsolog.sessions_in(self.log_records, self._forgotten()):
+            if ses["name"] == name and ses["start"] == self._activity_start():
+                here = ses
+                break
+        if here is None:
+            # A session with no contacts yet: a new activity, or one whose
+            # contacts were all deleted. Nothing to follow.
+            return
+        # The reference FIRST, then the schema. `_set_activity_type` ends by
+        # calling `_ask_my_park`, which opens an editor when the schema wants
+        # a reference and none is set -- so setting the park afterwards left
+        # that editor open over the log screen on every resume of a park
+        # activation, asking for something the deck was about to fill in by
+        # itself.
+        if here["park"] != self.cfg.get("MY_PARK", ""):
+            self._set_my_park(here["park"])
+        # "" on the newest contact means GENERAL -- `make_record` writes no
+        # `activity_type` for it -- so an empty type resolves to the built-in
+        # rather than being treated as "unknown, leave it alone".
+        want = here["type"] or "GENERAL"
+        table = self._activity_table()
+        if activities.get(want, table).name != \
+                activities.get(self.cfg.get("ACTIVITY_TYPE") or "GENERAL",
+                               table).name:
+            self._set_activity_type(want, table)
 
     def _ask_confirm(self, title, lines, action, back=None, footer="",
                      cancel=None):
@@ -2211,6 +2346,12 @@ class Deck:
                          # and the time of day is not what tells them apart on
                          # a list the operator is reading.
                          "date": s["start"][:10] or s["last"][:10],
+                         # The schema resuming it would apply -- §7i. Carried
+                         # through rather than recomputed by the renderer,
+                         # because the row and the resume have to agree about
+                         # it or the list promises one thing and Enter does
+                         # another.
+                         "type": s["type"],
                          "contacts": s["contacts"], "master": False})
 
         # The session in progress, even with nothing logged into it yet. The
@@ -2225,8 +2366,11 @@ class Deck:
         began = self._activity_start()
         if here and not any(r["name"] == here and r["start"] == began
                             for r in rows[1:]):
+            # Nothing logged into it yet, so there is no contact to read a
+            # schema off: the one in use IS what resuming it would keep.
             rows.insert(1, {"name": here, "start": began,
                             "date": began[:10], "contacts": 0,
+                            "type": self.cfg.get("ACTIVITY_TYPE", ""),
                             "master": False})
         return rows
 
@@ -2277,6 +2421,18 @@ class Deck:
         elif ch in (ord("n"), ord("N")):
             self._open_editor(None, "Activity name",
                               sink=self._start_named_activity)
+        elif ch in (ord("r"), ord("R")) and rows:
+            row = rows[self.acts_sel]
+            if row.get("master"):
+                self.acts_message = (f"{MASTER_LOG} cannot be renamed — it is "
+                                     f"every contact there is")
+                return True
+            # Prefilled with the name it has: a rename is almost always a
+            # correction to one word of it, and retyping the rest is work the
+            # screen can do.
+            self._renaming = (row["name"], row.get("start", ""))
+            self._open_editor(None, "New name", text=row["name"],
+                              sink=self._rename_activity)
         elif ch in (ord("d"), ord("D")) and rows:
             row = rows[self.acts_sel]
             if row.get("master"):
@@ -2308,6 +2464,50 @@ class Deck:
                 back=ACTS,
                 footer="Enter remove   any other key keeps it")
         return True
+
+    def _rename_activity(self, new_name):
+        """Rename the session picked on the activities screen.
+
+        No confirmation: it destroys nothing, every contact keeps its
+        `activity_start` so the session keeps its identity, and renaming back
+        undoes it exactly. What it does get is a count, because an operator
+        who renames the wrong row wants to know how many contacts moved.
+        """
+        name, start = getattr(self, "_renaming", ("", ""))
+        self._renaming = ("", "")
+        if not name:
+            return
+        new_name = str(new_name or "").strip()
+        if not new_name or not qsolog.activity_slug(new_name):
+            self.acts_message = "that name needs a letter or a digit in it"
+            return
+        if new_name == name:
+            self.acts_message = f"{name} kept its name"
+            return
+        try:
+            moved = qsolog.rename_session(self._log_path(), name, start,
+                                          new_name)
+        except OSError as exc:
+            self.acts_message = f"could not write the log: {exc}"
+            return
+        # The session in progress is renamed with it, or the header would go
+        # on naming an activity that no record carries any more.
+        if name == self._activity_name() and start == self._activity_start():
+            self.cfg["ACTIVITY"] = new_name
+        # A forgotten pair under the old name can never match anything again,
+        # so it would sit on the list for good; one under the NEW name would
+        # hide the session that has just taken it.
+        kept = [list(p) for p in self._forgotten()
+                if p[0] not in (name, new_name)]
+        self.cfg["FORGOTTEN_SESSIONS"] = kept
+        self._save_state()
+        self._switch_log()
+        # ONE message, through `_log_note`, which sets `acts_message` itself
+        # when the activities list is the screen. Setting that by hand first
+        # and then calling the note simply overwrote it, so the count this
+        # exists to report never reached the screen.
+        self._log_note(f"{name} is now {new_name} — {moved} contact"
+                       f"{'' if moved == 1 else 's'} relabeled")
 
     def _start_named_activity(self, name):
         """Name a new activity, then ask which type it uses.
@@ -2392,8 +2592,9 @@ class Deck:
         """
         name = self._activity_name()
         if not name:
-            self._log_note("no activity is selected — "
-                           "\"Delete EVERY QSO\" empties the whole log")
+            # 51 of 66. The quoted menu line made it 67 and it was cut at
+            # `the whole lo`, which reads as a damaged screen.
+            self._log_note("no activity selected — use Delete EVERY QSO")
             self._close_menu()
             return
         start = self._activity_start()
@@ -2457,6 +2658,13 @@ class Deck:
         except OSError as exc:
             self._log_note(f"could not write the log: {exc}")
             return
+        # The forgotten list is a set of (name, start) pairs to leave OUT of a
+        # list derived from the records. With no records there is nothing to
+        # leave out, so keeping it would only accumulate dead pairs across
+        # rounds of testing -- which is the job this screen exists for.
+        if self.cfg.get("FORGOTTEN_SESSIONS"):
+            self.cfg["FORGOTTEN_SESSIONS"] = []
+            self._save_state()
         self._after_bulk_delete()
         self._log_note(f"log emptied — {gone} contact"
                        f"{'' if gone == 1 else 's'} deleted")
@@ -3137,7 +3345,7 @@ class Deck:
 
         rows = render.tune_rows({
             "freq": render.frequency(f.frequency()),
-            "rig_mode": f.rig_mode(),
+            "rig_mode": self._rig_mode_held(f.rig_mode()),
             "carrier": f.carrier(),
             "width": render.mode_bandwidth(f.modem(), f.bandwidth()),
             "snr": f.signal_to_noise(),
@@ -3673,11 +3881,22 @@ class Deck:
         # action still armed by a keystroke the operator had backed out of.
         self._pending_type_delete = False
         self._pending_type_copy = False
+        self._pending_type_edit = False
         self.menu = which
         self.menu_page = 0
         self.menu_sel = self._first_selectable(which)
 
     def _close_menu(self):
+        # LEAVING a menu cancels a pending two-key action, exactly as arriving
+        # at one does -- see `_open_menu`. This used to be covered by
+        # accident: Esc out of the schema picker went UP to the logging menu,
+        # and that call cleared the flags on the way. Once Esc began closing
+        # the picker to the log screen (§7i, so Esc can mean "keep the schema
+        # I have"), `d` then Esc left the delete ARMED, and the next number
+        # pressed in the picker deleted that schema instead of selecting it.
+        self._pending_type_delete = False
+        self._pending_type_copy = False
+        self._pending_type_edit = False
         self.menu = None
         try:
             curses.curs_set(1)
@@ -3952,16 +4171,25 @@ class Deck:
             if key == "d":
                 self._pending_type_delete = True
                 self._pending_type_copy = False
+                self._pending_type_edit = False
                 self._log_note("press the number of the schema to delete")
                 return True
             if key == "c":
                 self._pending_type_copy = True
                 self._pending_type_delete = False
+                self._pending_type_edit = False
                 self._log_note("press the number of the schema to copy")
+                return True
+            if key == "e":
+                self._pending_type_edit = True
+                self._pending_type_copy = False
+                self._pending_type_delete = False
+                self._log_note("press the number of the schema to edit")
                 return True
             if key == "n":
                 self._pending_type_copy = False
                 self._pending_type_delete = False
+                self._pending_type_edit = False
                 self._new_activity_type()
                 return True
             chosen = ""
@@ -3969,6 +4197,10 @@ class Deck:
                 chosen = "GENERAL"
             elif key.isdigit() and key != "0" and 0 <= int(key) - 1 < len(names):
                 chosen = names[int(key) - 1]
+            if chosen and self._pending_type_edit:
+                self._pending_type_edit = False
+                self._edit_activity_type(chosen)
+                return True
             if chosen and self._pending_type_copy:
                 self._pending_type_copy = False
                 self._copy_activity(chosen)
@@ -3993,7 +4225,21 @@ class Deck:
                 return True
             self._pending_type_delete = False
             self._pending_type_copy = False
+            self._pending_type_edit = False
             if chosen:
+                # Not over a part-typed contact. A schema change rebuilds the
+                # form and carries only the sticky fields across, so a typed
+                # callsign and reports used to be discarded without a word --
+                # §7i. Refused rather than confirmed: there is nothing for the
+                # operator to weigh up, only something to finish first.
+                busy = self.log_form.typed() if self.log_form else []
+                if busy:
+                    labels = ", ".join(qsolog.field_label(f) for f in busy[:3])
+                    self._log_note(f"{labels} still typed — log the contact, "
+                                   f"or ^X to clear it, then change schema")
+                    self._close_menu()
+                    self.screen = LOG if self.log_on else CHAT
+                    return True
                 self._set_activity_type(chosen, table)
                 # One exit, whichever way the picker was reached. It used to
                 # go back to the logging menu when opened from there and to
@@ -4334,6 +4580,37 @@ class Deck:
             return None
         return {part.strip() for part in raw.split(",") if part.strip()}
 
+    def _rig_mode_held(self, reading, source="fldigi"):
+        """A rig mode reading, holding the last good one through a dropped read.
+
+        A CAT read that times out or comes back short returns "", and "" is
+        not a mode -- it is the absence of an answer. Treated as an answer it
+        said "the radio is not in a data mode we can read", which sent
+        `resolve_mode` and `_shown_mode` to the MODEM instead, so the panel
+        showed `USB` for a few seconds, then `BPSK31`, then `USB` again. Every
+        several seconds, because that is how often a read fails over a serial
+        port on a Pi, and visible on the logging screen because the header is
+        redrawn from this five times a second.
+
+        So a dropped read reports the last mode that WAS read, for up to
+        `_RIG_MODE_HOLD` seconds. Bounded, because a radio switched off stops
+        answering permanently and the deck must not keep asserting the mode it
+        was in an hour ago -- at that point the absence is the truth and the
+        modem fallback is right.
+        """
+        reading = (reading or "").strip()
+        now = time.monotonic()
+        if reading:
+            self._rig_mode_last[source] = reading
+            self._rig_mode_last_at[source] = now
+            return reading
+        held = self._rig_mode_last.get(source, "")
+        if held and now - self._rig_mode_last_at.get(source, 0.0) \
+                < _RIG_MODE_HOLD:
+            return held
+        self._rig_mode_last[source] = ""
+        return ""
+
     def _shown_mode(self):
         """What to put on the status line where the mode goes.
 
@@ -4344,7 +4621,7 @@ class Deck:
         when this was `fldigi.modem()` unconditionally.
         """
         modem = (self.fldigi.modem() or "").strip()
-        rig_mode = (self.fldigi.rig_mode() or "").strip()
+        rig_mode = self._rig_mode_held(self.fldigi.rig_mode())
         if not rig_mode:
             return modem
         if rig_mode.upper() in qsolog.RIG_DATA_MODES:
@@ -4354,7 +4631,7 @@ class Deck:
         return rig_mode
 
     def _watch_rig_mode(self):
-        """Inhibit transmit by itself when the radio leaves a data mode.
+        """Transmit and decoding both follow the radio's mode by themselves.
 
         The interlock used to be one-sided: `_toggle_inhibit` refused to ARM
         in a voice mode, but a radio moved OUT of a data mode while transmit
@@ -4362,24 +4639,69 @@ class Deck:
         change the radio second -- was the one the deck did not cover, and the
         operator's next over would go out as a digital signal into a voice
         mode on a voice frequency.
+
+        **Decoding stops too.** fldigi decodes whatever is on the sound card
+        whether or not the radio is in a mode that could be carrying it, and
+        on a Pi 3A+ that DSP is the deck's largest continuous cost. In SSB or
+        FM it buys nothing: anything decoded is noise, and transmit is
+        interlocked off anyway. `fldigi_client.park_decoder` is how, and the
+        carrier survives the round trip.
+
+        The two resume differently, on purpose. Decoding comes back by itself
+        the moment the radio is in a data mode again -- a running decoder puts
+        nothing on the air. Arming transmit stays the operator's act, which is
+        what `Ctrl-I` is, and what the message says.
         """
         if not self.fldigi.connected:
             return
         if self._rig_mode_ok():
             self._rig_mode_warned = False
+            came_back = self.fldigi.unpark_decoder()
+            if came_back:
+                self.session.note(f"rig back in a data mode — decoding "
+                                  f"{came_back} again")
             return
-        if self.session.inhibited:
+        # Through the hold, so the message cannot read "rig in  — not a data
+        # mode" on the poll where the read came back empty.
+        current = self._rig_mode_held(self.fldigi.rig_mode()) or "a voice mode"
+        # Parked before the inhibit is considered, not after. This used to
+        # return early when transmit was ALREADY inhibited, which is the
+        # common case -- so a decoder left running was never stopped.
+        parked = self.fldigi.park_decoder()
+        was_armed = not self.session.inhibited
+        if was_armed:
+            # Through the session's own setter, which is the route `Ctrl-I`
+            # takes, so the state and the transcript cannot disagree about why
+            # transmit is off.
+            self.session.inhibit(True)
+        if self._rig_mode_warned:
             return
-        current = (self.fldigi.rig_mode() or "").strip() or "a voice mode"
-        # Through the session's own setter, which is the route `Ctrl-I` takes,
-        # so the state and the transcript cannot disagree about why transmit
-        # is off.
-        self.session.inhibit(True)
-        if not self._rig_mode_warned:
-            self._rig_mode_warned = True
-            self.session.note(
-                f"rig moved to {current} — not a data mode, so transmit was "
-                f"inhibited. Put it back, then Ctrl-I.")
+        self._rig_mode_warned = True
+        did = []
+        if was_armed:
+            did.append("transmit off")
+        if parked:
+            did.append("decoding off")
+        # TWO short notes rather than one long one. The panel is 66 columns
+        # and the single sentence this replaced ran to about 140, so it
+        # wrapped to three transcript lines and the first of them scrolled
+        # away under the next thing the deck had to say.
+        #
+        # The first is said whether or not anything CHANGED. With transmit
+        # already inhibited and no `NULL` modem to park onto there is nothing
+        # to report having done -- and an earlier version returned here,
+        # which left the operator with no notice at all that the radio was
+        # somewhere the deck will not transmit from. The mode is the fact
+        # worth knowing; what the deck did about it is the detail.
+        self.session.note(f"rig in {current} — not a data mode"
+                          + (f": {', '.join(did)}" if did else ""))
+        if parked and self.session.inhibited:
+            self.session.note("decoding returns with the rig; "
+                              "Ctrl-I to arm transmit")
+        elif parked:
+            self.session.note("decoding returns when the rig does")
+        elif self.session.inhibited:
+            self.session.note("Ctrl-I to arm transmit once the rig is back")
 
     def _report_rig_mode(self):
         """Say what mode the radio is in. Never change it.
@@ -4412,8 +4734,14 @@ class Deck:
         evidence would take transmit away from every deck without CAT control,
         which is a worse failure than the one being prevented — so this
         refuses only on a positive reading of a mode that will not work.
+
+        Through `_rig_mode_held`, so a dropped CAT read is not mistaken for
+        "no CAT at all". Without it a single timed-out read returned True for
+        one poll, `_watch_rig_mode` unparked the decoder, and the next poll
+        parked it again -- the modem reloaded and the carrier rewritten every
+        few seconds, which is the flicker with side effects.
         """
-        current = (self.fldigi.rig_mode() or "").strip().upper()
+        current = self._rig_mode_held(self.fldigi.rig_mode()).upper()
         if not current:
             return True
         return current in qsolog.RIG_DATA_MODES
@@ -4431,7 +4759,7 @@ class Deck:
 
         So the carrier is read before the change and written back after.
         `c` on the Tune Settings page parks it deliberately, which is the
-        other half of the behaviour and stays available.
+        other half of the behavior and stays available.
         """
         # Not mid-over. Changing the modem while the radio is keyed truncates
         # whatever is going out and leaves the far end with a fragment in one
@@ -4450,7 +4778,16 @@ class Deck:
         if was and now != was:
             self.fldigi.set_carrier(was)
             now = self.fldigi.carrier()
-        self.session.note(f"mode changed to {self.fldigi.modem()} at {now} Hz")
+        if self.fldigi.decoder_parked:
+            # The choice was recorded rather than loaded -- see
+            # `fldigi_client.set_modem`. Saying "mode changed" and leaving it
+            # at that would promise decoding that is not happening.
+            self.session.note(
+                f"{self.fldigi.modem()} selected — the rig is not in a data "
+                f"mode, so decoding starts when it is")
+        else:
+            self.session.note(
+                f"mode changed to {self.fldigi.modem()} at {now} Hz")
         self._save_state()
         self._close_menu()
 
@@ -4562,6 +4899,15 @@ def main(stdscr, settings):
             deck.fldigi.abort()
         except Exception:
             pass
+        # Give fldigi its modem back. The decoder may be parked on `NULL`
+        # because the radio is in SSB, and the deck exiting is not a reason to
+        # leave the operator's fldigi holding a modem they never chose -- on a
+        # laptop they go back to the fldigi window, and on the deck the next
+        # start reads the modem to decide whether its restore took.
+        try:
+            deck.fldigi.unpark_decoder()
+        except Exception:
+            pass
         # Put the console palette back. The deck redefines entries in the
         # kernel's palette, which is a property of the console and not of this
         # process: without this, whatever owns tty1 next inherits the scheme.
@@ -4580,6 +4926,37 @@ def main(stdscr, settings):
             pass
 
 
+def _leave_cleanly(signum, _frame):
+    """Turn a stop signal into an ordinary exit, so the shutdown code runs.
+
+    **ncurses installs its own SIGTERM and SIGINT handlers in `initscr`, and
+    they call `exit(1)` from inside the handler.** So a `systemctl stop` or
+    `restart` tore the process down without unwinding: `main`'s `finally`
+    never ran, and with it none of
+
+      * `fldigi.abort()` -- a keyed transmitter stayed keyed,
+      * `unpark_decoder()` -- fldigi was left holding `NULL` whenever the
+        radio happened to be in SSB at the moment of the restart,
+      * `colors.restore()` -- the console palette is a property of the
+        console, not of this process, so whatever owned tty1 next inherited
+        the deck's scheme,
+      * `touch.close()`.
+
+    It is also why the journal read `code=exited, status=1/FAILURE` after
+    every restart, which looks exactly like a crash and is not one: a plain
+    curses program with no deck code in it does the same thing.
+
+    Raising rather than exiting is the whole point: `SystemExit` unwinds the
+    stack, the `finally` runs, and the process leaves with 0.
+
+    **Installed BEFORE `curses.wrapper`,** because ncurses only takes a
+    signal whose disposition is still the default -- `CatchIfDefault` in its
+    own source. Installing it afterwards would be overridden; installing it
+    first means ncurses leaves it alone.
+    """
+    raise SystemExit(0)
+
+
 def run():
     try:
         settings = configmod.load()
@@ -4590,6 +4967,17 @@ def run():
     # to tty1, so these are readable after the panel has taken the screen.
     for note in configmod.NOTES:
         print(f"cyberdeck: {note}", file=sys.stderr)
+    # SIGHUP as well as SIGTERM: the unit sets `TTYVHangup=yes`, so stopping
+    # it hangs up tty1 and the foreground process group gets a SIGHUP it
+    # should treat the same way.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, _leave_cleanly)
+        except (OSError, ValueError):
+            # A platform or a thread that will not take the handler is not a
+            # reason to refuse to start; it only means the shutdown is as
+            # abrupt as it used to be.
+            pass
     curses.wrapper(main, settings)
     return 0
 
