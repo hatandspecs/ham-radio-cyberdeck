@@ -23,7 +23,7 @@ import menus
 F1, F3 = "\x1bOP", "\x1bOR"
 UP, DOWN, ENTER, ESC = "\x1bOA", "\x1bOB", "\r", "\x1b"
 
-body = show("F1, then Down Down", run(keys=[F1, DOWN, DOWN]))
+body = show("F1, then Down Down", run(keys=[DIGI, F1, DOWN, DOWN]))
 check("the menu is still open after arrows", "DIGIMODES" in body, body[:200])
 
 # Derived from the menu, not named. Which item is third has changed three
@@ -33,12 +33,12 @@ check("the menu is still open after arrows", "DIGIMODES" in body, body[:200])
 # item, whatever the third item is.
 _THIRD = menus.DIGI["items"][2][1]
 print(f"\n-- Down x2 then Enter should reach the third item, {_THIRD} --")
-body = show("F1 Down Down Enter", run(keys=[F1, DOWN, DOWN, ENTER]))
+body = show("F1 Down Down Enter", run(keys=[DIGI, F1, DOWN, DOWN, ENTER]))
 check(f"landed on {_THIRD.upper()}",
       _THIRD.split()[0].upper() in body.upper(), body[:400])
 
 print("\n-- Enter on the first item reaches Mode --")
-body = show("F1 Enter", run(keys=[F1, ENTER]))
+body = show("F1 Enter", run(keys=[DIGI, F1, ENTER]))
 check("landed on MODE", "MODE" in body, body[:400])
 
 # Up from the first item wraps to the last, and Enter on it opens that
@@ -54,18 +54,23 @@ CTRL_O = "\x0f"          # one area back on the ring
 DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
 # The deck's own settings are a screen of their own: ^O ^O gets to it, F1
 # opens its menu, then Station, Display, System.
-DECK = [CTRL_O, CTRL_O, "\x1bOP"]
+# The deck opens on DECK & RIG, so F1 from the boot screen is its menu.
+DECK = ["\x1bOP"]
+# And one ^O reaches the digimodes from there WHATEVER the logging state is:
+# the ring wraps, so the last stop is the conversation whether the log is on
+# it (settings | log | digimodes) or not (settings | digimodes).
+DIGI = CTRL_O
 # Station is gone from this menu: the screen behind it edits those fields
 # directly. ^O ^O lands on that screen; F1 opens Display and System.
 DECK_DISPLAY, DECK_SYSTEM = "1", "2"
 
 _LAST = menus.DIGI["items"][-1][1].upper()
 print(f"\n-- Up from the first item wraps to the last, {_LAST.title()} --")
-body = show("F1 Up Enter", run(keys=[F1, UP, ENTER]))
+body = show("F1 Up Enter", run(keys=[DIGI, F1, UP, ENTER]))
 check(f"wrapped to {_LAST} and it opened", _LAST in body, body[:400])
 
 print("\n-- tuning menu now shows live state --")
-body = show("F1 then 2", run(keys=[F1, DIGI_TUNE]))
+body = show("F1 then 2", run(keys=[DIGI, F1, DIGI_TUNE]))
 check("tuning menu shows AFC state", "AFC" in body and ("ON" in body or "off" in body), body[:400])
 check("squelch state shown", "Squelch" in body, body[:400])
 
@@ -76,24 +81,24 @@ check("fldigi on RTTY", Fldigi().modem() == "RTTY", Fldigi().modem())
 
 print("\n-- message memories are edited in place --")
 CTRL_U, ENTER = "\x15", "\r"
-body = show("F1 5 opens the list", run(keys=[F1, DIGI_MEM], settle=1.3))
+body = show("F1 5 opens the list", run(keys=[DIGI, F1, DIGI_MEM], settle=1.3))
 check("the list names every slot", all(f"F{n}" in body for n in range(5, 13)), body[:300])
 check("empty slots are marked", "(empty)" in body, body[:300])
 
-body = show("F1 5 3 edits F7", run(keys=[F1, DIGI_MEM, "3"], settle=1.4))
+body = show("F1 5 3 edits F7", run(keys=[DIGI, F1, DIGI_MEM, "3"], settle=1.4))
 check("the editor opens on the chosen slot", "EDIT  F7" in body, body[:200])
 check("and loads its current text", "NAME HR IS" in body, body[:200])
 
 body = show("clear and save leaves it empty",
-            run(keys=[F1, DIGI_MEM, "3", CTRL_U, ENTER], settle=1.6))
+            run(keys=[DIGI, F1, DIGI_MEM, "3", CTRL_U, ENTER], settle=1.6))
 check("back on the list", "MESSAGE MEMORIES" in body, body[:200])
 check("F7 is now empty", "F7  (empty)" in body, body[:400])
 
 body = show("type and save stores it",
-            run(keys=[F1, DIGI_MEM, "6", CTRL_U] + list("TEST MEMORY") + [ENTER], settle=1.8))
+            run(keys=[DIGI, F1, DIGI_MEM, "6", CTRL_U] + list("TEST MEMORY") + [ENTER], settle=1.8))
 check("F10 holds the new text", "F10  TEST MEMORY" in body, body[:400])
 
-body = show("Esc discards", run(keys=[F1, DIGI_MEM, "2", CTRL_U] + list("XXX") + ["\x1b"], settle=1.8))
+body = show("Esc discards", run(keys=[DIGI, F1, DIGI_MEM, "2", CTRL_U] + list("XXX") + ["\x1b"], settle=1.8))
 check("F6 is untouched", "F6  DE {call} {call} K" in body, body[:400])
 
 
@@ -153,7 +158,7 @@ check("the panel survives it", "DECK & RIG" in body, body[:200])
 check("and the ceiling is unchanged", "10" in body, body[:400])
 
 body = show("editing a memory does show the token hint",
-            run(keys=[F1, DIGI_MEM, "1"], settle=1.4))
+            run(keys=[DIGI, F1, DIGI_MEM, "1"], settle=1.4))
 check("token hint present for a memory", "{call}" in body, body[-200:])
 check("and it says how to make a memory multi-line",
       "\\n" in body, body[-200:])
@@ -164,11 +169,11 @@ body = show("change Name and save",
 check("the screen shows the new value", "DONALD" in body, body[:400])
 
 print("\n-- the renamed menu entries --")
-body = show("F1 digimode menu", run(keys=[F1], settle=1.2))
+body = show("F1 digimode menu", run(keys=[DIGI, F1], settle=1.2))
 check("Tuning is now Tune Settings", "Tune Settings" in body, body[:300])
 # Band moved to the deck's own area along with the rest of the rig settings,
 # so it is checked on the menu it is on now rather than on this one.
-body = show("the digimode menu", run(keys=[F1], settle=1.3))
+body = show("the digimode menu", run(keys=[DIGI, F1], settle=1.3))
 check("Radio is now Band", "Band" in body and "Radio" not in body, body[:300])
 
 
@@ -199,7 +204,7 @@ check("no radio restriction means nothing is marked",
       not any("not supported" in lbl for _k, lbl in menus.band_menu()["items"]),
       menus.band_menu()["items"])
 
-body = show("F1 3 — the band list", run(keys=[F1, DIGI_BAND], settle=1.4))
+body = show("F1 3 — the band list", run(keys=[DIGI, F1, DIGI_BAND], settle=1.4))
 check("titled BAND", "BAND" in body, body[:200])
 check("shows 70 cm", "432.200" in body, body[:400])
 
@@ -214,7 +219,7 @@ check("the hint line no longer mentions ^WASD", "^WASD" not in body, body[-120:]
 check("but still offers the menu and the areas",
       "F1 menu" in body and "^O ^P screen" in body, body[-120:])
 
-body = show("F1 2 — tune settings", run(keys=[F1, DIGI_TUNE], settle=1.4))
+body = show("F1 2 — tune settings", run(keys=[DIGI, F1, DIGI_TUNE], settle=1.4))
 check("the note is here instead", "Ctrl-A / Ctrl-D" in body, body[:500])
 check("and names the search keys", "Ctrl-W / Ctrl-S" in body, body[:500])
 
@@ -258,28 +263,28 @@ check("and it is recorded", "transmit enabled" in body, body[:400])
 
 
 print("\n-- The RX hold after an over is adjustable from Tune Settings --")
-body = show("F1 2", run(keys=[F1, DIGI_TUNE], settle=1.4))
+body = show("F1 2", run(keys=[DIGI, F1, DIGI_TUNE], settle=1.4))
 check("both bounds are listed with their values",
       "RX hold least" in body and "RX hold most" in body, body[:700])
 check("the default window is 1000 to 4000 ms",
       "(1000 ms)" in body and "(4000 ms)" in body, body[:700])
 
 body = show("] raises the lower bound twice",
-            run(keys=[F1, "2", "]", "]"], settle=1.7))
+            run(keys=[DIGI, F1, "2", "]", "]"], settle=1.7))
 check("stepped up by 250 ms each press", "(1500 ms)" in body, body[:700])
 body = show("[ lowers it to zero",
-            run(keys=[F1, "2", "[", "[", "[", "["], settle=1.9))
+            run(keys=[DIGI, F1, "2", "[", "[", "[", "["], settle=1.9))
 check("and down again", "(0 ms)" in body, body[:700])
 
 body = show("} raises the upper bound",
-            run(keys=[F1, "2", "}", "}"], settle=1.7))
+            run(keys=[DIGI, F1, "2", "}", "}"], settle=1.7))
 check("the upper bound steps too", "(4500 ms)" in body, body[:700])
 
 # The pair must never describe an impossible window: a lower bound above the
 # upper one would blank for longer than the gate is allowed to wait, which is
 # not a state the operator can reason about. Raising one carries the other.
 body = show("lower bound pushed past the upper one",
-            run(keys=[F1, "2"] + ["{"] * 14 + ["]"] * 2, settle=3.0))
+            run(keys=[DIGI, F1, "2"] + ["{"] * 14 + ["]"] * 2, settle=3.0))
 check("raising least past most carries most up with it",
       body.count("(1000 ms)") >= 2 or body.count("(1250 ms)") >= 2,
       body[:700])
@@ -287,7 +292,7 @@ check("raising least past most carries most up with it",
 # 0 is not a duration here: it turns the quality gate off and leaves the
 # fixed window, so the menu says so rather than printing "0 ms".
 body = show("upper bound at zero",
-            run(keys=[F1, "2"] + ["{"] * 16, settle=3.2))
+            run(keys=[DIGI, F1, "2"] + ["{"] * 16, settle=3.2))
 check("an upper bound of zero reads as off", "RX hold most   down   (off)" in body,
       body[:700])
 

@@ -91,7 +91,7 @@ def radio():
     `disabled`, which is not a symmetry anyone would expect. Reading only the
     words it accepts gave "RADIO STATE UNKNOWN" on a deck whose radio was
     plainly working — and since a state of '' also drives what the `w` key
-    offers to do, the toggle would have been mislabelled too. Both spellings
+    offers to do, the toggle would have been mislabeled too. Both spellings
     are accepted here, and the fallback stays for a version that invents a
     third.
     """

@@ -210,6 +210,9 @@ class Deck:
         # on. Row 1, because row 0 is a heading.
         self.set_message = ""
         self.set_sel = 0
+        # The radio's readings for the entry form, and when they were taken.
+        self._radio_cache = ("", "", "")
+        self._radio_at = 0.0
         self.log_sel = None
         # What the callbook had to say, kept apart from `log_message` so that a
         # poll arriving between keystrokes cannot overwrite a duplicate warning
@@ -1055,8 +1058,8 @@ class Deck:
                   "log_name": self._log_name(),
                   "clock": time.strftime("%H%MZ", time.gmtime())}
         if form is not None:
-            form.from_radio(freq=self._log_freq_mhz(), mode=self._log_mode(),
-                            power=self._power_watts())
+            freq, mode, power = self._radio_now()
+            form.from_radio(freq=freq, mode=mode, power=power)
             form.from_station(rig=self.cfg.get("RIG", ""),
                               antenna=self.cfg.get("ANTENNA", ""))
             # The activity is what the operator is doing and goes first; the
@@ -1261,6 +1264,33 @@ class Deck:
             return self._quit()
         return True
 
+    def _radio_now(self):
+        """`(freq, mode, power)` for the entry form, cached for a second.
+
+        Every one of these costs a round trip: the frequency and the mode go
+        to rigctld over CAT, the power goes there too, and fldigi is asked for
+        the modem on the way. The main loop draws five times a second, so
+        building them on every draw meant about twenty round trips a second
+        while the operator was doing nothing but moving a selection.
+
+        On a Pi with CAT over a serial port each one takes tens of
+        milliseconds, so one draw could overrun the 200 ms poll, the loop
+        never caught up, and keystrokes queued and then arrived in a burst --
+        the selection jumping several contacts at once after a freeze. The
+        deck-and-rig screen had the same fault for the same reason.
+
+        **Nothing on a draw path may call the radio without a cache.** A
+        second of staleness on a frequency readout costs nothing; a draw that
+        blocks costs the interface.
+        """
+        now = time.monotonic()
+        if now - getattr(self, "_radio_at", 0.0) < 1.0:
+            return self._radio_cache
+        self._radio_cache = (self._log_freq_mhz(), self._log_mode(),
+                             self._power_watts())
+        self._radio_at = now
+        return self._radio_cache
+
     def _log_lines(self):
         """Lines per contact in the list: 1, 2 or 3."""
         try:
@@ -1289,7 +1319,7 @@ class Deck:
             # be picked, opened or deleted from the one view that is supposed
             # to hold everything -- while the activities list counted it. The
             # semantic is a leftover from a file per activity, where the
-            # default file really did hold only the unlabelled contacts.
+            # default file really did hold only the unlabeled contacts.
             return self.log_records
         return qsolog.for_session(self.log_records, name,
                                   self._activity_start())
@@ -2182,6 +2212,22 @@ class Deck:
                          # a list the operator is reading.
                          "date": s["start"][:10] or s["last"][:10],
                          "contacts": s["contacts"], "master": False})
+
+        # The session in progress, even with nothing logged into it yet. The
+        # list is derived from RECORDS, so an activity named a moment ago has
+        # no row -- and the header named it while the list did not, with no
+        # way to select away from it or remove it. It looked stuck.
+        #
+        # Added rather than suppressed in the header: naming an activity and
+        # then working the first contact into it is the normal order, so the
+        # name is right and it is the LIST that was incomplete.
+        here = self._activity_name()
+        began = self._activity_start()
+        if here and not any(r["name"] == here and r["start"] == began
+                            for r in rows[1:]):
+            rows.insert(1, {"name": here, "start": began,
+                            "date": began[:10], "contacts": 0,
+                            "master": False})
         return rows
 
     def _resume_activity_master(self):
@@ -2287,6 +2333,147 @@ class Deck:
         if name:
             self._open_menu("activity")
 
+    def _ask_forget_all_sessions(self):
+        """Confirm, then empty the deck's list of activities.
+
+        The gentlest of the three: no contact is touched. Every record keeps
+        its `activity` and `activity_start`, so each session is still
+        exportable by name and logging under one of those names again brings
+        it back -- see `_forget_session`.
+        """
+        sessions = qsolog.sessions_in(self.log_records, self._forgotten())
+        if not sessions:
+            self._log_note("the list is already empty")
+            self._close_menu()
+            return
+        self._ask_confirm(
+            "FORGET ALL ACTIVITIES",
+            [f"{len(sessions)} session{'' if len(sessions) == 1 else 's'} "
+             f"leave the list.",
+             "",
+             "No contact is deleted. Every one keeps its activity",
+             "label, so it still exports under that name, and",
+             "logging under a name again brings it back.",
+             "",
+             f"The log keeps all {len(self.log_records)} contacts."],
+            self._forget_all_sessions,
+            back=LOG if self.log_on else CHAT,
+            footer="Enter forget them   any other key keeps the list")
+
+    def _forget_all_sessions(self):
+        """Put every session on the forgotten list. Confirmed above."""
+        pairs = [list(p) for p in self._forgotten()]
+        known = {tuple(p) for p in pairs}
+        for ses in qsolog.sessions_in(self.log_records, self._forgotten()):
+            pair = (str(ses.get("name", "")), str(ses.get("start", "")))
+            if pair not in known:
+                known.add(pair)
+                pairs.append(list(pair))
+        self.cfg["FORGOTTEN_SESSIONS"] = pairs
+        self._save_state()
+        # Whatever was in progress is no longer in the list, so there is
+        # nothing to log into: fall back to the master log, and drop the
+        # reference with it for the reason `_forget_session` gives.
+        if self._activity_name():
+            self._set_activity_session("")
+            if self.cfg.get("MY_PARK"):
+                self._set_my_park("")
+        self.acts_sel = 0
+        self.acts_message = "the list is empty"
+        self._log_note("all activities forgotten — every contact is still in "
+                       "the log")
+
+    def _ask_clear_session(self):
+        """Confirm, then delete the contacts of the activity on screen.
+
+        Deliberately the activity SHOWING, not one chosen from a list: the
+        operator can see on the screen behind the question what it is about
+        to empty.
+        """
+        name = self._activity_name()
+        if not name:
+            self._log_note("no activity is selected — "
+                           "\"Delete EVERY QSO\" empties the whole log")
+            self._close_menu()
+            return
+        start = self._activity_start()
+        doomed = len(self._log_shown())
+        if not doomed:
+            self._log_note(f"{name} has no contacts")
+            self._close_menu()
+            return
+        self._ask_confirm(
+            "DELETE THIS ACTIVITY'S QSOS",
+            [f"{doomed} contact{'' if doomed == 1 else 's'} from {name}.",
+             f"Session started {start[:10]} {start[11:19]}Z" if len(start) >= 19
+             else "Every contact labeled with that name.",
+             "",
+             "They are removed from the log permanently. Nothing",
+             "on the deck can put them back.",
+             "",
+             "An ADIF already exported is not changed."],
+            lambda n=name, s=start: self._clear_session(n, s),
+            back=LOG if self.log_on else CHAT,
+            footer="Enter delete them   any other key keeps them")
+
+    def _clear_session(self, name, start):
+        """Remove one session's contacts. Confirmed above."""
+        try:
+            gone = qsolog.remove_session(self._log_path(), name, start)
+        except OSError as exc:
+            self._log_note(f"could not write the log: {exc}")
+            return
+        self._after_bulk_delete()
+        self._log_note(f"{gone} contact{'' if gone == 1 else 's'} deleted "
+                       f"from {name}")
+
+    def _ask_clear_log(self):
+        """Confirm, then empty the log. The whole log, every activity."""
+        doomed = len(self.log_records)
+        if not doomed:
+            self._log_note("the log is already empty")
+            self._close_menu()
+            return
+        sessions = qsolog.sessions_in(self.log_records)
+        self._ask_confirm(
+            "DELETE EVERY QSO",
+            [f"All {doomed} contact{'' if doomed == 1 else 's'} in the log,",
+             f"across {len(sessions)} "
+             f"activit{'y' if len(sessions) == 1 else 'ies'} and the "
+             f"unlabeled ones.",
+             "",
+             "The log is left empty. Nothing on the deck can put",
+             "any of them back.",
+             "",
+             "An ADIF already exported is not changed."],
+            self._clear_log,
+            back=LOG if self.log_on else CHAT,
+            footer="Enter empty the log   any other key keeps it")
+
+    def _clear_log(self):
+        """Empty the log. Confirmed above."""
+        try:
+            gone = qsolog.clear(self._log_path())
+        except OSError as exc:
+            self._log_note(f"could not write the log: {exc}")
+            return
+        self._after_bulk_delete()
+        self._log_note(f"log emptied — {gone} contact"
+                       f"{'' if gone == 1 else 's'} deleted")
+
+    def _after_bulk_delete(self):
+        """Put the screen back in step with a log that just got shorter.
+
+        The contact screen may be showing a record that no longer exists and
+        the selection indexes a list that is now shorter or empty, so both go
+        -- the same two things one deletion clears, for the same reason.
+        """
+        self.entry_rec = None
+        self.entry_message = ""
+        self.log_sel = None
+        self.log_scroll = 0
+        self._switch_log()
+
     def _forget_session(self, name, start):
         """Take a session off the deck's list. Changes no records.
 
@@ -2312,7 +2499,11 @@ class Deck:
         # more, so fall back to the master log. The reference goes with it: the
         # activation is over and `my_park` on the next contact would be wrong.
         # The SCHEMA stays -- POTA with no reference of your own is hunting.
-        if name == self._activity_name() and start == self._activity_start():
+        # Matched on the NAME, not on the name and the start together. A
+        # session with no contacts has no derived start to compare against, so
+        # insisting both match left the header naming an activity that had
+        # just been removed from the list.
+        if name == self._activity_name():
             self._set_activity_session("")
             if self.cfg.get("MY_PARK"):
                 self._set_my_park("")
@@ -2559,6 +2750,14 @@ class Deck:
         elif ch == curses.KEY_DOWN:
             if self.log_sel is None:
                 form.tab()
+            elif self.log_sel >= len(self._log_shown()) - 1:
+                # Off the bottom of the list is back into the form, which is
+                # where the form IS -- below the contacts. Clamping on the last
+                # contact left the only way back a key that means something
+                # else (Esc, or typing), on a screen whose whole arrangement
+                # says down is towards the entry fields.
+                self.log_sel = None
+                self.log_message = ""
             else:
                 self._log_pick(+1)
         # The list, not the form. The arrows move between fields, so paging
@@ -2988,6 +3187,13 @@ class Deck:
             return menus.SYSTEM
         if m == "memories":
             return menus.memories_menu(self.cfg)
+        if m == "danger":
+            return menus.danger_menu(
+                activity=self._activity_name(),
+                contacts=len(self.log_records),
+                session=len(self._log_shown()) if self._activity_name() else 0,
+                sessions=len(qsolog.sessions_in(self.log_records,
+                                                self._forgotten())))
         if m == "logging":
             act = (self.log_form.activity_type.name if self.log_form
                    else self.cfg.get("ACTIVITY_TYPE", ""))
@@ -3668,6 +3874,18 @@ class Deck:
                 self._open_editor(f"MEMORY_{slot}", f"F{slot}")
             return True
 
+        if m == "danger":
+            # Each one asks before it does anything, and the question carries
+            # the count -- see `menus.danger_menu`. Nothing is destroyed on
+            # this screen; it only raises the question.
+            if key == "a":
+                self._ask_forget_all_sessions()
+            elif key == "s":
+                self._ask_clear_session()
+            elif key == "m":
+                self._ask_clear_log()
+            return True
+
         if m == "logging":
             if key == "l":
                 self.log_on = not self.log_on
@@ -3720,6 +3938,8 @@ class Deck:
             elif key == "p":
                 self._open_editor("MY_PARK", "My reference",
                                   sink=self._set_my_park)
+            elif key == "z":
+                self._open_menu("danger")
             return True
 
         if m == "activity":

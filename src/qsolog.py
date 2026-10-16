@@ -1353,6 +1353,34 @@ def remove(path, when, call):
     return None
 
 
+def remove_session(path, activity, start=""):
+    """Delete every contact of one session. Returns how many went.
+
+    The whole file is replaced the same atomic way one correction is: temp
+    file, fsync, `os.replace`. So this either happens or it does not, and a
+    pulled plug halfway cannot leave a log with some of a session in it.
+    """
+    records = read(path)
+    keep = [r for r in records
+            if r not in for_session(records, activity, start)]
+    gone = len(records) - len(keep)
+    if gone:
+        _rewrite(path, keep)
+    return gone
+
+
+def clear(path):
+    """Delete every contact. Returns how many went.
+
+    The file is left in place and empty rather than removed, so that whatever
+    created it -- a directory, a permission, a symlink an operator put there
+    on purpose -- survives being emptied.
+    """
+    gone = len(read(path))
+    _rewrite(path, [])
+    return gone
+
+
 def read(path):
     """Every record in the file, oldest first.
 

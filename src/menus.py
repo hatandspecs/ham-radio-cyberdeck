@@ -117,6 +117,9 @@ MENU_PARENT = {
     "display": "deck",
     "system": "deck",
     "activity": "logging",
+    # Esc out of the danger zone goes back to the logging menu, not out to the
+    # screen: arriving there is deliberate and leaving should be too.
+    "danger": "logging",
 }
 
 DISPLAY = {
@@ -247,6 +250,35 @@ def activity_type_menu(names, current="", labels=None):
     }
 
 
+def danger_menu(activity="", contacts=0, session=0, sessions=0):
+    """The three ways to throw contacts away, in one place and named.
+
+    Separated from the logging menu for one reason: the logging menu is used
+    constantly and these are used while testing and demonstrating. A line that
+    empties the log does not belong next to the one that changes how many rows
+    a contact takes.
+
+    Each line says the COUNT it would destroy, because "clear the log" and
+    "delete 412 contacts" are different sentences and only the second one is
+    true. Each is confirmed as well; the count is what makes the confirmation
+    worth reading.
+    """
+    return {
+        "title": "DANGER ZONE",
+        "items": [
+            # First because it is the one that destroys nothing: the contacts
+            # keep their labels and only the deck's list forgets them.
+            ("a", f"Forget all activities        "
+                  f"{sessions} in the list, contacts kept"),
+            ("s", f"Delete this activity's QSOs  "
+                  f"{session} from {activity or '(no activity)'}"),
+            ("m", f"Delete EVERY QSO             "
+                  f"{contacts} in the whole log"),
+        ],
+        "footer": "Esc back   \u2191\u2193 move   Enter select   each one asks",
+    }
+
+
 def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
              qrz_pending=0, operating="auto", has_tqsl=False,
              activity="", dupe="band+mode", log_name="",
@@ -367,6 +399,9 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # failing without one, so this is an export-and-a-command, not a
         # one-key upload. The label says so: nothing is sent from here.
         items.append(("t", "Export + print the LoTW command"))
+    # Last, and named so that nobody arrives in it by accident. Everything on
+    # it destroys something; see `danger_menu`.
+    items.append(("z", "Danger zone — clear logs"))
     return {
         "title": "LOGGING",
         "items": items,

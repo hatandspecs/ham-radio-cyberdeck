@@ -1427,7 +1427,7 @@ def log_extra_rows(rec, fields, width, rows):
     """`rows` continuation lines of `label value` pairs, wrapped and padded.
 
     Labelled rather than columnar: rows of different shapes cannot share one
-    set of column headings, and an unlabelled `PA Centre FN10` stops being
+    set of column headings, and an unlabeled `PA Centre FN10` stops being
     readable the moment one of the three is missing.
 
     **A field is never split across two rows.** One that does not fit in what
