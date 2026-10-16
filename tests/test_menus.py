@@ -23,7 +23,6 @@ for name, menu in [("digi", menus.DIGI), ("deck", menus.DECK),
                    ("tuning", menus.tuning_menu(True, False, 5.0, True, True)),
                    ("radio", menus.band_menu()),
                    ("system", menus.SYSTEM),
-                   ("station", menus.station_menu({"CALLSIGN": "KD3CCO", "NAME": "Don"})),
                    ("mode", menus.mode_menu("BPSK31"))]:
     for w, h in GRIDS:
         lines = menus.render(menu, w, h)
@@ -83,7 +82,12 @@ keys = [k for k, _ in on["items"]]
 # decision. It is now the lines-per-contact setting, which belongs on this menu
 # because it is about reading the log rather than about one activity.
 equals("on opens the rest", keys,
-       ["l", "f", "a", "m", "d", "c", "e", "v", "n"])
+       ["l", "f", "k", "a", "m", "d", "c", "e", "v", "n"])
+# `k` sits next to the default log because it is about that file: every
+# contact goes there as well as to its activity's own, so an activity deleted
+# later does not take its contacts with it.
+check("the master log is offered beside the default log",
+      "Master log" in dict(on["items"])["k"], dict(on["items"])["k"])
 check("creating a type is not offered here",
       not any("New type" in label for _k, label in on["items"]),
       str(on["items"]))
@@ -175,10 +179,30 @@ check("and the menu it opens is still built",
 # The two area menus carry what belongs to their own area and nothing else.
 equals("the digimode menu is the digimode settings",
        [l for _k, l in menus.DIGI["items"]],
-       ["Mode", "Tune Settings", "Memories"])
-equals("the deck menu is the deck and the radio",
+       ["Mode", "Tune Settings", "Band", "Memories"])
+# Band is NOT here: it tunes to the digimode calling frequencies, which is a
+# digital-modes decision. It was on this menu briefly, on the reasoning that a
+# band is a property of the radio -- true of the band, false of this entry.
+# No Station line: the deck-and-rig SCREEN is the station editor now, every
+# field with its substitution token beside it. A menu opening a second list of
+# the same eight settings was the same information twice.
+equals("the deck menu is the deck and the panel",
        [l for _k, l in menus.DECK["items"]],
-       ["Station", "Band", "Display", "System"])
+       ["Display", "System"])
+check("and the station is not a menu line",
+      not any(l == "Station" for _k, l in menus.DECK["items"]),
+      str(menus.DECK["items"]))
+# Every station field still has to be reachable, which is now the screen's
+# job -- so the screen is built from this and the tokens come with it.
+check("every station field carries a label",
+      all(l for _k, l, _t in menus.STATION_FIELDS),
+      str(menus.STATION_FIELDS))
+check("and all but the power ceiling carry a token",
+      [k for k, _l, t in menus.STATION_FIELDS if not t] == ["TX_POWER_MAX"],
+      str([(k, t) for k, _l, t in menus.STATION_FIELDS]))
+check("and the band picker is not on it",
+      not any(l == "Band" for _k, l in menus.DECK["items"]),
+      str(menus.DECK["items"]))
 # Every menu with a parent backs out INSIDE its own area, so Esc can never
 # cross from one area's menus into another's.
 import render as _r

@@ -69,9 +69,15 @@ DIGI = {
     "items": [
         ("1", "Mode"),
         ("2", "Tune Settings"),
-        ("3", "Memories"),
+        # Band is digimode-specific and was briefly moved to the deck menu on
+        # the reasoning that a band is a property of the radio. That reasoning
+        # was wrong about what this entry DOES: it tunes to the digimode
+        # calling frequency for the band, which is a digital-modes decision
+        # and is useless to anything else on the deck.
+        ("3", "Band"),
+        ("4", "Memories"),
     ],
-    "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P area",
+    "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
 }
 
 # The deck and the radio: what this station is, what it is attached to, and
@@ -80,12 +86,15 @@ DIGI = {
 DECK = {
     "title": "DECK & RIG",
     "items": [
-        ("1", "Station"),
-        ("2", "Band"),
-        ("3", "Display"),
-        ("4", "System"),
+        # No Station line. The deck-and-rig SCREEN is the station editor now --
+        # every field, with its substitution token beside it, edited in place.
+        # A menu that opened a second list of the same eight settings was the
+        # same information twice, and the screen is the one you are already
+        # looking at.
+        ("1", "Display"),
+        ("2", "System"),
     ],
-    "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P area",
+    "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
 }
 
 # Kept under its old name as well, because `ROOT` is what several tests and
@@ -102,8 +111,9 @@ MENU_PARENT = {
     "modes_all": "mode",
     "tuning": "digi",
     "memories": "digi",
-    "station": "deck",
-    "radio": "deck",
+    # The band picker tunes to digimode calling frequencies, so it backs out
+    # to the digimode menu and not to the deck's.
+    "radio": "digi",
     "display": "deck",
     "system": "deck",
     "activity": "logging",
@@ -240,7 +250,8 @@ def activity_type_menu(names, current="", labels=None):
 def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
              qrz_pending=0, operating="auto", has_tqsl=False,
              activity="", dupe="band+mode", log_name="",
-             activity_type="", callbook_state="", log_lines=1):
+             activity_type="", callbook_state="", log_lines=1,
+             master_log=True):
     # has_qrz_key and qrz_pending are accepted and ignored. They fed the
     # removed QRZ upload item; the parameters stay so that a caller passing
     # them is not a TypeError, and so that reinstating an upload item is a
@@ -287,6 +298,11 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # open is on the log screen's header, where it is read while typing
         # into it rather than two keystrokes away.
         ("f", f"Default log                  {log_name or 'qso.log'}"),
+        # Every contact into the default log as well as its activity's own, so
+        # the default accumulates and an activity deleted later does not take
+        # its contacts with it.
+        ("k", f"Master log                   "
+              f"{'on — every contact' if master_log else 'off'}"),
         ("a", "Export ADIF"),
         ("m", f"Mode from                    {_OPERATING_LABEL.get(operating, operating)}"),
         ("d", f"Duplicates                   {_DUPE_LABEL(dupe)}"),

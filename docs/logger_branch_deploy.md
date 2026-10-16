@@ -207,9 +207,15 @@ passes that happily — compiling is not running. Only the pty tests saw it.
 
 ```bash
 cd /opt/cyberdeck && python3 -c "
-import config, cyberdeck, menus, activities, render
+import json, os, config, cyberdeck, menus, activities, render
 s = config.load()
-print('conf ok:', s['CALLSIGN'] or '(NO CALLSIGN)', '| logging', s['LOGGING'], '| lines', s['LOG_LINES'])
+p = os.path.expanduser(s.get('STATE_PATH') or '')
+st = (json.load(open(p)).get('station') or {}) if os.path.exists(p) else {}
+print('callsign:', st.get('CALLSIGN') or s['CALLSIGN'] or '(NOWHERE)',
+      '(state)' if st.get('CALLSIGN') else '(conf)')
+print('rig / antenna:', repr(st.get('RIG') or s.get('RIG')),
+      repr(st.get('ANTENNA') or s.get('ANTENNA')))
+print('logging', s['LOGGING'], '| lines', s['LOG_LINES'])
 print('ring keys:', cyberdeck.RING_BACK, cyberdeck.RING_FWD, '(15 16 = ^O ^P)')
 print('areas:', cyberdeck.RING, '|', len(cyberdeck.AREA_OF), 'screens mapped')
 print('digi menu:', [l for _k, l in menus.DIGI['items']])
@@ -220,8 +226,21 @@ for n in config.NOTES: print('NOTE:', n)
 "
 ```
 
-A traceback, `(NO CALLSIGN)`, or any `NOTE:` line is a reason to fix before
-restarting, not after.
+A traceback, `(NOWHERE)` for the callsign, or any `NOTE:` line is a reason to
+fix before restarting, not after.
+
+**The callsign is normally in the STATE file, not the conf, and an earlier
+version of this check called that a failure.** `cyberdeck.conf` on the deck has
+no `CALLSIGN`; the station identity was entered on the panel, so it lives in
+`station` inside `STATE_PATH` and `_restore_state` applies it at startup from
+`menus.STATION_FIELDS`. A bare `config.load()` prints an empty string and that
+is correct — which is why this reads both and says which one answered. Stopping
+the deploy over it, as the 2026-10-15 instructions did twice, wastes the one
+check that matters: whether the callsign is findable AT ALL.
+
+An empty `ANTENNA` is worth noticing rather than stopping for: the `My ant`
+form field prefills from it, so it comes up blank and `MY_ANTENNA` never
+reaches the exported ADIF. Set it from the deck area — `^O ^O`, `F1`, `1`.
 
 Only then:
 

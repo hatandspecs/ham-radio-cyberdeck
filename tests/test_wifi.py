@@ -27,7 +27,7 @@ F1 = "\x1bOP"
 # The deck's own settings are an area of their own now: ^B ^B reaches its
 # screen, F1 opens its menu, and System is the fourth line. WiFi, pairing, the
 # transmit inhibit and quit are all behind it.
-DECK_SYSTEM = ["\x0f", "\x0f", F1, "4"]
+DECK_SYSTEM = ["\x0f", "\x0f", F1, "2"]
 
 
 def plain(segments):

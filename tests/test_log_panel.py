@@ -107,7 +107,7 @@ for term in ("xterm", "linux"):
     check(f"{term}: and how to reach the contacts above",
           "\u2191\u2193 pick" in body, body[-120:])
     check(f"{term}: and how to reach the other areas",
-          "^O ^P area" in body, body[-120:])
+          "^O ^P screen" in body, body[-120:])
     # Not guessable, so it has to be on the footer. Esc is, and came off it to
     # make room -- all seven keys do not fit in 66 columns.
     check(f"{term}: and how to clear the entry", "^X clear" in body,
@@ -877,10 +877,87 @@ check("the previous contact's receipt is gone once typing starts",
 check("and the new callsign's warning gets the line",
       "** W1AW worked" in body, body[-300:])
 
-print("\nEsc returns to the conversation")
+print("\nthe master log accumulates whatever activity made the contact")
+# The point of it: an activity deleted later must not take its contacts with
+# it. So deleting an ACTIVITY removes only that activity's own file, while
+# deleting a single CONTACT removes it from both -- a contact logged in error
+# should not survive in an archive, and an activity's contacts should.
+
+
+def with_master(keys, label, settle=3.4, master="yes"):
+    """Run under a named activity. Returns (the master, the activity file)."""
+    import datetime as _dt
+    with tempfile.TemporaryDirectory() as tmp:
+        base = os.path.join(tmp, "qso.log")
+        conf_path = os.path.join(tmp, "cyberdeck.conf")
+        with open(conf_path, "w") as fh:
+            fh.write(STATION + "LOGGING = yes\nACTIVITY = Testpark\n"
+                     + f"MASTER_LOG = {master}\nLOG_PATH = {base}\n")
+        show(label, run(keys=keys, settle=settle, term="linux",
+                        conf=conf_path))
+        def lines(path):
+            if not os.path.exists(path):
+                return []
+            return [l for l in open(path).read().splitlines() if l.strip()]
+        adir = os.path.join(tmp, "activities")
+        act = [os.path.join(adir, f) for f in os.listdir(adir)] \
+            if os.path.isdir(adir) else []
+        return lines(base), lines(act[0]) if act else []
+
+
+LOG_ONE = ["\x0e"] + list("W1AW") + ["\r"]
+
+mast, act = with_master(LOG_ONE, "one contact under an activity")
+equals("it is in the activity's own file", len(act), 1)
+equals("and in the master", len(mast), 1)
+check("the same contact in both", "call=W1AW" in act[0]
+      and "call=W1AW" in mast[0], f"{act}\n{mast}")
+check("the activity is named on the record", "activity=Testpark" in mast[0],
+      mast[0])
+
+mast, act = with_master(LOG_ONE, "with the master log off", master="no")
+equals("the activity file still gets it", len(act), 1)
+equals("and the master is not written", len(mast), 0)
+
+# Deleting the ACTIVITY keeps the contacts. This is the whole feature.
+F2L = "\x1b[[B"
+mast, act = with_master(LOG_ONE + [F2L, "d", "\r"],
+                        "delete the activity", settle=3.8)
+equals("the activity's file is gone", len(act), 0)
+equals("and the master kept the contact", len(mast), 1)
+
+# Deleting a CONTACT removes it from both: it was logged in error.
+mast, act = with_master(LOG_ONE + ["\x1b[A", "\r", "d", "\r"],
+                        "delete the contact itself", settle=4.0)
+equals("gone from the activity's file", len(act), 0)
+equals("and gone from the master too", len(mast), 0)
+
+print("\nEsc does not leave the logging application")
+# It used to go to the conversation, which made sense while the log hung off
+# the digimode screen and stopped making sense the moment the three became
+# peers: there is no "up" from the log screen to go to, and ejecting an
+# operator into a different application for pressing the back key is not
+# backing out of anything. ^O and ^P are how you leave.
 body, _ = deck(["\x0e", "\x1b"], "LOGGING = yes\n", label="Ctrl-N then Esc")
-check("back on the conversation screen", "F1 menu" in body, body[-200:])
-check("and the log screen is gone", "\u2190\u2192 field" not in body,
+check("the log screen is still what is drawn",
+      "\u2190\u2192 field" in body, body[-200:])
+check("and not the conversation", "^T over" not in body, body[-200:])
+
+# Esc still backs out WITHIN the application, one level at a time. From the
+# activities list it returns to the log screen rather than going nowhere.
+F2L = "\x1b[[B"
+body, _ = deck(["\x0e", F2L, "\x1b"], "LOGGING = yes\n",
+               label="activities then Esc")
+check("Esc from the activities list returns to the log screen",
+      "\u2190\u2192 field" in body, body[-200:])
+check("and the list is gone", "ACTIVITIES" not in body, body[:200])
+
+# And it puts down a picked contact before it does anything else, so a
+# mis-hit arrow costs one keystroke rather than the screen.
+body, _ = deck(["\x0e", "\x1b[A", "\x1b"], "LOGGING = yes\n",
+               label="pick a contact then Esc")
+check("the selection is dropped", "Enter log" in body, body[-200:])
+check("and the screen is unchanged", "\u2190\u2192 field" in body,
       body[-200:])
 
 sys.exit(report())

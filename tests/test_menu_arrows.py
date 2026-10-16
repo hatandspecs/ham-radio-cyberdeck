@@ -26,9 +26,16 @@ UP, DOWN, ENTER, ESC = "\x1bOA", "\x1bOB", "\r", "\x1b"
 body = show("F1, then Down Down", run(keys=[F1, DOWN, DOWN]))
 check("the menu is still open after arrows", "DIGIMODES" in body, body[:200])
 
-print("\n-- Down x2 then Enter should reach the third item, Memories --")
+# Derived from the menu, not named. Which item is third has changed three
+# times in one day -- Band, then Memories, then Band again -- and a test that
+# spells it out does not fail when the menu moves, it just checks the wrong
+# thing. What is being tested is that two Downs and an Enter reach the third
+# item, whatever the third item is.
+_THIRD = menus.DIGI["items"][2][1]
+print(f"\n-- Down x2 then Enter should reach the third item, {_THIRD} --")
 body = show("F1 Down Down Enter", run(keys=[F1, DOWN, DOWN, ENTER]))
-check("landed on MEMORIES", "MEMOR" in body.upper(), body[:400])
+check(f"landed on {_THIRD.upper()}",
+      _THIRD.split()[0].upper() in body.upper(), body[:400])
 
 print("\n-- Enter on the first item reaches Mode --")
 body = show("F1 Enter", run(keys=[F1, ENTER]))
@@ -41,12 +48,16 @@ check("landed on MODE", "MODE" in body, body[:400])
 # Derived from the menu rather than named, because F1 opens the menu for the
 # area the operator is in and the digimode screen is where the deck starts.
 CTRL_O = "\x0f"          # one area back on the ring
-# F1 from the digimode screen: Mode, Tune Settings, Memories.
-DIGI_MODE, DIGI_TUNE, DIGI_MEM = "1", "2", "3"
-# The deck's own settings are an area of their own: ^B ^B gets to its screen,
-# F1 opens its menu, then Station, Band, Display, System.
+# F1 from the digimode screen: Mode, Tune Settings, Band, Memories. Band is
+# here and not on the deck menu because it tunes to the digimode calling
+# frequency for the band, which is useless to anything else on the deck.
+DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
+# The deck's own settings are a screen of their own: ^O ^O gets to it, F1
+# opens its menu, then Station, Display, System.
 DECK = [CTRL_O, CTRL_O, "\x1bOP"]
-DECK_STATION, DECK_BAND, DECK_DISPLAY, DECK_SYSTEM = "1", "2", "3", "4"
+# Station is gone from this menu: the screen behind it edits those fields
+# directly. ^O ^O lands on that screen; F1 opens Display and System.
+DECK_DISPLAY, DECK_SYSTEM = "1", "2"
 
 _LAST = menus.DIGI["items"][-1][1].upper()
 print(f"\n-- Up from the first item wraps to the last, {_LAST.title()} --")
@@ -87,16 +98,59 @@ check("F6 is untouched", "F6  DE {call} {call} K" in body, body[:400])
 
 
 print("\n-- the station fields are editable, and show their tokens --")
-body = show("F1 6 — station", run(keys=DECK + [DECK_STATION], settle=1.6))
-check("every field carries its token",
+# On the deck-and-rig SCREEN now, not behind a menu. ^O ^O lands on it and the
+# cursor starts on the first field.
+SETTINGS = [CTRL_O, CTRL_O]
+body = show("the deck and rig screen", run(keys=SETTINGS, settle=1.6))
+check("every field on it carries its token",
       all(t in body for t in ("{call}", "{name}", "{qth}", "{grid}", "{rig}",
-                              "{ant}", "{power}")), body[:400])
+                              "{ant}")), body[:400])
 check("and its current value", "KD3CCO" in body, body[:400])
+# The power CEILING is here: the radio reports RFPOWER as a fraction, so this
+# is what turns it into watts, and on the FTX-1 it changes with the
+# configuration -- field head on battery, field head on external power, and
+# the Optima are three different maxima.
+check("the power ceiling is on it", "Max power" in body, body[:400])
+# The power READING is not. `_power_now()` asks the radio and falls back to
+# the setting only when it will not answer, so a row for typing it invites
+# setting a number the radio contradicts. `{power}` substitutes the reading,
+# so the token is unaffected.
+check("but the live power reading is not",
+      "{power}" not in body, body[:400])
+check("it says the arrows pick and Enter edits",
+      "\u2191\u2193 pick" in body and "Enter edit" in body, body[-120:])
+# The radio's live readings are deliberately absent: each cost a round trip,
+# the main loop draws five times a second, and they are on the digimode status
+# line and the tuning screen anyway.
+check("and the radio's own readings are not on it",
+      "READ FROM THE RIG" not in body and "Power now" not in body, body[:400])
 
-body = show("F1 6 2 — edit Name", run(keys=DECK + [DECK_STATION, "2"], settle=1.6))
+body = show("Down then Enter edits the second field",
+            run(keys=SETTINGS + [DOWN, ENTER], settle=1.6))
 check("the editor names the field", "EDIT  Name" in body, body[:200])
 check("no memory-token hint here",
       "filled in when inserted" not in body, body[-200:])
+
+# The power ceiling is declared `int` in the schema, so the editor used to be
+# handed an int and `len()` of an int took the whole panel down. It was
+# reachable from the old Station menu too, so this crashed from the day those
+# settings existed.
+body = show("the power ceiling opens without crashing",
+            run(keys=SETTINGS + [DOWN] * 6 + [ENTER], settle=1.8))
+check("the editor opens on it", "EDIT  Max power" in body, body[:200])
+check("with the current value in it, as text", "10" in body, body[:300])
+
+body = show("and saves back as a number",
+            run(keys=SETTINGS + [DOWN] * 6 + [ENTER, CTRL_U]
+                + list("100") + [ENTER], settle=2.0))
+check("the screen comes back", "DECK & RIG" in body, body[:200])
+check("showing the new ceiling", "100" in body, body[:400])
+
+body = show("a value that is not a number is refused",
+            run(keys=SETTINGS + [DOWN] * 6 + [ENTER, CTRL_U]
+                + list("abc") + [ENTER], settle=2.0))
+check("the panel survives it", "DECK & RIG" in body, body[:200])
+check("and the ceiling is unchanged", "10" in body, body[:400])
 
 body = show("editing a memory does show the token hint",
             run(keys=[F1, DIGI_MEM, "1"], settle=1.4))
@@ -105,15 +159,16 @@ check("and it says how to make a memory multi-line",
       "\\n" in body, body[-200:])
 
 body = show("change Name and save",
-            run(keys=DECK + [DECK_STATION, "2", CTRL_U] + list("DONALD") + [ENTER], settle=2.0))
-check("the station list shows the new value", "DONALD" in body, body[:400])
+            run(keys=SETTINGS + [DOWN, ENTER, CTRL_U] + list("DONALD")
+                + [ENTER], settle=2.0))
+check("the screen shows the new value", "DONALD" in body, body[:400])
 
 print("\n-- the renamed menu entries --")
 body = show("F1 digimode menu", run(keys=[F1], settle=1.2))
 check("Tuning is now Tune Settings", "Tune Settings" in body, body[:300])
 # Band moved to the deck's own area along with the rest of the rig settings,
 # so it is checked on the menu it is on now rather than on this one.
-body = show("the deck menu", run(keys=DECK, settle=1.6))
+body = show("the digimode menu", run(keys=[F1], settle=1.3))
 check("Radio is now Band", "Band" in body and "Radio" not in body, body[:300])
 
 
@@ -144,7 +199,7 @@ check("no radio restriction means nothing is marked",
       not any("not supported" in lbl for _k, lbl in menus.band_menu()["items"]),
       menus.band_menu()["items"])
 
-body = show("F1 3 — the band list", run(keys=DECK + [DECK_BAND], settle=1.6))
+body = show("F1 3 — the band list", run(keys=[F1, DIGI_BAND], settle=1.4))
 check("titled BAND", "BAND" in body, body[:200])
 check("shows 70 cm", "432.200" in body, body[:400])
 
@@ -152,12 +207,12 @@ check("shows 70 cm", "432.200" in body, body[:400])
 print("\n-- the ^WASD note lives in Tune Settings, not on the main screen --")
 body = show("conversation screen", run(keys=[], settle=1.3))
 check("the hint line no longer mentions ^WASD", "^WASD" not in body, body[-120:])
-# At 66 columns the hint line carries `^O ^P area`, which is the only place
+# At 66 columns the hint line carries `^O ^P screen`, which is the only place
 # the ring is taught, and that costs `F5+ memory` -- which the digimode menu
 # still lists. `^C abort` keeps its place: a key that stops the transmitter is
 # worth more on a footer than one that inserts a macro.
 check("but still offers the menu and the areas",
-      "F1 menu" in body and "^O ^P area" in body, body[-120:])
+      "F1 menu" in body and "^O ^P screen" in body, body[-120:])
 
 body = show("F1 2 — tune settings", run(keys=[F1, DIGI_TUNE], settle=1.4))
 check("the note is here instead", "Ctrl-A / Ctrl-D" in body, body[:500])

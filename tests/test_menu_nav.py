@@ -38,19 +38,29 @@ check("and it answers what the station is set to",
 
 body = show("^B ^B then F1 -> the deck menu", run(keys=["\x0f", "\x0f", F1]))
 check("F1 there opens the deck menu", "DECK & RIG" in body, body[:200])
-check("which is where Station lives now", "Station" in body, body[:400])
+# Station is NOT on it: the screen behind the menu edits those fields in
+# place, every one with its substitution token beside it. A menu offering a
+# second list of the same eight settings was the same information twice.
+check("it offers the panel's own settings", "Display" in body
+      and "System" in body, body[:400])
+check("and not a second list of the station fields",
+      "Station" not in body, body[:400])
 
-body = show("^B ^B then F1 then 1 -> Station", run(keys=["\x0f", "\x0f", F1, "1"]))
-check("station menu reached", "STATION" in body, body[:200])
-check("and it shows this station's callsign", "Callsign" in body, body[:400])
+# The station fields are edited on the screen itself, not through a menu.
+body = show("^O ^O -> the station fields", run(keys=["\x0f", "\x0f"]))
+check("the callsign is on the screen", "Callsign" in body, body[:400])
+check("with the token a memory substitutes it into",
+      "{call}" in body, body[:400])
+check("and Enter edits the row the cursor is on",
+      "Enter edit" in body, body[-120:])
 
 body = show("F1 then 2 -> Tune Settings", run(keys=[F1, "2"]))
 check("tuning menu reached", "TUNING" in body or "AFC" in body, body[:300])
 
 # Display moved to the deck's own area with the rest of what the panel does,
 # so it is reached through that area now: ^B ^B to its screen, F1, then 3.
-body = show("the deck menu then 3 -> Display",
-            run(keys=["\x0f", "\x0f", F1, "3"], settle=1.6))
+body = show("the deck menu then 1 -> Display",
+            run(keys=["\x0f", "\x0f", F1, "1"], settle=1.6))
 check("display menu reached", "DISPLAY" in body, body[:200])
 check("all four schemes offered",
       all(w in body for w in ("Matrix", "Deckard", "Hal", "Tron")), body[:400])

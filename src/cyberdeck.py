@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+#
+# Copyright (C) 2026 Donald Natale (KD3CCO)
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <https://www.gnu.org/licenses/>.
 """Keyboard-to-keyboard terminal for fldigi.
 
 The only thing on the screen: a status line, the conversation, and what is
@@ -94,7 +108,7 @@ AREA_LOCKED = (CONFIRM, PAIR, WIFI, NOKB)
 # this in step with the menus: a setting that is changeable and not listed here
 # silently reverts, which reads as the panel forgetting rather than as a bug.
 _REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
-               "MY_PARK", "EXCHANGE_TX")
+               "MY_PARK", "EXCHANGE_TX", "MASTER_LOG")
 
 # Releasing the post-over receive hold. Not configuration: these describe how
 # a decaying transient is told apart from a station answering, which is a
@@ -176,8 +190,10 @@ class Deck:
         # instead of three buttons.
         self.area_screen = {AREA_SETTINGS: SET, AREA_LOG: LOG,
                             AREA_DIGI: CHAT}
-        # The settings screen's own message line.
+        # The settings screen's own message line, and which row its cursor is
+        # on. Row 1, because row 0 is a heading.
         self.set_message = ""
+        self.set_sel = 0
         self.log_sel = None
         # What the callbook had to say, kept apart from `log_message` so that a
         # poll arriving between keystrokes cannot overwrite a duplicate warning
@@ -235,6 +251,8 @@ class Deck:
         self._boot_mode = ""
         self._boot_carrier = 0
         self._startup_done = False
+        # So the automatic inhibit says why once rather than on every poll.
+        self._rig_mode_warned = False
         self._startup_tries = 0
         # fldigi's transmit state as of the last poll, for the status line and
         # for the stuck-transmit check. Read once per poll rather than again
@@ -397,6 +415,10 @@ class Deck:
         text = self.fldigi.poll_rx()
         sending = self.fldigi.trx_state() != "RX"
         self._fldigi_sending = sending
+        # Checked on the poll the deck is already doing rather than on a timer
+        # of its own: the radio's mode can change at any moment and the only
+        # thing that makes the interlock worth having is noticing promptly.
+        self._watch_rig_mode()
 
         # The end of the over is established before anything is done with
         # `text`, because the poll in which trx_state flips to RX still
@@ -1121,42 +1143,48 @@ class Deck:
             self.screen = CHAT
 
     def _settings_rows(self):
-        """What the settings screen shows. Labels and values only."""
-        cfg = self.cfg
-        rig = self.fldigi
-        rows = [(None, " STATION")]
-        for key, label in (("CALLSIGN", "Callsign"), ("LOCATOR", "Locator"),
-                           ("NAME", "Name"), ("QTH", "QTH")):
-            rows.append((label, cfg.get(key, "") or "(not set)"))
-        rows.append((None, " RADIO"))
-        rows.append(("Rig", cfg.get("RIG", "") or "(not set)"))
-        rows.append(("Antenna", cfg.get("ANTENNA", "") or "(not set)"))
-        power = self._power_now()
-        rows.append(("Power", power or "(not known)"))
-        hz = 0
-        try:
-            hz = int(rig.frequency() or 0)
-        except (TypeError, ValueError, AttributeError):
-            hz = 0
-        if not hz:
-            # Nothing from fldigi, so try the CAT path the log form uses.
-            hz = self._log_freq_hz()
-        rows.append(("VFO", render.frequency(hz) if hz else "(not known)"))
-        rows.append(("Mode", self._log_mode() or "(not known)"))
-        rows.append(("Carrier", f"{rig.carrier()} Hz"
-                                if rig.connected else "(no modem)"))
-        rows.append(("Transmit",
-                     "INHIBITED" if self.session.inhibited else "enabled"))
-        rows.append((None, " LOG"))
-        rows.append(("Logging", f"on — {len(self.log_records)} QSOs"
-                                if self.log_on else "off"))
-        rows.append(("Activity", self._activity_name() or "casual logging"))
-        rows.append(("Callbook", self._callbook_state()))
-        return rows
+        """The station, as `(label, token, value, config key)` per row.
+
+        `token` is the `{call}`-style name a message memory substitutes this
+        setting into, shown here for the same reason the old Station menu
+        showed it: the moment you want to know that `{qth}` exists is the
+        moment you are looking at what QTH is set to.
+
+        Every row is editable and the cursor lands on all of them, so there
+        are no headings and nothing to skip.
+
+        The radio's live readings used to be on here too and are gone. They
+        cost a round trip each -- `_power_now` opens rigctld and asks the
+        radio, the rest are XML-RPC to fldigi -- and the main loop draws five
+        times a second, so the screen was making about thirty queries a second
+        while sitting still, plus six more per keystroke because the key
+        handler rebuilt the list to find which rows were editable. On a Pi
+        with CAT over a serial port that outran the 200 ms poll and the
+        interface fell behind, which looked like slow scrolling and was the
+        screen being slow the whole time it was open. They are all on the
+        digimode status line and the tuning screen anyway.
+        """
+        # TX_POWER is skipped. It is READ FROM THE RADIO -- `_power_now` asks
+        # rigctld and falls back to the configured value only when the radio
+        # cannot be reached -- so a row for typing it invites an operator to
+        # set a number the radio will immediately contradict. The `{power}`
+        # token is unaffected and still works in message memories: it
+        # substitutes `_power_now()`, not this setting.
+        #
+        # TX_POWER_MAX stays, and is not the same thing. It is the ceiling the
+        # radio's 0..1 RFPOWER reading is scaled against, and on the FTX-1 it
+        # genuinely changes with the configuration -- field head on its own
+        # battery, field head on external power, and the Optima are three
+        # different maxima. Without it the deck cannot turn a CAT reading into
+        # watts at all.
+        return [(label, token, self.cfg.get(key, "") or "(not set)", key)
+                for key, label, token in menus.STATION_FIELDS
+                if key != "TX_POWER"]
 
     def _draw_settings(self, h, w):
         for i, line in enumerate(render.settings_screen(
-                self._settings_rows(), w, h, message=self.set_message)):
+                self._settings_rows(), w, h, selected=self.set_sel,
+                message=self.set_message)):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -1164,22 +1192,51 @@ class Deck:
             pass
 
     def _handle_settings(self, ch):
+        rows = self._settings_rows()
+        edits = list(range(len(rows)))
         if ch == curses.KEY_F1:
             self._open_menu("deck")
         elif ch == curses.KEY_F2:
-            self._open_menu("station")
+            self._open_menu("display")
         elif ch == curses.KEY_F3:
-            self._open_menu("radio")
+            self._open_menu("system")
+        elif ch in (curses.KEY_UP, curses.KEY_DOWN) and edits:
+            # Only the editable rows. The headings and the live readings are
+            # drawn but never landed on: a cursor that could sit on the VFO
+            # and do nothing on Enter would read as a broken key.
+            step = -1 if ch == curses.KEY_UP else 1
+            if self.set_sel in edits:
+                at = edits[(edits.index(self.set_sel) + step) % len(edits)]
+            else:
+                at = edits[0] if step > 0 else edits[-1]
+            self.set_sel = at
+            self.set_message = ""
+        elif ch in (10, 13, curses.KEY_ENTER) and self.set_sel in edits:
+            label, _token, _value, key = rows[self.set_sel]
+            self._open_editor(key, label)
         elif ch == 27:
-            # Esc has meant "back to the conversation" on every screen of this
-            # deck since before there were areas, and the conversation is
-            # still what it boots to. Keeping that is worth more than making
-            # Esc a dead key here for the sake of symmetry.
-            self.area_screen[AREA_SETTINGS] = SET
-            self.screen = CHAT
+            # Nothing to back out to. This is the top screen of its own
+            # application, and Esc does not cross between applications -- see
+            # the note on Esc in `_handle_log`.
+            self.set_message = ""
         elif ch == 17:
             return self._quit()
         return True
+
+    def _master_path(self):
+        """The master log, or "" when there is nothing extra to write.
+
+        Empty when the setting is off, and empty when the activity's own file
+        IS the master -- which is the case for casual logging. Writing twice
+        to one path would record every casual contact twice, which is a
+        corrupted log rather than a thorough one.
+        """
+        if str(self.cfg.get("MASTER_LOG", "yes")).strip().lower() not in (
+                "yes", "on", "true", "1"):
+            return ""
+        master = qsolog.master_path(self.cfg.get("LOG_PATH", ""))
+        return "" if os.path.abspath(master) == os.path.abspath(
+            self._log_path()) else master
 
     def _log_lines(self):
         """Lines per contact in the list: 1, 2 or 3."""
@@ -1337,6 +1394,19 @@ class Deck:
         except OSError as exc:
             self._log_note(f"could not write the log: {exc}")
             return
+        # From the master too. A contact deleted here was logged in error, and
+        # an archive that keeps the errors is not worth keeping.
+        #
+        # Deleting an ACTIVITY is the opposite and deliberately so: that only
+        # removes the activity's own file, and the master keeps every contact
+        # that was ever made under it. That asymmetry is the whole point of
+        # having a master log.
+        master = self._master_path()
+        if gone is not None and master:
+            try:
+                qsolog.remove(master, when, call)
+            except OSError as exc:
+                self._log_note(f"the master log kept it: {exc}")
         if gone is None:
             self._log_note("that contact is no longer in the log")
             return
@@ -1378,6 +1448,16 @@ class Deck:
         except OSError as exc:
             self.entry_message = f"could not write the log: {exc}"
             return
+        # The same correction in the master log. Found by the same timestamp,
+        # which is identical in both copies, so this is the same call against
+        # a second path -- and a contact the master has never seen is not an
+        # error, only a contact made before the setting was turned on.
+        master = self._master_path()
+        if got is not None and master:
+            try:
+                qsolog.update(master, when, call, {field: value})
+            except OSError as exc:
+                self._log_note(f"the master log kept the old value: {exc}")
         if got is None:
             self.entry_message = "that contact is no longer in the log"
             return
@@ -2129,8 +2209,26 @@ class Deck:
         # If that was the activity in use, there is nothing to log into any
         # more: fall back to casual logging rather than to a file that is
         # gone, which would be recreated empty on the next contact.
+        #
+        # All the way back, not just the name. The name and the file reset on
+        # their own, but the TYPE and this station's reference did not -- so
+        # the header read `casual logging  POTA`, the form kept a Ref column
+        # for an activation that no longer existed, and `my_park` would have
+        # gone onto the next casual contact as though the activation were
+        # still running. Deleting the activity deletes the whole of it.
         if name == self._activity_name():
             self._set_activity_session("")
+            # This station's own reference goes: that activation is deleted,
+            # and leaving `my_park` set would write it onto the next contact
+            # as though the activation were still running.
+            if self.cfg.get("MY_PARK"):
+                self._set_my_park("")
+            # The TYPE stays. A type is a template and outlives any one
+            # session -- and POTA with no activation of your own is exactly
+            # what HUNTING is: their park in `park`, nothing in `my_park`. An
+            # earlier version reset this to GENERAL and so threw away a
+            # perfectly good hunting setup every time an activation was
+            # deleted.
         self.acts_sel = 0
 
     def _delete_activity_type(self, name):
@@ -2258,6 +2356,18 @@ class Deck:
             self.log_message = f"-- NOT LOGGED: {exc}"
             return
 
+        # And into the master log, so it accumulates whatever activity made
+        # the contact. Second, not first: the activity's own file is what is
+        # on screen and what the duplicate check reads, so it is the one that
+        # must not be lost. A master that cannot be written is reported and
+        # does not fail the contact -- the archive is worth less than the QSO.
+        master = self._master_path()
+        if master:
+            try:
+                qsolog.append(master, rec)
+            except OSError as exc:
+                self._log_note(f"logged, but the master log failed: {exc}")
+
         self.log_records.append(rec)
         self._looked_up = ""
         form.commit()
@@ -2274,14 +2384,20 @@ class Deck:
             return True
 
         if ch == 27:                                    # Esc
-            # One Esc puts the keyboard back on the form, a second leaves the
-            # screen. Leaving outright would make a mis-hit arrow cost the
-            # whole screen.
+            # Esc backs out WITHIN the logging application and stops at its
+            # top screen. It does not cross into another one.
+            #
+            # It used to go to the conversation, which made sense when the log
+            # hung off the digimode screen and stopped making sense the moment
+            # the three became peers: there is no "up" from here to go to, and
+            # ejecting an operator into a different application for pressing
+            # the back key is not backing out of anything. ^O and ^P are how
+            # you leave; Esc is how you put down whatever you picked up.
             if self.log_sel is not None:
                 self.log_sel = None
                 self.log_message = ""
             else:
-                self.screen = CHAT
+                self.log_message = ""
         # The function keys are otherwise dead here, and F1 means "menu"
         # everywhere else on the deck. It opens the LOGGING menu rather than
         # the root one, because that is what is being configured from this
@@ -2640,7 +2756,16 @@ class Deck:
             # Three decimals is how a frequency is read aloud and written
             # in a log: 14.070, not 14.07.
             "freq": render.frequency(freq),
-            "mode": f.modem(),
+            # Not `f.modem()` alone. fldigi always has a modem loaded, so the
+            # status line said BPSK31 while the radio sat in USB for voice —
+            # which is the one reading an operator checks before speaking.
+            #
+            # The rule, the same one `qsolog.resolve_mode` applies to the log:
+            # a radio in a data mode means the modem is what is on the air, so
+            # report the modem; a radio in anything else is being used for
+            # that, so report the radio. A mode that cannot be read falls back
+            # to the modem, because a deck without CAT has nothing else.
+            "mode": self._shown_mode(),
             "carrier": f"{f.carrier()}Hz",
             "snr": (f.signal_to_noise() or "").strip(),
             "imd": (f.imd() or "").strip(),
@@ -2785,8 +2910,6 @@ class Deck:
             return menus.band_menu(self._supported_bands())
         if m == "system":
             return menus.SYSTEM
-        if m == "station":
-            return menus.station_menu(self.cfg)
         if m == "memories":
             return menus.memories_menu(self.cfg)
         if m == "logging":
@@ -2806,7 +2929,9 @@ class Deck:
                 callbook_state=self._callbook_state(),
                 activity=self._activity_name(),
                 activity_type="" if act == "GENERAL" else act,
-                log_lines=self._log_lines())
+                log_lines=self._log_lines(),
+                master_log=str(self.cfg.get("MASTER_LOG", "yes")
+                               ).strip().lower() in ("yes", "on", "true", "1"))
         if m == "activity":
             table = self._activity_table()
             current = (self.log_form.activity_type.name if self.log_form
@@ -3337,14 +3462,14 @@ class Deck:
         # the digimode menu so that anything still asking for it by that name
         # gets the menu it used to get rather than nothing.
         if m in ("digi", "root"):
-            dest = {"1": "mode", "2": "tuning", "3": "memories"}.get(key)
+            dest = {"1": "mode", "2": "tuning", "3": "radio",
+                    "4": "memories"}.get(key)
             if dest:
                 self._open_menu(dest)
             return True
 
         if m == "deck":
-            dest = {"1": "station", "2": "radio",
-                    "3": "display", "4": "system"}.get(key)
+            dest = {"1": "display", "2": "system"}.get(key)
             if dest:
                 self._open_menu(dest)
             return True
@@ -3452,12 +3577,6 @@ class Deck:
                 self._open_editor(f"MEMORY_{slot}", f"F{slot}")
             return True
 
-        if m == "station":
-            if key.isdigit() and 1 <= int(key) <= len(menus.STATION_FIELDS):
-                field_key, label, _token = menus.STATION_FIELDS[int(key) - 1]
-                self._open_editor(field_key, label)
-            return True
-
         if m == "logging":
             if key == "l":
                 self.log_on = not self.log_on
@@ -3490,6 +3609,14 @@ class Deck:
             elif key == "n":
                 self.cfg["LOG_LINES"] = str(self._log_lines() % 3 + 1)
                 self._save_state()
+            elif key == "k":
+                on = str(self.cfg.get("MASTER_LOG", "yes")).strip().lower() \
+                    not in ("yes", "on", "true", "1")
+                self.cfg["MASTER_LOG"] = "yes" if on else "no"
+                self._save_state()
+                self._log_note(
+                    "master log on — every contact goes to the default log too"
+                    if on else "master log off")
             elif key == "d":
                 rules = qsolog.DUPE_RULES
                 now = self.cfg.get("DUPE_CHECK", "band+mode")
@@ -3669,6 +3796,13 @@ class Deck:
         # activity being renamed should not have to be retyped.
         if text is None:
             text = "" if key is None else (self.cfg.get(key, "") or "")
+        # `str`, always. Two settings are declared `int` in `config.SCHEMA` --
+        # TX_POWER and TX_POWER_MAX -- so `cfg.get` hands back an int, and
+        # `len()` of an int is a TypeError that takes the whole panel down.
+        # The Station menu has always been able to reach both, so this has
+        # been a crash since those settings existed; it only became easy to
+        # hit when the deck-and-rig screen made them two keystrokes away.
+        text = "" if text is None else str(text)
         # `reveal` is deliberately not remembered between editors. Showing a
         # passphrase is a decision about the room the deck is in at that
         # moment, and it should have to be made again rather than carried in
@@ -3727,7 +3861,21 @@ class Deck:
                 self._log_note(f"{e['title']} entered")
                 e["sink"](text)
                 return True
-            self.cfg[e["key"]] = text
+            # Back as the type the schema declares. Writing the string "100"
+            # into TX_POWER_MAX would leave `rig.power(max_watts=...)` dividing
+            # by a string on the next CAT read, which is a failure a long way
+            # from the typing that caused it. A value that will not convert is
+            # refused here, where the operator can see why.
+            want = configmod.SCHEMA.get(e["key"], (None, str, ""))[1]
+            if want is int:
+                try:
+                    self.cfg[e["key"]] = int(float(text)) if text.strip() else 0
+                except ValueError:
+                    self.edit = None
+                    self._log_note(f"{e['title']}: {text!r} is not a number")
+                    return True
+            else:
+                self.cfg[e["key"]] = text
             if e["key"] == "LOG_PATH":
                 # Reopening rather than only remembering the new name: the
                 # contact list, the duplicate check and the next serial are
@@ -3879,6 +4027,53 @@ class Deck:
         if not raw:
             return None
         return {part.strip() for part in raw.split(",") if part.strip()}
+
+    def _shown_mode(self):
+        """What to put on the status line where the mode goes.
+
+        The modem when the radio is in a data mode or cannot be read; the
+        radio's own mode otherwise. Kept beside `_log_mode`, which answers the
+        same question for the record with `qsolog.resolve_mode` -- so the
+        screen and the log agree about what is happening, which they did not
+        when this was `fldigi.modem()` unconditionally.
+        """
+        modem = (self.fldigi.modem() or "").strip()
+        rig_mode = (self.fldigi.rig_mode() or "").strip()
+        if not rig_mode:
+            return modem
+        if rig_mode.upper() in qsolog.RIG_DATA_MODES:
+            return modem
+        # The radio is in SSB, FM, CW: that is what it is doing, and the modem
+        # loaded behind it is not on the air.
+        return rig_mode
+
+    def _watch_rig_mode(self):
+        """Inhibit transmit by itself when the radio leaves a data mode.
+
+        The interlock used to be one-sided: `_toggle_inhibit` refused to ARM
+        in a voice mode, but a radio moved OUT of a data mode while transmit
+        was already armed stayed armed. So the dangerous order -- arm first,
+        change the radio second -- was the one the deck did not cover, and the
+        operator's next over would go out as a digital signal into a voice
+        mode on a voice frequency.
+        """
+        if not self.fldigi.connected:
+            return
+        if self._rig_mode_ok():
+            self._rig_mode_warned = False
+            return
+        if self.session.inhibited:
+            return
+        current = (self.fldigi.rig_mode() or "").strip() or "a voice mode"
+        # Through the session's own setter, which is the route `Ctrl-I` takes,
+        # so the state and the transcript cannot disagree about why transmit
+        # is off.
+        self.session.inhibit(True)
+        if not self._rig_mode_warned:
+            self._rig_mode_warned = True
+            self.session.note(
+                f"rig moved to {current} — not a data mode, so transmit was "
+                f"inhibited. Put it back, then Ctrl-I.")
 
     def _report_rig_mode(self):
         """Say what mode the radio is in. Never change it.

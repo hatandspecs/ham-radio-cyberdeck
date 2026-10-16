@@ -1015,6 +1015,22 @@ def log_path(configured=""):
     return os.path.expanduser(configured or DEFAULT_PATH)
 
 
+def master_path(configured=""):
+    """The file every contact goes to as well as its activity's own.
+
+    The same file casual logging writes to, which is what makes it a master
+    log rather than a fourth thing to keep track of: with no activity in
+    progress the activity log IS this file, and the caller is expected to
+    notice that and write once.
+
+    It can hold contacts from any activity, with any field list, because the
+    format carries no schema -- a line holds the fields that have values and
+    nothing else, so a park contact, a contest exchange and a satellite pass
+    sit in one file and each reads back with exactly what it was given.
+    """
+    return log_path(configured)
+
+
 def append(path, rec):
     """Add one record. Returns the line written.
 

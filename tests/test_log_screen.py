@@ -212,8 +212,19 @@ check("GENERAL is not printed as though it were an activity",
       "GENERAL" not in lines(ORD, "", 66, 10,
                              header={"count": 2,
                                      "activity_type": "GENERAL"})[0])
-check("an activity needing a reference says when none is set",
+# Only while an ACTIVITY is named. A named activity with a reference field and
+# no reference is an activation that will record none on any of its contacts,
+# which is worth saying on every one of them.
+check("an activation with no reference says so",
       "no reference set" in lines(
+          ORD, "", 66, 10,
+          header={"count": 2, "activity": "Bald Eagle SP",
+                  "activity_type": "POTA", "needs_ref": True})[0])
+# With no activity it means the opposite: POTA and no reference of your own is
+# HUNTING, which is half of what the type is for. Nagging there told a hunter
+# that their correct setup was wrong.
+check("but hunting is not nagged about it",
+      "no reference set" not in lines(
           ORD, "", 66, 10,
           header={"count": 2, "activity_type": "POTA",
                   "needs_ref": True})[0])

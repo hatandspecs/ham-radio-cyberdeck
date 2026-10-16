@@ -107,6 +107,12 @@ SCHEMA = {
     "LOG_LINES":       ("1", str, "1 | 2 | 3 — lines per contact in the log "
                                   "list; more shows more fields, fewer shows "
                                   "more contacts"),
+    # Every contact also goes to the file LOG_PATH names, whatever activity it
+    # was made under, so the master log accumulates and an activity deleted
+    # later does not take its contacts with it.
+    "MASTER_LOG":      ("yes", str, "yes | no — also write every contact to "
+                                    "the default log, so it accumulates no "
+                                    "matter which activity made it"),
     # There is deliberately no POTA setting. POTA is an activity — ACTIVITY =
     # POTA — because a toggle and an activity that both mean "show the park
     # fields" are two controls for one thing, and they drift.

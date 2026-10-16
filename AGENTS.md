@@ -37,6 +37,39 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   graphical seat is active takes down the seat. That is the second console this
   project has lost to a program claiming a tty it did not own. A real console is
   still the best place to judge glyphs — log into one by hand, Ctrl+Alt+F3.
+- **The deploy preflight cannot catch a crash that needs a keystroke.** It
+  imports the modules and loads the config, which proves the code starts —
+  and on 2026-10-16 it passed cleanly while the deck then crash-looped three
+  times, because `_open_editor` raised `TypeError: object of type 'int' has no
+  len()` only once a key was pressed on an `int`-typed setting. `systemctl
+  is-active` said `active` throughout. **After any deploy, press keys on the
+  screens that changed**, and read `journalctl -u cyberdeck-ui` rather than
+  `is-active`. A `restart counter is at N` line climbing in the journal is the
+  signature.
+- **`TX_POWER_MAX` is not cosmetic and is not the same as `TX_POWER`.** The
+  radio reports RFPOWER over CAT as a fraction between 0 and 1, so the ceiling
+  is what turns that into watts — without it the deck cannot report power at
+  all. On the FTX-1 the ceiling genuinely changes with the configuration:
+  field head on its own battery, field head on external power, and the Optima
+  are three different maxima, so it is a setting the operator has to be able
+  to type. It is on the deck-and-rig screen for that reason.
+
+  `TX_POWER` is the opposite and is deliberately NOT on that screen. It is
+  read from the radio by `_power_now()`, which falls back to the configured
+  value only when the radio will not answer, so a row for typing it invites
+  setting a number the radio immediately contradicts. The `{power}` memory
+  token substitutes `_power_now()`, not the setting, so removing the row cost
+  the token nothing.
+- **This project is GPLv3 as of 2026-10-15, and was MIT before that.** Do not
+  "restore" the MIT license or copy a permissive header into a new file: the
+  change was deliberate. The reason is the stack — fldigi is GPLv3, hamlib is
+  LGPL, and the planned WSPR work uses `wsprd` out of WSJT-X, which is GPLv3,
+  so bundling any of it under a noncommercial or permissive license would
+  conflict. A noncommercial license was considered and rejected for exactly
+  that reason: GPLv3 §10 forbids adding restrictions, so "noncommercial only"
+  cannot be combined with GPL code at all. **The APRS iGate stays MIT** —
+  different project, different call. The MIT grant already made cannot be
+  withdrawn, so commits before 2026-10-15 remain MIT for whoever has them.
 - **Do not write signal processing.** fldigi does all of it; this program is a
   terminal that drives fldigi over XML-RPC on the loopback interface. A better
   PSK31 demodulator is not the project.
@@ -46,6 +79,19 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 - **fldigi must be running for the tests** — four of them drive the real
   program through a pseudo-terminal and read the screen back. No radio is
   needed, but a modem is.
+- **`tests/test_log_panel.py` takes 903 seconds for 225 checks** (measured
+  2026-10-16) and so was being killed three seconds inside a 900-second
+  timeout. **A run that stops mid-screen with no traceback and no `ALL PASS` is
+  the timeout, not a crash** — and the wrapper still exits 0, so check for the
+  `ALL PASS` line rather than the exit code. Give it 1800 seconds.
+
+  It drives the real application through a pty once per scenario, each with a
+  settle of three seconds or more, so its runtime is roughly three seconds
+  times the number of scenarios and it grows every time one is added. Before
+  adding another, ask whether the property is pure enough for
+  `test_log_screen.py`, `test_render.py` or `test_qsolog.py`, which run in
+  seconds — a pty scenario is for key DISPATCH and for what reaches the disk,
+  not for layout.
 - **The pty tests flake, roughly one check per full run.** They drive the one
   live fldigi on port 7362 with fixed `settle=` delays, so a slipped timing
   shows up as a single failed check somewhere in `test_menu_arrows`,
@@ -83,6 +129,14 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   not the transcript. Use `self._log_note()` from anything in the logger, which
   routes to the log screen and to the picker or activities list when that is
   where the message was raised.
+- **The deck's callsign is in the STATE file, not `cyberdeck.conf`.** The
+  station identity was entered on the panel, so it lives in `station` inside
+  `STATE_PATH` (`~/.local/state/cyberdeck.json` on the deck) and
+  `_restore_state` applies it at startup from `menus.STATION_FIELDS`. A
+  preflight that calls `config.load()` and prints `CALLSIGN` gets an empty
+  string, and that is CORRECT — it is not a broken deck. Two deploys on
+  2026-10-15 were stopped over it. Read both places and say which answered;
+  `docs/logger_branch_deploy.md` §2a does.
 - **A field can be stored, exported, and still invisible.** A log field needs
   an entry in THREE places: `activities.ENTRY_FIELDS` to be selectable,
   `qsolog._FIELD_ORDER` to be written to the line, and `qsolog._ADIF_FIELDS` to

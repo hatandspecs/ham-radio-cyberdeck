@@ -398,12 +398,12 @@ def plain(segments):
 # and 50 at the largest one, so the line has to shed bindings rather than be
 # truncated mid-word — a hint that reads "^C abor" is worse than no hint.
 _HINT_TIERS = (
-    # The two widest carry `^O ^P area`, which is the only place the ring is
+    # The two widest carry `^O ^P screen`, which is the only place the ring is
     # taught. At 66 columns -- the deck -- that costs `F5+ memory`, which the
     # digimode menu still lists; `^C abort` stays, because a key that stops the
     # transmitter is worth more on a footer than one that inserts a macro.
-    " F1 menu  F2 tune  F3 mode  F5+ memory  ^T over  ^Y hand  ^O ^P area",
-    " F1 menu  F2 tune  ^T over  ^Y hand  ^C abort  ^O ^P area",
+    " F1 menu  F2 tune  F3 mode  F5+ memory  ^T over  ^Y hand  ^O ^P screen",
+    " F1 menu  F2 tune  ^T over  ^Y hand  ^C abort  ^O ^P screen",
     " F1 menu    F2 tune    F5+ memory    ^T over    ^Y hand    ^C abort",
     " F1 menu   F2 tune   F5+ memory   ^T over   ^Y hand   ^C abort",
     " F1 menu  F2 tune  F5+ memory  ^T over  ^Y hand  ^C abort",
@@ -975,46 +975,65 @@ def log_screen(records, entry, width, height, header=None, message="",
     # than upper-cased. The TYPE is what the fields on screen mean and comes
     # after it in parentheses, because it answers a different question and is
     # the one that is usually already known.
-    left = " LOG"
+    # Built as a LIST of whole fields, least important last, so that a header
+    # too long for the width loses a field rather than losing the end of one.
+    # It used to be one concatenated string cut with a slice, which on an
+    # activation at 66 columns produced ` LOG  Bald Eagle SP  (POTA)  40m  SSB
+    # 7.185.000  U` -- the `U` being what was left of `US-5678`, reading as a
+    # field of its own. The docstring promised dropping; the code truncated.
     activity = str(head.get("activity") or "").strip()
+    kind = str(head.get("activity_type") or "").strip().upper()
+    # The file is named when it is not the default one: a deck writing
+    # somewhere unexpected must never do it silently. An activity already
+    # names its own file, so this is only for casual logging.
+    name = (f" LOG:{head['log_name']}"
+            if not activity and head.get("log_name") else " LOG")
     # Named either way. With an activity this is its name; without one it says
     # so in the same words the logging menu uses, because a header that went
     # blank left the operator unable to tell "logging to the casual log" from
     # "the activity name is not being displayed" -- and those want opposite
     # responses. The menu says `Activity  casual logging`; so does this.
-    left += f"  {activity}" if activity else "  casual logging"
-    kind = str(head.get("activity_type") or "").strip().upper()
+    parts = [activity or "casual logging"]
     if kind and kind != "GENERAL":
-        left += f"  ({kind})" if activity else f"  {kind}"
-    # The file is named as well when it is not the default one -- a deck
-    # writing somewhere unexpected must never do it silently. An activity
-    # already names its own file, so this is only for casual logging.
-    if not activity and head.get("log_name"):
-        left = f" LOG:{head['log_name']}" + left[len(" LOG"):]
+        parts.append(f"({kind})" if activity else kind)
+    # In POTA mode the reference is drawn whether or not it is set, so that
+    # starting an activation without one is visible rather than silently
+    # absent from every record of it. It comes before the radio's readings
+    # because it is the one an activation is wrong without.
+    if head.get("my_park"):
+        parts.append(str(head["my_park"]))
+    elif activity and kind and kind != "GENERAL" and head.get("needs_ref"):
+        # Only while an ACTIVITY is named. A named activity with a reference
+        # field and no reference is an activation that will record none on any
+        # of its contacts, which is worth saying on every one of them.
+        #
+        # With no activity it means the opposite: POTA without a reference of
+        # your own is HUNTING, which is half of what the type is for. Nagging
+        # about it there told a hunter their correct setup was wrong.
+        parts.append("(no reference set)")
     for key in ("band", "mode", "freq"):
         value = head.get(key)
         if value:
-            left += f"  {value}"
-    # In POTA mode the park slot is drawn whether or not it is set, so that
-    # starting an activation without setting MY_PARK is visible rather than
-    # silently absent from every record of it.
-    if head.get("my_park"):
-        left += f"  {head['my_park']}"
-    elif kind and kind != "GENERAL" and head.get("needs_ref"):
-        # An activity that puts a reference on every contact, with none set,
-        # says so rather than leaving the slot out — starting an activation
-        # without setting it would otherwise be invisible on all eighty.
-        left += "  (no reference set)"
+            parts.append(str(value))
+
     count = head.get("count")
     right = ""
     if count is not None:
         right = f"{count} QSO{'' if count == 1 else 's'} "
     if head.get("clock"):
         right = f"{right} {head['clock']} " if right else f" {head['clock']} "
-    pad = width - len(left) - len(right)
-    if pad < 1:
-        left, pad = left[:max(0, width - len(right) - 1)], 1
-    out.append([(left + " " * pad + right, "reverse")])
+
+    # Drop from the end until it fits. The count and the clock on the right are
+    # never dropped: the count is the one number that says the log is working.
+    while parts:
+        left = name + "  " + "  ".join(parts)
+        if len(left) + len(right) + 1 <= width:
+            break
+        parts.pop()
+    else:
+        left = name
+    pad = max(1, width - len(left) - len(right))
+    out.append([((left + " " * pad + right)[:width], "reverse")])
     out.append(rule(width))
 
     # Contacts. Columns are sized so a callsign never truncates: a log you
@@ -1175,7 +1194,7 @@ def log_screen(records, entry, width, height, header=None, message="",
             # line came to 68 and was silently cut mid-word at `^O ^P ar`,
             # which is worse than any of them being absent.
             footer = (" F1 menu F2 acts \u2191\u2193 pick"
-                      " \u2190\u2192 field Enter log ^X clear ^O ^P area")
+                      " \u2190\u2192 field Enter log ^X clear ^O ^P screen")
         if head.get("hint"):
             footer += f"   {head['hint']}"
         out.append([(footer[:width].ljust(width), "dim")])
@@ -1208,40 +1227,47 @@ def log_screen(records, entry, width, height, header=None, message="",
     return out[:height]
 
 
-def settings_screen(rows, width, height, message="", footer=""):
-    """The deck and the rig, as a screen rather than a menu.
+def settings_screen(rows, width, height, selected=None, message="",
+                    footer=""):
+    """The station, as a screen rather than a menu.
 
-    `rows` is `[(label, value), ...]`, or `(None, heading)` for a divider.
+    `rows` is `[(label, token, value, config key), ...]` — every row editable,
+    so the cursor lands on all of them and there is nothing to skip.
 
-    A screen because the settings are one of the deck's three areas, and an
-    area needs somewhere to BE: the ring lands here, and `F1` opens the menu
-    over it. A menu alone could not be landed on -- it is drawn over whatever
-    screen was current, so arriving at "the settings" meant arriving at the
-    digimode screen with a menu on top of it.
+    A screen because the settings are one of the deck's three applications,
+    and an application needs somewhere to BE: the ring lands here. A menu
+    could not be landed on — it is drawn over whatever screen was current, so
+    arriving at "the settings" meant arriving at the digimode screen with a
+    menu on top of it.
 
-    Read-only, deliberately. Everything here is changed from the menu, and a
-    panel that both showed and edited would need its own cursor, its own
-    editing rules and its own idea of what Enter means on a row that cannot be
-    changed. What it is FOR is answering "what is this station set to" in one
-    place -- which nothing on the deck could do before, because the callsign
-    was in one menu, the rig in another and the log in a third.
+    The token is shown beside each label because the moment an operator wants
+    to know that `{qth}` exists is the moment they are looking at what QTH is
+    set to. That is what the Station menu did, and this replaced it rather than
+    sitting beside it showing the same eight settings again.
     """
-    out = [[((" DECK & RIG").ljust(width)[:width], "reverse")], rule(width)]
-    label_w = 14
-    for label, value in rows:
-        if label is None:
-            # A divider carries its text in `value` and no value of its own.
-            out.append([((" " + str(value)).ljust(width)[:width], "dim")])
-            continue
-        text = f" {str(label):<{label_w}} {value}"
-        out.append([(text[:width].ljust(width), "")])
+    body = max(1, height - 4)
+    pages = max(1, (len(rows) + body - 1) // body)
+    page = min(max(0, int(selected or 0)) // body, pages - 1)
+    shown = rows[page * body:(page + 1) * body]
+
+    head = " DECK & RIG"
+    if pages > 1:
+        head += f"  {page + 1}/{pages}"
+    out = [[(head.ljust(width)[:width], "reverse")], rule(width)]
+    label_w, token_w = 14, 8
+    for i, (label, token, value, _key) in enumerate(shown,
+                                                    start=page * body):
+        mark = "\u25b8" if i == selected else " "
+        text = f"{mark}{str(label):<{label_w}}{str(token or ''):<{token_w}}{value}"
+        out.append([(text[:width].ljust(width),
+                     "bright" if i == selected else "")])
 
     while len(out) < height - 2:
         out.append([(" " * width, "")])
     out.append(rule(width))
     out.append([((" " + (message or footer or
-                 "F1 menu  F2 station  F3 band  F4 color  ^O ^P area"))
-                 [:width].ljust(width), "dim")])
+                 "\u2191\u2193 pick  Enter edit  F1 menu  F4 color"
+                 "  ^O ^P screen"))[:width].ljust(width), "dim")])
     return out[:height]
 
 

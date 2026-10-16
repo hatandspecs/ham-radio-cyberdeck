@@ -680,4 +680,51 @@ equals("labels come from the selection screen where there is one",
 equals("and from this module for what the deck fills in",
        qsolog.field_label("my_call"), "My call")
 
+print("\nthe master log takes any field list")
+# This is what makes a master log possible at all, and it needed nothing added:
+# the format carries no schema. A line holds the fields that have values and
+# nothing else, so contacts made under different activities -- with completely
+# different field lists -- sit in one file and each reads back with exactly
+# what it was given.
+d = _tf.mkdtemp(prefix="qsolog-master-")
+master = os.path.join(d, "qso.log")
+equals("the master is the file LOG_PATH names",
+       qsolog.master_path(master), qsolog.log_path(master))
+MIXED = [
+    {"when": "2026-10-16T14:00:00Z", "call": "W1AW", "band": "40m",
+     "mode": "SSB", "rst_s": "59", "rst_r": "59", "park": "US-1234",
+     "my_park": "US-5678", "my_call": "KD3CCO"},
+    {"when": "2026-10-16T14:05:00Z", "call": "K3ABC", "band": "20m",
+     "mode": "CW", "serial_rx": "014", "exchange_rx": "PA",
+     "serial_tx": "3", "my_call": "KD3CCO"},
+    {"when": "2026-10-16T14:09:00Z", "call": "W9XYZ", "band": "80m",
+     "mode": "FM", "sat_name": "SO-50", "prop_mode": "SAT",
+     "my_call": "KD3CCO"},
+]
+for one in MIXED:
+    qsolog.append(master, one)
+back = qsolog.read(master)
+equals("all three are read back", len(back), 3)
+equals("a park activation keeps its references",
+       (back[0].get("park"), back[0].get("my_park")), ("US-1234", "US-5678"))
+equals("a contest contact keeps its exchange",
+       (back[1].get("serial_rx"), back[1].get("exchange_rx")), ("014", "PA"))
+equals("a satellite pass keeps its bird",
+       (back[2].get("sat_name"), back[2].get("prop_mode")), ("SO-50", "SAT"))
+# No cross-contamination: a field one contact has must not appear on another.
+check("the contest contact has no park", "park" not in back[1], str(back[1]))
+check("the park contact has no serial", "serial_rx" not in back[0],
+      str(back[0]))
+check("every one of them exports",
+      all(qsolog.adif_record(r).endswith("<EOR>") for r in back), str(back))
+
+# A correction reaches the master by the same timestamp, which is identical in
+# both copies -- so it is the same call against a second path.
+qsolog.update(master, "2026-10-16T14:05:00Z", "K3ABC", {"call": "K3ABD"})
+equals("a correction applies to the master",
+       [r["call"] for r in qsolog.read(master)], ["W1AW", "K3ABD", "W9XYZ"])
+qsolog.remove(master, "2026-10-16T14:05:00Z", "K3ABD")
+equals("and so does a deletion",
+       [r["call"] for r in qsolog.read(master)], ["W1AW", "W9XYZ"])
+
 sys.exit(report())

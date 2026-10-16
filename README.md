@@ -1,9 +1,21 @@
 # Keyboard-to-Keyboard Cyberdeck
 
-A self-contained HF text terminal. fldigi does the modem work invisibly; a
+A self-contained HF station terminal. fldigi does the modem work invisibly; a
 purpose-built terminal is the only thing on the screen. No window manager, no
 mouse, no pointer, nothing to click — the feel of a dedicated 1980s packet
 terminal over modern digital modes.
+
+**Three applications of equal standing**, walked with `^O` and `^P`:
+
+| | |
+|---|---|
+| **Digimodes** | Keyboard-to-keyboard QSOs, tuning, mode selection, message memories |
+| **The log** | A contact log whose fields the operator defines, per activity |
+| **Deck & rig** | What this station is: callsign, locator, rig, antenna, power ceiling |
+
+It began as the first of those with the others hanging off its menu, which
+made the digimode screen the deck's home by accident rather than by anyone's
+decision. They are peers now, each one keystroke from both others.
 
 ![The conversation screen](docs/screens/conversation-matrix.png)
 
@@ -62,7 +74,7 @@ on exit.
   compose while receiving, `Ctrl-T` to start the over, `Ctrl-Y` to hand back.
   `Enter` inserts a newline; it does not send.
 * Mode switching, carrier tuning and rig control from the keyboard.
-* Four monochrome color schemes, switchable at runtime.
+* Five monochrome color schemes, switchable at runtime from any screen.
 * A status line that reports **the radio's** state rather than the program's
   intent: `RX`, `TX`, `DRAIN` while a handed-back over is still going out,
   `INH` while transmit is inhibited.
@@ -71,19 +83,30 @@ on exit.
   attached, because that is the one situation it cannot be told about.
 * **Touch, minimally**: drag the transcript to scroll it, tap to choose on the
   pairing screens. No pointer, no cursor, nothing else is selectable.
-* **A general-purpose contact log**, off by default and absent when off —
-  prototype, see below.
+* **A contact log whose grammar the operator defines** — 28 selectable fields,
+  per-activity log files, contacts read back and corrected on the panel, ADIF
+  export, and a master log that accumulates everything. See below.
+* **The station's own settings edited on their own screen**, each field shown
+  with the `{call}`-style token a message memory substitutes it into.
+* **A transmit interlock tied to the radio's mode.** The deck reports what the
+  radio is in and never sets it, and inhibits transmit by itself the moment
+  the radio leaves a data mode.
 
-It deliberately does **not** do contest exchanges, serial numbers, dupe
-checking, Cabrillo, weak-signal modes, waterfall display, image modes, or
-packet.
+It deliberately does **not** do Cabrillo, weak-signal modes, waterfall
+display, image modes, or packet. Contest exchanges, serials and duplicate
+checking it now does, because an activity's field list turned out to be the
+right way to express them.
 
-### Logging — prototype
+### Logging
 
-A general contact log: time, call, frequency, band, mode, both reports, name,
-QTH, grid and a free-text comment, stored append-only and exported as ADIF.
-Off by default, and when off nothing exists — no key bound, no status field,
-no file.
+A contact log: time, call, frequency, band, mode, both reports, and whatever
+else the activity asks for, exported as ADIF. Off by default, and when off
+nothing exists — no key bound, no status field, no file.
+
+The file is a line of `key=value` pairs per contact, carrying only the fields
+that have a value and no schema at all. That is what lets one file hold
+contacts made under different activities, and what made the master log below
+possible without adding anything.
 
 It is a **general** log, not an activity log — but activities are configurable.
 An activity type is a named, ordered list of fields, and that list doubles as
@@ -139,13 +162,43 @@ rewriting the log.
 HamQTH's username is the **callsign**, not the email address — the email is
 refused in a way that looks like a wrong password.
 
-**What works today:** everything above, from a terminal or over SSH with
-[`tools/qso.py`](tools/qso.py). **What does not:** none of it is reachable
-from the panel yet — no `Ctrl-N`, no root-menu entry. The screen renderer and
-the menu are written and tested; the key handler in `cyberdeck.py` is not.
-[`docs/logging_tutorial.md`](docs/logging_tutorial.md) is the walkthrough, with
-screenshots; [`docs/qso_log_design.md`](docs/qso_log_design.md) has the design,
-the decisions and an honest account of what is unfinished.
+**It is reachable from the panel.** `Ctrl-N` opens it, or `^O` from the
+digimode screen. The whole of it is worked from the keyboard:
+
+* **An activity is a session; an activity type is the template it uses.** A
+  park activation on a Tuesday is an activity, with its own dated log file;
+  POTA is the type. Both go into every record, because the name is what a log
+  is filtered back to and the type is what says how to read the fields in it.
+* **Types are built on the panel** from the type picker: `c` copies one,
+  `n` starts from nothing, `d` deletes one. Pick the fields, order them, name
+  it — and what it writes is the same INI an operator edits over SSH.
+* **28 selectable fields over two pages.** Page one is general and POTA
+  logging; page two is the contest exchange, the zones and the other
+  programs. Six more are on every contact and are not selectable because they
+  are not typed: the callsign, the UTC time, the band, the frequency, the mode
+  and this station's own call.
+* **Contacts are read back and corrected on the panel.** `↑` `↓` picks one,
+  `Enter` opens it field by field, `Enter` on a field edits it, `d` deletes it
+  after confirming. Only the timestamp is fixed — it is the key the contact is
+  found by and the one field nobody typed. The callsign is editable, which is
+  the reason the feature exists.
+* **A master log.** Every contact also goes to the default log, whatever
+  activity made it, so deleting an activity later does not take its contacts
+  with it. The format carries no schema, so one file holds a park activation,
+  a contest exchange and a satellite pass with their different field sets.
+* **One, two or three lines per contact in the list**, the extra rows
+  continuing down the activity's own field order.
+
+The log file is no longer strictly append-only, and is still never written in
+place: an edit writes a temp file, `fsync`s, and `os.replace`s it, so a pulled
+plug leaves either the old log or the new one and never half of one.
+
+[`docs/logging_tutorial.md`](docs/logging_tutorial.md) is the walkthrough —
+its screenshots predate the entry form and are stale;
+[`docs/qso_log_design.md`](docs/qso_log_design.md) has the design and the
+decisions, including §7e on reading back and correcting a contact.
+
+`tools/qso.py` still does all of it from a terminal or over SSH:
 
 ```bash
 qso.py log W3ABC 59 57 Bob Pittsburgh      # a contact
@@ -193,41 +246,128 @@ them. See §17 of the design document.
 Raised by the deck itself when nothing is connected — the one situation it
 cannot be told about, since every other way in is behind `F1`.
 
+### The log
+
+No screenshot yet. `Ctrl-N`, or `^O` from the conversation:
+
+```text
+ LOG  Bald Eagle SP  (POTA)  US-5678  40m  SSB      2 QSOs  1412Z
+──────────────────────────────────────────────────────────────────
+ UTC    CALL       RST     REF       NAME      QTH
+ 14:02  W1AW       59/59   US-1234   Hiram     Newington
+      Freq 7.185.000   Band 40m   Mode SSB   State CT
+ 14:09  KD3CCP     59/57             Ryan      State College
+      Freq 7.185.000   Band 40m   Mode SSB   State PA
+──────────────────────────────────────────────────────────────────
+    Call █                          Sent
+    Rcvd                            Park
+    Name                         Comment
+  My ref US-5678                *   Freq
+    Mode
+ F1 menu F2 acts ↑↓ pick ←→ field Enter log ^X clear ^O ^P screen
+```
+
+The header names what the log is for — the activity, its type in parentheses,
+this station's reference, then the radio — and says `casual logging` when
+there is no activity rather than going blank, because a blank header cannot be
+told apart from one that is not displaying the name.
+
+The form's fields are whatever the activity type asks for, in the order it
+asks for them. `↑` `↓` picks a contact above; `Enter` on one opens it field by
+field for correction.
+
+### Deck & rig
+
+No screenshot yet. `^O` `^O` from the conversation:
+
+```text
+ DECK & RIG
+──────────────────────────────────────────────────────────────────
+ Callsign      {call}  KD3CCO
+ Name          {name}  Donald
+ QTH           {qth}   State College, PA
+ Locator       {grid}  FN10cs
+ Rig           {rig}   FTX-1
+ Antenna       {ant}   DIY 75-10m EFHW
+ Max power (W)         100
+──────────────────────────────────────────────────────────────────
+ ↑↓ pick  Enter edit  F1 menu  F4 color  ^O ^P screen
+```
+
+Every row is edited in place, and each shows the token a message memory
+substitutes it into — the moment you want to know that `{qth}` exists is the
+moment you are looking at what QTH is set to.
+
+`Max power (W)` is the ceiling the radio's `0..1` RFPOWER reading is scaled
+against, so without it the deck cannot report watts at all; on the FTX-1 it
+changes with the configuration, since the field head on its own battery, the
+field head on external power and the Optima are three different maxima. The
+live power **reading** is deliberately not on this screen — it comes from the
+radio, so a row for typing it would invite setting a number the radio
+immediately contradicts. `{power}` substitutes the reading, not the setting.
+
 ## Keys
 
-| Key | Action |
+The deck is three applications of equal standing — **digimodes**, **the
+log**, and **deck & rig** — and `^O` / `^P` walk between them. `F1` opens the
+menu for whichever one you are in, `F4` cycles the colors from any of them,
+and `F2` / `F3` are that application's own two sub-views.
+
+| Key | Everywhere |
 |---|---|
-| `F1` | Menu |
-| `F2` | Tuning screen, from anywhere; again to come back |
-| `F3` | Mode picker, from anywhere, including **AUTO (RSID)**; again to come back |
+| `^O` `^P` | Previous / next application: `deck & rig` ◂▸ `log` ◂▸ `digimodes`, wrapping |
+| `F1` | The menu for the application you are in |
 | `F4` | Cycle the color scheme, five of them |
+| `Ctrl-L` | Redraw the screen |
+| `Ctrl-Q` | Restart the terminal; asks for confirmation |
+| `Esc` | Back out one step **within** an application; never leaves one |
+
+| Key | Digimodes |
+|---|---|
+| `F2` | Tuning screen; again to come back |
+| `F3` | Mode picker, including **AUTO (RSID)**; again to come back |
+| `F5`–`F12` | Insert a message memory at the cursor; `Ctrl-Z` undoes it |
 | `←` `→` `↑` `↓` | Edit the line: cursor, and recall previous overs |
 | `Ctrl-A` `Ctrl-D` | Carrier −10 / +10 Hz, without leaving the transcript |
 | `Ctrl-W` `Ctrl-S` | Search for the next signal, up / down |
-| `F5`–`F12` | Insert a message memory at the cursor; `Ctrl-Z` undoes it |
 | `Ctrl-T` | Start the over — send the buffer and key the rig |
 | `Ctrl-Y` | Hand back — drop to receive when the buffer drains |
 | `Ctrl-C` | Abort transmit immediately |
-| `Ctrl-I` | Toggle transmit inhibit |
+| `Ctrl-I` | Toggle transmit inhibit — also `Tab`, same byte |
 | `Ctrl-X` | Clear the transcript |
-| `Ctrl-L` | Redraw the screen |
 | `PgUp` / `PgDn` | Scroll the transcript — or drag it on the touchscreen |
-| `Ctrl-Q` | Restart the terminal; asks for confirmation |
-| `Esc` | Close a menu |
+
+| Key | The log |
+|---|---|
+| `Ctrl-N` | Open it from the conversation |
+| `F2` | Activities — start, resume or delete a session |
+| `F3` | Activity type — select, copy or create one |
+| `←` `→` | Move between fields on the entry form; `Tab` does too |
+| `↑` `↓` | Pick a logged contact; typing returns to the form |
+| `Enter` | Log the contact — or open the one picked above |
+| `d` | On an opened contact: delete it, after confirming |
+| `Ctrl-X` | Clear the staged entry, keeping the session's own fields |
+| `PgUp` / `PgDn` | Page the contact list |
+
+| Key | Deck & rig |
+|---|---|
+| `↑` `↓` | Pick a station field |
+| `Enter` | Edit it in place |
+| `F2` `F3` | Display, System |
 
 Menus take arrow keys as well as their single-key shortcuts: `↑` `↓` move a
 `▸` marker, `Enter` chooses. Transmit starts **inhibited** at every power-on;
 `Ctrl-I` arms it. Command keys are case-folded, so they work with Caps Lock on
 — which is how RTTY is operated, since Baudot has no lowercase.
 
-**Pairing a keyboard needs no SSH.** `F1` → `7` → `b`, or just switch the
+**Pairing a keyboard needs no SSH.** `^O` `^O` → `F1` → `2` → `b`, or just switch the
 deck on with nothing bonded — it notices and shows the screen itself, since
 every other way in is behind `F1` and `F1` needs the keyboard that is missing.
 Put the keyboard into pairing mode, tap the panel, and type the passkey it
 shows. A keyboard with channel buttons appears once per channel under one
 name; the address tail is what tells them apart.
 
-**WiFi is set from the panel too.** `F1` → `7` → `w` lists what is in range,
+**WiFi is set from the panel too.** `^O` `^O` → `F1` → `2` → `w` lists what is in range,
 with the connected network marked `✓`, ones already known marked `·`, signal
 as four blocks, and the security named on the right — blank for an open
 network.
@@ -266,26 +406,61 @@ With the real-time clock fitted the deck keeps time without NTP, so a field
 session can have the WiFi off from the start and still stamp every line
 correctly.
 
-**The three screens are a flat set, not a tree.** `F2` and `F3` reach the
-tuning screen and the mode picker from wherever you are, and each key is its
-own way back, so tune → mode → tune is one keystroke each way. Identifying an
-unknown signal is exactly that loop, and a navigation that needs `Esc` between
-each step is the wrong shape for it.
+**The applications are a flat set, not a tree, and so are the screens inside
+each one.** `^O` and `^P` reach any application from any other in one
+keystroke, and within the digimodes `F2` and `F3` reach the tuning screen and
+the mode picker with each key its own way back — so tune → mode → tune is one
+keystroke each way. Identifying an unknown signal is exactly that loop, and a
+navigation needing `Esc` between each step is the wrong shape for it.
+
+`Esc` never crosses between applications. It backs out one step inside the one
+you are in and stops at its top screen: on the log screen it drops a picked
+contact and otherwise does nothing. It used to return to the conversation,
+which made sense when the log hung off the digimode screen and stopped making
+sense the moment the three became peers — there is no "up" from the log screen
+to go to.
+
+**Why not `Alt` and the arrows.** `infocmp linux` defines no modified
+cursor keys at all, so `Alt`+`Left` reaches the framebuffer console as `Esc`
+followed by `KEY_LEFT` — and `Esc` is load-bearing on every screen, so it
+fires first. `xterm` defines only the `Shift` forms, which would have worked
+on a laptop and been a dead key on the deck. `Ctrl-M` is byte 13 and therefore
+`Enter`. `Home`/`End` and `PgUp`/`PgDn` are already the cursor and scroll
+keys. `Ctrl-O` and `Ctrl-P` were unbound, are adjacent, and `O` is left of
+`P`.
 
 **`Ctrl-Q` does not shut the deck down.** The systemd unit restarts it, so it
 is a restart of the terminal and nothing more — there is no desktop underneath
 to return to. It confirms first, because an unannounced few seconds of dark
 screen is indistinguishable from a crash.
 
-| `F1` | |
+One menu per application. A line belonging to one is not on another's.
+
+| `F1` in **digimodes** | |
 |---|---|
 | `1` Mode | Twelve modes plus **AUTO (RSID)** and the full list |
 | `2` Tune Settings | AFC, squelch and level, RSID, TXID, reverse, park carrier, the receive hold after an over |
-| `3` Band | Eleven presets, 80 m to 70 cm, low to high |
-| `4` Display | The five color schemes, timestamps |
-| `5` Memories | Eight message memories, edited in place |
-| `6` Station | Callsign, name, QTH, grid, rig — edited in place |
-| `7` System | Pair a Bluetooth keyboard, WiFi, transmit inhibit, clear transcript, quit |
+| `3` Band | Eleven presets, 80 m to 70 cm, low to high. Here rather than with the rig settings because it tunes to the digimode **calling frequency** for the band |
+| `4` Memories | Eight message memories, edited in place |
+
+| `F1` in **the log** | |
+|---|---|
+| `l` | Logging on/off, with the contact count |
+| `f` `k` | The default log file; whether every contact also goes to it |
+| `a` | Export ADIF |
+| `m` `d` | Where the mode comes from; the duplicate rule |
+| `c` | Callbook lookup — `on`, `off`, or `no wifi` |
+| `e` `v` `n` | The activity, its type, and how many lines a contact takes in the list |
+| `p` | This station's own reference, when the type uses one |
+
+| `F1` in **deck & rig** | |
+|---|---|
+| `1` Display | The five color schemes, timestamps |
+| `2` System | Pair a Bluetooth keyboard, WiFi, transmit inhibit, clear transcript, quit |
+
+There is no Station line: the deck & rig **screen** is the station editor, and
+a menu offering a second list of the same settings was the same information
+twice.
 
 `Ctrl-I` and `Tab` are the same byte — ASCII 9 — so `Tab` also toggles the
 inhibit. Watch the status line if you hit it by accident.
@@ -617,7 +792,7 @@ tools/dev-fldigi.sh        # fldigi must be running; three tests drive it
 tools/run_tests.sh
 ```
 
-1879+ checks across 25 files. `test_screen.py`, `test_menu_nav.py`,
+1893 checks across 25 files. `test_screen.py`, `test_menu_nav.py`,
 `test_menu_arrows.py`, `test_console_keys.py`, `test_screen_toggles.py`,
 `test_log_panel.py` and `test_state.py` fork
 a pseudo-terminal, run the real application, and read the screen back with a
@@ -654,6 +829,16 @@ central Pennsylvania, and the first contact made above QRP.
 That closes the loop the project set out to prove: a Pi 3A+, a 5" panel, a
 Bluetooth keyboard and an FTX-1, with no window manager, no mouse and nothing
 on the screen but the terminal.
+
+**Since then it has become three applications rather than one.** The contact
+log is reachable from the panel and its grammar is the operator's to define;
+the station's own settings have a screen of their own; and `^O` / `^P` walk
+between the three. That change was not about adding a logbook — it was about
+what the logbook revealed, which is that everything except the digital modes
+had been bolted to the side of the digital modes.
+
+Written up at **[The Cyberdeck Gets a Logbook, and Three Equal
+Applications](https://hatandspecs.github.io/hamradio/articles/cyberdeck-logger-and-function-ring/)**.
 
 Working end to end:
 
@@ -775,4 +960,22 @@ Working end to end:
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Use it, change it, no warranty.
+**GPLv3** — see [LICENSE](LICENSE). Use it, change it, no warranty. If you
+distribute it, or anything built from it, ship the source under the same terms.
+
+It was MIT until 2026-10-15. Two reasons for the change, and one honest
+limitation.
+
+The first reason is the company this program keeps. It drives fldigi (GPLv3)
+and reads hamlib (LGPL); the WSPR work planned next uses `wsprd` out of WSJT-X
+(GPLv3). Calling another program as a separate process imposes nothing either
+way, but bundling one does, and a permissive license here was the odd one out
+in a stack that is GPL from top to bottom.
+
+The second is that the thing worth discouraging is enclosure, not money. GPLv3
+does not stop anyone selling this — it stops anyone selling it *closed*. Sell
+decks with it on the card if you like; ship the source with them.
+
+The limitation: the MIT grant already made cannot be withdrawn. Every commit up
+to 2026-10-15 remains MIT for anyone who already has it, so this governs what
+comes after rather than what came before.

@@ -47,7 +47,7 @@ print("the deck starts in the digimodes area")
 body = deck([], "no keys")
 check("the conversation screen is what it boots to",
       "F1 menu" in body and "^T over" in body, body[-200:])
-check("and the footer teaches the ring", "^O ^P area" in body, body[-200:])
+check("and the footer teaches the ring", "^O ^P screen" in body, body[-200:])
 
 # Ctrl-O is `VDISCARD`. If the line discipline eats it the key never reaches
 # the application, and the only way to find that out is to send it through a
@@ -90,9 +90,11 @@ check("and not the deck's", "Station" not in body, body[:300])
 
 body = deck([CB, CB, F1], "F1 on the settings screen", extra=ON)
 check("the deck menu", "DECK & RIG" in body, body[:200])
-check("its own lines",
-      "Station" in body and "System" in body, body[:300])
+check("its own lines", "Display" in body and "System" in body, body[:300])
 check("and not the digimodes'", "Tune Settings" not in body, body[:300])
+# Station is not a line: the screen behind this menu is the station editor.
+check("and not a second list of the station fields",
+      "Station" not in body, body[:300])
 
 body = deck([CB, F1], "F1 on the log screen", extra=ON)
 check("the logging menu", "LOGGING" in body, body[:200])
@@ -101,9 +103,9 @@ print("\nEsc backs out inside an area, never across one")
 # The station menu's parent is the deck menu, not a shared root. When every
 # menu backed out to one root, Esc from here landed on the digimode screen's
 # menu -- a different area.
-body = deck([CB, CB, F1, "1", "\x1b"], "station then Esc", extra=ON)
-check("Esc from Station lands on the deck menu",
-      "DECK & RIG" in body and "Station" in body, body[:300])
+body = deck([CB, CB, F1, "1", "\x1b"], "display then Esc", extra=ON)
+check("Esc from Display lands on the deck menu",
+      "DECK & RIG" in body and "Display" in body, body[:300])
 check("and not on the digimode menu", "Tune Settings" not in body, body[:300])
 
 print("\nthe ring does not leave a question unanswered")
@@ -155,5 +157,55 @@ print("\nlogging off: the ring lands where it can be switched on")
 body = deck([CB], "^O with logging off")
 check("the logging menu is what comes up", "LOGGING" in body, body[:200])
 check("and it says logging is off", "off" in body, body[:400])
+
+print("\nthe deck and rig screen is edited in place")
+# It was read-only and that was wrong: the station's own details were reachable
+# only by going through a menu to find the editor, and a screen that showed
+# them without letting them be changed invited the attempt and refused it.
+DOWN, ENTER = "\x1b[B", "\r"
+
+body = deck([CB, CB], "the settings screen", extra=ON)
+check("the cursor starts on the first editable row",
+      "\u25b8Callsign" in body, body[:300])
+check("it says the arrows pick and Enter edits",
+      "\u2191\u2193 pick" in body and "Enter edit" in body, body[-120:])
+# The ceiling, not the live reading. The label said "Power" for a CAT reading
+# while `TX_POWER_MAX` -- the thing an operator sets -- was not on the screen.
+check("the power ceiling is labelled as a maximum",
+      "Max power" in body, body[:400])
+# The live power reading is NOT on this screen. `_power_now()` asks the radio
+# and falls back to the setting only when it will not answer, so a row for
+# typing it invites setting a number the radio contradicts -- and every
+# reading on here cost a round trip, five times a second, which is what made
+# the screen feel slow. `{power}` substitutes the reading, so the token is
+# unaffected.
+check("the live power reading is not on it", "Power now" not in body,
+      body[:400])
+check("nor are the radio's other readings",
+      "READ FROM THE RIG" not in body, body[:400])
+
+body = deck([CB, CB] + [DOWN] * 5 + [ENTER], "Down x5 then Enter", extra=ON)
+check("Enter opens the editor for the row the cursor is on",
+      "EDIT" in body and "Antenna" in body, body[:200])
+
+# Read-only rows are drawn but never landed on. A cursor that could sit on the
+# VFO and do nothing on Enter would read as a broken key.
+body = deck([CB, CB] + [DOWN] * 40, "Down forty times", extra=ON)
+check("the cursor wraps among the editable rows and no further",
+      "\u25b8" in body, body[:400])
+for ro in ("\u25b8VFO", "\u25b8Rig mode", "\u25b8Transmit", "\u25b8Power now"):
+    check(f"it never lands on {ro[1:]}", ro not in body, body[:400])
+
+print("\nBand belongs to the digimodes, not the deck")
+# It tunes to the digimode calling frequency for the band, which is a digital
+# modes decision and useless to anything else. It was briefly moved to the
+# deck menu on the reasoning that a band is a property of the radio -- which
+# is true of the band and false of this entry.
+body = deck([F1], "the digimode menu")
+check("Band is on the digimode menu", "Band" in body, body[:300])
+body = deck([CB, CB, F1], "the deck menu", extra=ON)
+check("and not on the deck menu", "Band" not in body, body[:300])
+check("which still has the rest", "Display" in body and "System" in body,
+      body[:300])
 
 sys.exit(report())
