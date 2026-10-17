@@ -215,6 +215,25 @@ class Rigctld:
             return False
         return self.send_cat(f"FA{hz:09d};")
 
+    def set_mode(self, mode, width=0):
+        """Set the operating mode. Returns whether the command went.
+
+        hamlib's own names -- `PKTUSB` is what the FTX-1's DATA-U reports as
+        and what setting it back requires. `width` of 0 asks rigctld for the
+        radio's normal passband for that mode, which is what is wanted in
+        every case here: WSPR does not care about the filter and changing it
+        would be a second thing to put back.
+
+        **Returning True means the command was SENT.** Read `mode()` back to
+        find out what the radio did, the same discipline `set_ptt` carries
+        and for the same reason.
+        """
+        name = str(mode or "").strip().upper()
+        if not name:
+            return False
+        return self._talk(f"M {name} {int(width)}",
+                          expect_reply=False) is not None
+
     def mode(self):
         """(mode, passband_hz) as the radio reports them, or ("", 0).
 

@@ -243,4 +243,47 @@ with tempfile.TemporaryDirectory() as tmp:
     r.stop()
     check("stopping twice is harmless", True, "")
 
+print("\nthe calibration probe never costs a window")
+# The codec takes one client. A one-second probe straddling the slot
+# boundary would make the window's `arecord` fail "Device or resource busy",
+# which trades a decode for a meter reading.
+with tempfile.TemporaryDirectory() as tmp:
+    sp = Spawner([FakeProc(finish_after=9), FakeProc(finish_after=9)])
+    r = wsprrx.Receiver(tmp, spawn=sp)
+    probe = r.start_probe()
+    check("a probe starts", probe.endswith("probe.wav"), probe)
+    check("and is running", r.probing, "")
+    got = r.start_capture(WHEN, "40 m", DIAL)
+    check("a window starts anyway", bool(got), got)
+    check("and the probe was killed to make room", not r.probing, "")
+    check("the window is what is recording", r.busy_capturing, "")
+
+print("\nand a probe refuses while a window is recording")
+with tempfile.TemporaryDirectory() as tmp:
+    sp = Spawner([FakeProc(finish_after=9)])
+    r = wsprrx.Receiver(tmp, spawn=sp)
+    r.start_capture(WHEN, "40 m", DIAL)
+    equals("the probe is refused", r.start_probe(), "")
+    check("the window is untouched", r.busy_capturing, "")
+    equals("and nothing extra was spawned", len(sp.cmds), 1)
+
+print("\na probe's level is read off the file it wrote")
+with tempfile.TemporaryDirectory() as tmp:
+    # finish_after=1, so the FIRST poll reports it still running. With a
+    # process that had already exited, "nothing while it runs" passed
+    # because the probe had completed AND failed -- the file was not
+    # written yet -- which is a pass for the opposite reason.
+    sp = Spawner([FakeProc(finish_after=1)])
+    r = wsprrx.Receiver(tmp, spawn=sp)
+    path = r.start_probe()
+    equals("nothing while it runs", r.probe_done(), "")
+    check("and it is still accounted for", r.probing, "")
+    wav(path)
+    equals("then the path, once", r.probe_done(), path)
+    equals("and not twice", r.probe_done(), "")
+    check("the probe is finished with", not r.probing, "")
+    check("the command is a one-second capture",
+          "-d" in sp.cmds[0] and sp.cmds[0][sp.cmds[0].index("-d") + 1] == "1",
+          str(sp.cmds[0]))
+
 report()

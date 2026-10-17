@@ -128,6 +128,7 @@ MENU_PARENT = {
     # The danger zone DOES go back to the WSPR menu: arriving there is
     # deliberate and leaving should be, which is why `danger` does the same.
     "wspr_danger": "wspr",
+    "wspr_audio": "wspr",
 }
 
 DISPLAY = {
@@ -661,21 +662,16 @@ def wspr_menu(state=None):
     ]
     # Only with a radio that can be tested into. Keyed and time-bounded, so
     # it sits behind a menu rather than under a key that can be brushed.
-    # The two audio levels, beside the test tone that is used to set them.
-    # Transmit is WSPR's own digital amplitude; receive is the capture mixer,
-    # which WSPR sets while it owns the codec and puts back afterwards.
-    items.append(("l", f"TX audio level               "
-                       f"{st.get('tx_level', 50)}%"))
-    items.append(("g", f"RX capture gain              "
-                       f"{st.get('rx_gain', 70)}%"
-                       + (f" — {st.get('dbfs'):.0f} dBFS"
-                          if st.get("dbfs") is not None else "")))
-    items.append(("c", "Calibrate transmit audio     a steady tone"))
-    # Only worth a row when there is a rotation to check, but harmless with
-    # one band and clearer than a key that appears and disappears.
-    items.append(("k", f"Check hop bands for DATA-U   "
-                       f"{st.get('hop_count', 1)} band"
-                       f"{'' if st.get('hop_count', 1) == 1 else 's'}"))
+    # **One row, not three.** The transmit level, the capture gain and the
+    # test tone that sets them are one concern -- §6b calls it calibrating
+    # the audio -- and they were three rows that pushed this menu to 16.
+    # `menus.render` goes two-column above `height - 6`, which on the panel
+    # is 14, and the second column has no room for the values. A WSPR menu
+    # without its current values on the lines is the one thing this menu is
+    # for, so the item count is a design constraint and not an accident.
+    items.append(("a", f"Audio levels                 "
+                       f"TX {st.get('tx_level', 50)}%  "
+                       f"RX {st.get('rx_gain', 70)}%"))
     # Last, and named so nobody arrives in it by accident.
     items.append(("z", "Danger zone — clear spots"))
     return {
@@ -683,6 +679,37 @@ def wspr_menu(state=None):
         "items": items,
         "footer": "Esc back   ↑↓ move   Enter select   "
                   "^O ^P locked while running",
+    }
+
+
+def wspr_audio_menu(state=None):
+    """Transmit level, capture gain, and the tone that sets the first.
+
+    Together because they are one job, and because the measured dBFS of the
+    last capture belongs beside the gain it judges -- a gain control with no
+    meter is a knob.
+
+    The two are set by DIFFERENT mechanisms and the menu says so, because an
+    operator who knows the deck shares a codec with fldigi will reasonably
+    ask which of these touches it. See §6a1.
+    """
+    st = dict(state or {})
+    dbfs = st.get("dbfs")
+    heard = ("no capture yet" if dbfs is None else f"{float(dbfs):.0f} dBFS")
+    return {
+        "title": "WSPR AUDIO",
+        "items": [
+            ("t", f"TX audio level               "
+                  f"{st.get('tx_level', 50)}%"),
+            (" ", "   WSPR's own amplitude — not the shared mixer"),
+            ("r", f"RX capture gain              "
+                  f"{st.get('rx_gain', 70)}%"),
+            (" ", f"   the shared mixer, put back on stop — {heard}"),
+            ("c", "Calibrate transmit        a tone, + and - to set"),
+            ("m", "Calibrate receive         a meter, + and - to set"),
+        ],
+        "footer": "Esc back   ↑↓ move   Enter select   "
+                  "t and r step the levels here",
     }
 
 
@@ -748,6 +775,9 @@ def wspr_band_menu(chosen=(), current=""):
     title = "WSPR BAND"
     if len(picked) > 1:
         title += f" — hopping {len(picked)}"
+    # **No mode check here.** Selecting a band now SETS it to a data mode
+    # and gives the previous mode back on leaving -- the check this replaced
+    # told the operator to go and do by hand what the deck can do itself.
     return {"title": title, "items": items,
             "footer": "Esc back  Enter use this one  "
                       "Space hop on/off  [*] in rotation"}

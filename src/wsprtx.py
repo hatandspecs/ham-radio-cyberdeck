@@ -49,6 +49,17 @@ TX_TIMEOUT_S = 118.0
 # radio set to 5 W and the ALC half-scale, so this is the control that was
 # missing rather than a refinement. The floor is 1 and not 0 because a level
 # of nothing is an unkeyed transmitter dressed up as a transmission.
+# How long to let the PTT readback catch up before concluding the radio did
+# not key. The FTX-1 does not report PTT the instant the command lands, and
+# asking once answered False on a radio that was keyed.
+# The calibration tone is longer than the menu's one-shot: the operator is
+# adjusting a level under it and watching a meter settle, which ten seconds
+# does not allow. Still bounded, for the same reason everything here is.
+CAL_TONE_S = 40.0
+
+PTT_CONFIRM_S = 0.6
+PTT_POLL_S = 0.05
+
 DEFAULT_LEVEL = 50
 MIN_LEVEL = 1
 
@@ -219,7 +230,18 @@ class Transmitter:
             return "no rig"
         if not self.rig.set_ptt(True):
             return "PTT command failed"
+        # **The readback is given time to become true.** Asked immediately,
+        # the FTX-1 has not reported PTT yet and answers False -- so the
+        # deck keyed the radio, read "not keyed", unkeyed it and reported
+        # "the radio did not key", which is what an operator saw as a brief
+        # click followed by a refusal. The radio is already keyed at this
+        # point, so the wait costs nothing that is not already happening.
         state = self.rig.ptt()
+        waited = 0.0
+        while state is not True and waited < PTT_CONFIRM_S:
+            time.sleep(PTT_POLL_S)
+            waited += PTT_POLL_S
+            state = self.rig.ptt()
         if state is False:
             # Unkey anyway: the command may have arrived late, and leaving
             # a maybe-keyed radio is the thing this module exists to avoid.

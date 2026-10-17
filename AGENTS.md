@@ -619,6 +619,9 @@ while running, band hopping, a session log, spot upload. The design is
 | band table | `src/wsprbands.py` | all 11 dials confirmed three ways |
 | slot schedule, hopping, ToT | `src/wsprsched.py` | injected clock |
 | spot upload | `src/wsprnet.py` | protocol from WSJT-X's source, no network in tests |
+| grid distance and bearing | `src/grid.py` | **validated against this station's own wsprnet rows**, 498 to 6855 km |
+| capture mixer | `src/wsprgain.py` | injected runner, so no sound card in tests; read before write, restored on stop |
+| transmit level | `src/wsprtx.py` | digital amplitude, not the shared playback mixer |
 
 255 checks in `tests/test_wspr.py`, `test_wsprsched.py`, `test_wsprnet.py`.
 `tools/wspr_bench.py` benchmarks the decoder, `tools/wspr_rx.py` captures and
@@ -727,6 +730,54 @@ scenario below it read the wrong screen. `test_area_ring.py` also asserted
 the ring's *size* three times. A fifth area costs one edit per file plus
 those three checks — the constants are named `TO_CHAT`/`TO_DIGI` at the top
 of each file for exactly that reason.
+
+### WSPR works on the air — 2026-10-17
+
+**Transmitting and being spotted worldwide.** From this station on 40 m at
+5 W: `HB9VQQ` in Switzerland at 6599 km, `WI6P` at 3617 km, `W7BJH` at
+3669 km, seven receivers in one slot. Receiving at the same time —
+`N3AIU`, `WW0WWV`, `W9RAG` at 0.2 W, `KF9KV` at -4 dB. The uploader's
+`version=cyberdeck` is visible in wsprnet's own records.
+
+**The audio failure was authorization, and sudo was the wrong tool.**
+`cyberdeck-ui` runs as `deck`, and stopping fldigi needs privilege. A
+sudoers `NOPASSWD` rule parses, works from a login shell, and still fails
+from inside the service — which has no tty, no PAM session, and a
+`CapabilityBoundingSet` narrowed to `CAP_SYS_TTY_CONFIG`. The route that
+works is **polkit**, which is what this deck already uses for WiFi:
+`polkit/10-cyberdeck-services.rules`, scoped to one user, one action
+(`manage-units`), one unit and three verbs. `docs/wspr_deploy.md` §4b is the
+install, and it is **a dependency of the feature, not hardening**. Verified
+on the deck: the stock policy for `manage-units` is `auth_admin_keep`, so a
+grant that does not prompt could only have come from the rule.
+
+### The second round of panel findings — same day
+
+| What | Why |
+|---|---|
+| **Scrolling the spot list was laggy** | `_draw_wspr` read and parsed the whole spot log on every draw, and the draw loop runs on every keypress. The menu did the same through `_menu_for`. Both cached, invalidated on write |
+| **No way out of the selected list** | Esc tested the running check first, so it always answered "^X stops it". The selection is released first now, and the footer changes to list keys while a spot is selected |
+| **TX audio ~2x too hot** | 50% amplitude made close to 10 W against a 5 W setting with the ALC half-scale. `WSPR_TX_LEVEL` scales the rendered samples — **not the playback mixer, which fldigi shares.** The test tone uses the same level, or it calibrates nothing |
+| **No RX gain from the deck** | `WSPR_RX_GAIN` sets the capture mixer, which IS shared — safe only because WSPR owns the codec exclusively. Read before write, restored on stop. Every capture's dBFS is shown beside it, which is what makes a gain control judgeable |
+| **No inhibit indicator** | Transmit was refused with nothing on screen to say why, while every other screen carries it. In the header, displacing `next: TX` — which under an inhibit is a false statement |
+| **KM empty** | WSPR carries a grid and no distance. `src/grid.py` computes it, **validated against this station's own wsprnet rows**: inside 0.5 km on every six-character path from 498 to 6855 km. Not stored — both figures are derivable from the two grids already in each record |
+| **The screen was tight** | The spot row used 44 of 66 columns with no gaps. Respaced, with KM and AZ |
+
+### The ring-hop trap, in full
+
+**Six test files hard-coded one `^O` from the boot screen** to reach the
+digimodes or the conversation. WSPR made the ring four areas, so that hop
+lands on WSPR and every scenario below it reads the wrong screen — 31
+failures in `test_menu_arrows` alone, and the file that looked worst
+(`test_console_keys`) was a *second* site in a file whose constant had
+already been fixed. `test_area_ring.py` also asserts the ring's **size**
+three times, which cannot hide behind a name.
+
+A fifth area costs: one edit to the `TO_CHAT`/`TO_DIGI` constant in each of
+`test_cold_boot`, `test_decode_park`, `test_screen`, `test_screen_toggles`,
+`test_menu_nav`, `test_console_keys`, `test_state`, `test_menu_arrows`, plus
+the three size checks in `test_area_ring`. **Grep for `\x0f` before
+assuming the constants cover it.**
 
 **The `_leave_cleanly` fix was confirmed on the hardware by that deploy.**
 The journal now reads `Deactivated successfully` on a restart where every

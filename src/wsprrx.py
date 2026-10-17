@@ -35,6 +35,10 @@ CAPTURE_SECONDS = 114
 #: measured 33.7 s for a deep search over a four-signal window, and a slot is
 #: 120 s. This exists so a wedged `wsprd` cannot accumulate forever, not to
 #: cut short a decode that is working.
+# How long a calibration probe records. Long enough for an RMS that is not
+# dominated by one syllable of noise, short enough that the meter feels live.
+PROBE_SECONDS = 1
+
 DECODE_TIMEOUT_S = 110
 
 IDLE = "idle"
@@ -96,6 +100,7 @@ class Receiver:
         self._spawn = spawn or self._real_spawn
         self._now = now or time.monotonic
         self._capture = None          # (proc, path, band, started)
+        self._probe = None            # (proc, path, started), calibration
         self._decode = None           # (proc, path, band, started)
         self.captured = 0
         self.decoded = 0
@@ -118,6 +123,12 @@ class Receiver:
         return IDLE
 
     @property
+    def busy_capturing(self):
+        """Whether a real window is recording. The probe must not start one
+        on top of it: the codec takes one client."""
+        return self._capture is not None
+
+    @property
     def busy_decoding(self):
         """Whether a decode is still running. Shown, not enforced.
 
@@ -137,6 +148,12 @@ class Receiver:
         """
         if self._capture is not None:
             return ""
+        # **A probe is killed to make room; a window is never killed for a
+        # probe.** The codec takes one client, so a one-second calibration
+        # probe straddling the slot boundary would make this window's
+        # `arecord` fail "Device or resource busy" -- trading a decode for a
+        # meter reading. The reverse refusal is in `start_probe`.
+        self.stop_probe()
         os.makedirs(self.workdir, exist_ok=True)
         path = os.path.join(self.workdir, capture_filename(when))
         cmd = arecord_command(path, self.device, seconds)
@@ -148,6 +165,66 @@ class Receiver:
             return ""
         self._capture = (proc, path, band, self._now())
         return path
+
+    def start_probe(self, seconds=PROBE_SECONDS):
+        """Capture a short sample for a level reading. Returns its path or "".
+
+        For the calibration screen, which needs a figure every second or so
+        rather than every two minutes. One file, overwritten: nothing keeps
+        a probe and a timestamped name would leave a directory full of them.
+
+        Refuses while a real window is running, for the same reason
+        `start_capture` refuses a second one -- the codec is exclusive, and
+        a probe that killed a session's window would trade a decode for a
+        meter reading.
+        """
+        if self._capture is not None or self._probe is not None:
+            return ""
+        os.makedirs(self.workdir, exist_ok=True)
+        path = os.path.join(self.workdir, "probe.wav")
+        try:
+            proc = self._spawn(arecord_command(path, self.device, seconds))
+        except Exception as exc:
+            self.last_error = f"arecord: {exc}"
+            return ""
+        self._probe = (proc, path, self._now())
+        return path
+
+    def probe_done(self):
+        """The finished probe's path, or "" while it runs or if it failed.
+
+        Polled, never waited on: this is called from the draw loop.
+        """
+        if self._probe is None:
+            return ""
+        proc, path, _started = self._probe
+        if proc.poll() is None:
+            return ""
+        self._probe = None
+        if proc.returncode != 0 or not os.path.exists(path):
+            err = ""
+            try:
+                err = (proc.stderr.read() or "").strip().splitlines()[-1]
+            except Exception:
+                pass
+            self.last_error = f"arecord: {err}" if err else "arecord failed"
+            return ""
+        return path
+
+    @property
+    def probing(self):
+        return self._probe is not None
+
+    def stop_probe(self):
+        """Kill a running probe. For leaving the calibration screen."""
+        if self._probe is None:
+            return
+        proc = self._probe[0]
+        self._probe = None
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
     def start_decode(self, path, band, dial_hz):
         """Begin a decode. Returns whether it started.
@@ -248,7 +325,9 @@ class Receiver:
         Both, and neither raises: this is called from the path that puts
         fldigi back, and a failure here must not stop that happening.
         """
-        for holder in (self._capture, self._decode):
+        # The probe too: it holds the exclusive codec exactly as a window
+        # does, and one left running would keep fldigi from reopening it.
+        for holder in (self._capture, self._decode, self._probe):
             if holder is None:
                 continue
             try:
@@ -257,3 +336,4 @@ class Receiver:
                 pass
         self._capture = None
         self._decode = None
+        self._probe = None

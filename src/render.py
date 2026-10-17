@@ -1763,6 +1763,116 @@ def wspr_levels(tx_level=None, rx_gain=None, dbfs=None):
     return out
 
 
+WSPR_METER_CELLS = 30
+
+# What the receive meter spans. `wsprd` wants roughly -30 to -20 dBFS, so the
+# scale runs well either side of that and marks the band that is right --
+# an operator setting a level needs to see which way to go, not only that
+# the current value is wrong.
+METER_FLOOR_DB = -60.0
+METER_CEIL_DB = 0.0
+METER_GOOD_LO = -32.0
+METER_GOOD_HI = -18.0
+
+
+def wspr_meter(dbfs, cells=WSPR_METER_CELLS):
+    """A level meter as `(text, attr)` segments.
+
+    The bar fills to the reading and the stretch that is RIGHT is drawn
+    differently from the stretches either side of it, so the target is part
+    of the meter rather than something to remember.
+    """
+    def cell_of(db):
+        span = METER_CEIL_DB - METER_FLOOR_DB
+        return int(round(cells * (max(METER_FLOOR_DB, min(METER_CEIL_DB, db))
+                                  - METER_FLOOR_DB) / span))
+
+    if dbfs is None:
+        return [(" [", "dim"), ("-" * cells, "dim"), ("]", "dim"),
+                ("  no audio yet", "dim")]
+    lo, hi = cell_of(METER_GOOD_LO), cell_of(METER_GOOD_HI)
+    at = cell_of(float(dbfs))
+    out = [(" [", "dim")]
+    for i in range(cells):
+        good = lo <= i < hi
+        if i < at:
+            out.append(("#", "reverse" if good else "bright"))
+        else:
+            out.append((":" if good else ".", "dim"))
+    out.append(("]", "dim"))
+    ok = METER_GOOD_LO <= float(dbfs) <= METER_GOOD_HI
+    out.append((f" {float(dbfs):6.1f} dBFS", "" if ok else "reverse"))
+    out.append(("  low" if float(dbfs) < METER_GOOD_LO else
+                ("  high" if float(dbfs) > METER_GOOD_HI else "  good"),
+                "dim" if ok else "bright"))
+    return out
+
+
+def wspr_cal_screen(width, height, state=None, message="", footer=""):
+    """The calibration screen: one level, one meter, and plus and minus.
+
+    Two kinds, transmit and receive, because they are the same job against
+    different meters -- the radio's own power meter for transmit, the deck's
+    dBFS reading for receive. Keeping them one screen keeps `+` and `-`
+    meaning the same thing in both.
+    """
+    st = dict(state or {})
+    kind = str(st.get("kind") or "tx").lower()
+    out = []
+    title = (" WSPR CALIBRATE — TRANSMIT" if kind == "tx"
+             else " WSPR CALIBRATE — RECEIVE")
+    right = str(st.get("band") or "")
+    pad = max(1, width - len(title) - len(right) - 1)
+    out.append([((title + " " * pad + right + " ")[:width], "reverse")])
+    out.append(rule(width))
+    out.append([(" " * width, "")])
+
+    level = st.get("level")
+    label = "TX audio level" if kind == "tx" else "RX capture gain"
+    out.append(_pad([(f"   {label}  ", ""),
+                     (f" {int(level) if level is not None else 0}% ",
+                      "reverse")], width))
+    out.append([(" " * width, "")])
+
+    if kind == "tx":
+        # The radio's own meter is the instrument here, so the screen's job
+        # is to say what the deck is sending and what the radio reports
+        # back -- not to draw a meter the deck cannot measure.
+        watts = st.get("watts")
+        dbm, exact = st.get("dbm"), st.get("dbm_exact")
+        out.append(_pad(wspr_power(watts, dbm, exact,
+                                   st.get("ceiling", 0),
+                                   st.get("power_fallback")), width))
+        out.append([(" " * width, "")])
+        state_line = ("   transmitting — watch the radio's power meter"
+                      if st.get("keyed") else
+                      "   not transmitting")
+        out.append([(state_line[:width].ljust(width),
+                     "bright" if st.get("keyed") else "dim")])
+        out.append([(" " * width, "")])
+        for hint in ("   Set the radio's drive so its meter reads what",
+                     "   the deck reports; watch the dBm highlight."):
+            out.append([(hint[:width].ljust(width), "dim")])
+    else:
+        out.append(_pad(wspr_meter(st.get("dbfs")), width))
+        out.append([(" " * width, "")])
+        state_line = ("   listening" if st.get("listening")
+                      else "   not listening")
+        out.append([(state_line[:width].ljust(width),
+                     "bright" if st.get("listening") else "dim")])
+        out.append([(" " * width, "")])
+        for hint in ("   Aim for the marked stretch of the meter.",
+                     "   Too loud decodes worse than too quiet."):
+            out.append([(hint[:width].ljust(width), "dim")])
+
+    while len(out) < height - 2:
+        out.append([(" " * width, "")])
+    out.append([((" " + message)[:width].ljust(width),
+                 "bright" if message else "")])
+    out.append([(footer[:width].ljust(width), "dim")])
+    return out[:height]
+
+
 def wspr_screen(spots, width, height, state=None, message="", footer=""):
     """The WSPR screen: what is being heard, and what the deck is doing.
 
@@ -1815,8 +1925,11 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     # two header rows, the column heading, the rule above the state block,
     # four state rows, and the footer.
     body = max(1, height - WSPR_HEADER_ROWS - 1 - 1 - WSPR_STATE_ROWS - 1)
-    heading = (f" {'UTC':<4} {'dB':>4} {'CALL':<10}{'GRID':<7}"
-               f"{'dBm':>4} {'BAND':<6}{'KM':>5}")
+    # **Spaced out, not packed.** The first layout used 44 of 66 columns and
+    # still read as a wall, because the fields were adjacent. There are 22
+    # columns of slack on the panel and this spends them on gaps.
+    heading = (f" {'UTC':<5}  {'dB':>3}  {'CALL':<10} {'GRID':<6} "
+               f"{'dBm':>3}  {'BAND':<5} {'KM':>5}  {'AZ':>3}")
     out.append([(heading[:width].ljust(width), "dim")])
     # The arrows select and scroll. A session gathers hundreds of spots and
     # the screen holds ten, so without this the older ones were logged and
@@ -1837,12 +1950,15 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
         # hour apart answer different questions, and a session that hopped
         # is unreadable without it.
         here = sel is not None and top + row == sel
-        line = (f"{'\u25b8' if here else ' '}{when:<5} {spot.get('snr', ''):>4} "
-                f"{str(spot.get('call', '')):<10}"
-                f"{str(spot.get('grid', '') or '-'):<7}"
-                f"{spot.get('dbm', ''):>4} "
-                f"{str(spot.get('band', '') or ''):<6}"
-                f"{(str(km) if km else ''):>5}")
+        az = spot.get("az")
+        line = (f"{'\u25b8' if here else ' '}{when:<5}  "
+                f"{spot.get('snr', ''):>3}  "
+                f"{str(spot.get('call', '')):<10} "
+                f"{str(spot.get('grid', '') or '-'):<6} "
+                f"{spot.get('dbm', ''):>3}  "
+                f"{str(spot.get('band', '') or ''):<5} "
+                f"{(str(round(km)) if km else ''):>5}  "
+                f"{(str(round(az)) if az is not None else ''):>3}")
         out.append([(line[:width].ljust(width), "reverse" if here else "")])
     while len(out) < WSPR_HEADER_ROWS + 1 + body:
         out.append([(" " * width, "")])

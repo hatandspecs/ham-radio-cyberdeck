@@ -234,16 +234,13 @@ check("stopped, it says so rather than showing a clock",
       "not running" in body, body)
 
 print("\nthe hop check is offered, and refuses without rig control")
-body = deck([TO_WSPR, F1["linux"], "k"], "k checks the hop bands",
-            settle=3.4)
-check("it reports rather than doing nothing silently",
-      "hop check" in body or "rig control" in body, body[-300:])
+# The mode check moved to the band picker; its case is below.
 
 print("\ncalibrate transmit audio never fails silently")
 # "calibrate transmit audio does nothing": all three refusals wrote to the
 # WSPR screen's message line, UNDERNEATH the menu that was still open.
-body = deck([TO_WSPR, F1["linux"], "c"], "c with transmit inhibited",
-            settle=3.4)
+body = deck([TO_WSPR, F1["linux"], "a", "c"], "c with transmit inhibited",
+            settle=3.6)
 check("the menu is gone, so the message can be read",
       "Calibrate transmit audio" not in body, body)
 check("and it says what is in the way",
@@ -258,5 +255,57 @@ check("an empty list does not crash or mark a row",
 print("\nthe spot heading has a band column")
 body = deck([TO_WSPR], "the heading", settle=3.0)
 check("BAND is a column", "BAND" in body, body)
+
+print("\nthe WSPR menu stays in ONE column, so the values stay on it")
+# `menus.render` goes two-column above `height - 6` items, which on the
+# panel is 14 -- and the second column has no room for the current values,
+# which is the one thing this menu exists to show. Adding the two audio
+# levels and the mode check as separate rows took it to 16 and silently
+# dropped every value; five checks in this file caught it. The item count is
+# a design constraint, so it is asserted directly.
+d = menus.wspr_menu({"tx_level": 25, "rx_gain": 70, "timeout_minutes": 60})
+equals("13 items, with one to spare under the threshold",
+       len(d["items"]) <= 14, True)
+body = deck([TO_WSPR, F1["linux"]], "the menu keeps its values", settle=3.0)
+for want in ("20%", "60 min", "wspr.log", "TX 25%"):
+    check(f"the menu still shows {want!r}", want in body, body)
+
+print("\nthe audio levels are one submenu, which is one job")
+body = deck([TO_WSPR, F1["linux"], "a"], "a opens the audio menu",
+            settle=3.2)
+check("it opens", "WSPR AUDIO" in body, body[:120])
+check("the transmit level is there", "TX audio level" in body, body)
+check("and the capture gain", "RX capture gain" in body, body)
+check("and the tone that sets the first", "Calibrate" in body, body)
+# Which of the two touches the mixer fldigi shares is the question an
+# operator will ask, so the menu answers it without being asked.
+check("it says which one is the shared mixer",
+      "shared mixer" in body, body)
+
+print("\nboth levels cycle from that menu")
+body = deck([TO_WSPR, F1["linux"], "a", "t"], "t cycles the TX level",
+            settle=3.4)
+check("the transmit level moved off 50", "TX audio level" in body, body)
+body = deck([TO_WSPR, F1["linux"], "a", "r"], "r cycles the RX gain",
+            settle=3.4)
+check("the capture gain reports what it did",
+      "capture gain" in body.lower(), body)
+# It must NOT touch the mixer while fldigi holds it.
+check("and says it applies when WSPR starts",
+      "when WSPR starts" in body or "applies" in body, body[-300:])
+
+print("\nEsc from the audio menu goes back to the WSPR menu, not out")
+body = deck([TO_WSPR, F1["linux"], "a", ESC], "Esc from the audio menu",
+            settle=3.4)
+check("the WSPR menu is what is drawn", "Transmit percent" in body, body)
+
+print("\nthe mode check moved to the band picker, where the rotation is")
+body = deck([TO_WSPR, F3["linux"]], "the picker offers it", settle=3.0)
+check("the picker advertises it", "k check modes" in body, body[-200:])
+body = deck([TO_WSPR, F3["linux"], "k"], "k runs it", settle=3.4)
+check("it reports rather than doing nothing silently",
+      "hop check" in body or "rig control" in body, body[-300:])
+check("and the menu is gone, so the sentence can be read",
+      "WSPR BAND" not in body[:120], body[:120])
 
 report()

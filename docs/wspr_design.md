@@ -494,6 +494,44 @@ The toggles compose, and the compositions are all meaningful: WSPR off is
 idle; WSPR on with Decode off is a level check; WSPR and Decode on with
 Transmit off is a receive-only monitor; all three on is a beacon.
 
+## 6a1. The two audio levels, and why they are set differently
+
+**Transmit is a digital amplitude. Receive is the ALSA mixer.** The asymmetry
+is not an inconsistency; it follows from what each side can reach without
+affecting the digimodes.
+
+`WSPR_TX_LEVEL` scales the samples where the beacon is rendered
+(`wsprtx.Transmitter.level`, a percent of full scale). The ALSA *playback*
+mixer would have been the obvious place and is the wrong one: fldigi shares
+it, so turning WSPR down there turns the digimodes down with it. Nothing but
+WSPR plays the rendered file, so scaling it cannot affect anything else. A
+level change drops the cached render, or the next beacon goes out at the old
+amplitude and the operator watches a power meter that does not move. The
+test tone uses the same amplitude, because a tone sent at a level the beacon
+will not use calibrates a transmission that never happens.
+
+Measured on the deck, 2026-10-17: at 50% the radio made close to 10 W with
+its power control set to 5 W and the ALC half-scale. The level is the
+control that was missing, not a refinement.
+
+`WSPR_RX_GAIN` sets the capture mixer, which fldigi also uses — **and that is
+safe only because WSPR owns the codec exclusively.** fldigi is stopped before
+anything is captured (§2), so the control is unobserved for the length of a
+session. `wsprgain.Gain` reads the value before writing, once per session,
+and restores it on stop; that is what makes this a per-function level rather
+than a change to the station. A digital gain on the captured samples was the
+alternative and does nothing useful: the ADC has already decided how much of
+its range the audio used, and multiplying a quiet recording makes a loud
+recording of the same noise.
+
+Percent rather than raw steps, because this codec's range is 0–16 and
+another's is not, and `amixer` speaks percent on all of them.
+
+**What makes the receive level judgeable** is the figure beside it: every
+capture is measured and its dBFS shown, marked when it falls outside roughly
+-32 to -18. That is the WSJT-X analog the operator asked for, and without it
+a gain control is a knob with no meter.
+
 ## 6b. Calibrating the audio
 
 Two levels decide whether WSPR works at all, and neither can be set by
@@ -753,6 +791,25 @@ labeled with a bare duration. The session time-out is **`Session ToT`** on
 the menu and `session m:ss left` on the screen. `Time-out` on its own named
 neither what times out nor what happens.
 
+### Distance and bearing are computed, never stored
+
+WSPR carries a grid square and no distance. `src/grid.py` places a locator
+at the center of its rectangle and gives the great-circle distance and the
+initial bearing, which is how wsprnet and wspr.rocks fill their own km
+column from the same two grids.
+
+**Validated against this station's own wsprnet records** rather than against
+the formula alone: agreement inside 0.5 km on every six-character path from
+498 to 6855 km, including a 6599 km path to Switzerland. Four-character
+grids agree within a few km, which is all they can — a four-character square
+is about 150 km across, so a distance between two of them is good to tens of
+kilometers and no better. The decoder reports four characters for a type 1
+message and six for a type 2, so both occur.
+
+Neither figure is written to the spot log. Both are derivable from the two
+grids that ARE in each record, and a log holding a derived figure beside the
+data it came from invites the two to disagree.
+
 ### The spot list scrolls
 
 A session gathers hundreds of spots and the screen holds ten. **The arrows
@@ -760,6 +817,27 @@ select and scroll**, PgUp/PgDn move by eight, Home and End reach the newest
 and oldest, and Esc drops the selection so the list follows the newest spot
 again. Without this the older spots of a session were logged and unreachable
 without leaving the deck for the file.
+
+### The counts are cached, because the draw loop is not free
+
+`heard` and `sent` came from reading and parsing the whole spot log on every
+draw — and the draw loop runs on every keypress, so scrolling the list
+re-parsed a file that grows all session. The menu did the same, because
+`_menu_for` is rebuilt on every keypress while a menu is open. Both now go
+through `_wspr_counts`, invalidated by every path that writes the log.
+
+A time-based cache was the alternative and is worse: it makes a spot that
+has just been logged take a second to appear in a counter sitting next to
+it.
+
+### Esc releases the selection before anything else
+
+Tested after the running check, Esc answered every press with "WSPR is
+running — ^X stops it", and an operator who had scrolled into the list could
+not get back out. The selection is released first, running or not. While a
+spot is selected the footer is about the list, because that is what the keys
+are doing and because Esc releasing the selection is the one thing there is
+no other way to discover.
 
 ### A refusal is reported where it can be read
 
