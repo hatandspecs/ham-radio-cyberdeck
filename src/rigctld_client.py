@@ -88,6 +88,44 @@ class Rigctld:
     def connected(self):
         return self._talk("f") is not None
 
+    def ptt(self):
+        """Whether the radio reports itself transmitting, or None if unknown.
+
+        `t` in the rigctld protocol: `1` transmitting, `0` receiving.
+
+        **None is not False.** A radio that cannot be read is not a radio
+        known to be receiving, and the difference matters to anything deciding
+        whether it is safe to act. Callers that treat the two alike are the
+        reason this returns three values rather than two.
+        """
+        reply = self._talk("t")
+        if reply is None:
+            return None
+        reply = reply.strip()
+        if reply.startswith("RPRT"):
+            # hamlib's error form, e.g. RPRT -1 for an unsupported command.
+            return None
+        if reply in ("0", "1"):
+            return reply == "1"
+        return None
+
+    def set_ptt(self, on):
+        """Key or unkey the transmitter. Returns whether the command went.
+
+        `T 1` and `T 0`. The serial port rigctld holds carries PTT as well as
+        frequency and mode, which is what makes this possible with fldigi
+        stopped — and stopped is how WSPR runs, so this is WSPR's only way to
+        key the radio. See `docs/wspr_design.md` §3.
+
+        **Returning True means the command was SENT, not that the radio is
+        keyed.** A Yaesu set command answers with silence, so there is nothing
+        to confirm from; `ptt()` is how to find out what actually happened.
+        Anything keying a transmitter should read it back rather than assume,
+        because the failure here is a radio left transmitting.
+        """
+        return self._talk(f"T {1 if on else 0}",
+                          expect_reply=False) is not None
+
     def send_cat(self, command):
         """Forward a raw CAT string such as 'FA014075000;' to the radio."""
         return self._talk(f"w {command}", expect_reply=False) is not None

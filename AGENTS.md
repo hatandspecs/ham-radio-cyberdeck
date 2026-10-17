@@ -467,6 +467,24 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
     There is nothing to infer from, and for a new activity guessing would
     undo the choice the picker asked for a keystroke earlier.
 
+- **A stand-in's worker thread is a race, and the suite is where it shows.**
+  `tests/test_rigctld.py` read `fake.seen[-1]` straight after `set_ptt`.
+  The client returns when its socket closes; the stand-in's server thread
+  appends to `seen` some microseconds later. It passed every interactive
+  run and raised `IndexError` in a full suite run, then passed on rerun —
+  **the worst way for a test to be wrong**, because a rerun "fixes" it.
+
+  The fix is `waited(count)`, which polls until the thread has recorded what
+  it should, with a deadline. **A `sleep` would have hidden it rather than
+  fixed it.** `tests/test_wsprnet.py` was already safe because it reads only
+  after `Uploader.wait()`, which blocks until the queue drains and the worker
+  exits — that method exists for this reason and not for production use.
+
+  Any new test with a background thread in its fixture: synchronize on the
+  thread's own progress, never on elapsed time. Hammering a suspect file —
+  `for i in $(seq 20); do python3 -u tests/x.py >/dev/null || echo FAIL; done`
+  — is how to tell a flake from a pass.
+
 - **Leaving a menu must disarm a pending two-key action, not only arriving
   at one.** `_open_menu` has always cleared `_pending_type_delete`; nothing
   cleared it on the way OUT, and that was covered by accident while Esc from
@@ -615,16 +633,40 @@ stations decoded, `-36.8 dBFS`, offsets 1453 and 1515 Hz above the dial. See
 Nothing in `cyberdeck.py` imports any of it. The deck behaves exactly as it
 did, which is why the install needed no service restart.
 
-1. **The capture loop.** `arecord` into `YYMMDD_HHMM.wav` on the even
-   minute, `wsprd` as a non-blocking subprocess, spots through `dedupe` into
-   the log. `tools/wspr_rx.py` already does all of this once, by hand — it is
-   the closest thing to a specification for it.
-2. **The transmit path.** `wspr.samples` renders; what is missing is the
-   WAV write, `aplay`, and PTT. **`rigctld_client` has no PTT method** —
-   `T 1` / `T 0` is the addition.
-3. **The spot log.** `key=value` lines, `kind=tx`/`kind=rx`, sessions keyed
-   `(name, start)` reusing the logger's concepts with one fixed field set.
-   `wspr_design.md` §5 has the field table.
+1. ~~The capture loop.~~ **DONE** — `src/wsprrx.py`, 53 checks, none of
+   which touch a sound card or `wsprd` (`spawn=` is the seam). Capture and
+   decode are **independent and polled**: a decode outliving its slot must
+   not delay the next capture, and a `tick()` that waited for either would
+   freeze the panel for 114 seconds.
+
+   It distinguishes four things a simpler design conflates: **no end marker
+   is a dead decoder, not an empty window** (recording silence for a killed
+   decoder would be a fact somebody uploads); an empty window IS a success;
+   a capture that wrote nothing or exited busy is a failure with `arecord`'s
+   own message kept; and a wedged decoder is killed at 110 s.
+
+   **What is left to wire** is calling it from the draw loop with
+   `wsprsched`'s decisions and putting the spots through `wsprlog`.
+2. **The transmit path.** `wspr.samples` renders and **PTT now exists**
+   (`set_ptt` / `ptt`, added 2026-10-17 with `tests/test_rigctld.py`, 25
+   checks). What is missing is the WAV write and `aplay`.
+
+   **`ptt()` returns None for "cannot read", never False**, and
+   `set_ptt()` returning True means the command was sent and NOT that the
+   radio is keyed — a Yaesu set command answers with silence. Anything
+   keying the radio reads `ptt()` back. The failure guarded against is a
+   transmitter left keyed.
+3. ~~The spot log.~~ **DONE** — `src/wsprlog.py`, 51 checks. Two record
+   kinds in one file (`kind=rx` a station heard, `kind=tx` a beacon sent),
+   sessions keyed `(name, start)` and DERIVED from the records with
+   newest-wins, counts broken out by kind for the danger zone.
+
+   **`qsolog.read` would have discarded every beacon**, because it requires
+   a callsign and a transmission has no other station's call in it. That is
+   why `wsprlog.read` has its own predicate. The two log formats share one
+   quoting implementation — `qsolog.format_line` and `qsolog.read_lines` were
+   generalized out for this, and `format_record`/`read` now call them — so
+   there is one place the format lives.
 4. **The screen, the menus, the four toggles, the danger zone.**
 5. **The exclusive lock** — `AREA_LOCKED` plus stopping fldigi.
 6. **The TX test tone** and its time bound.

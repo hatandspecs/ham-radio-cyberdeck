@@ -147,11 +147,21 @@ from the radio therefore goes through **`rigctld_client`** directly:
   0.5 W is **27 dBm exactly**, one of the encodable values — so the power
   display would highlight (§6) without the operator touching anything.
 
-* **PTT is the one thing missing.** The client has `frequency`,
-  `set_frequency`, `mode`, `power`, `power_control`, `send_cat` and
-  `read_cat`, and no PTT. rigctld's `T 1` / `T 0` is the addition, and its
-  own docstring already notes that the serial port it holds "also carries
-  PTT". **This is the first thing the transmit path needs.**
+* ~~PTT is the one thing missing.~~ **Added 2026-10-17**: `set_ptt(on)`
+  sends `T 1` / `T 0`, and `ptt()` reads the state back.
+
+  **`ptt()` returns None when the radio cannot be read, not False.** A radio
+  that cannot be read is not a radio known to be receiving, and a caller
+  treating the two alike would read "cannot reach the radio" as "the radio
+  is not transmitting" — the one wrong answer that matters when the failure
+  mode is a transmitter left keyed.
+
+  **`set_ptt()` returning True means the command was SENT, not that the
+  radio is keyed.** A Yaesu set command answers with silence, so there is
+  nothing to confirm from. Anything keying the radio reads `ptt()` back
+  rather than assuming; `tests/test_rigctld.py` pins that distinction with a
+  stand-in that accepts `T 1` and then reports still receiving, which is
+  exactly the shape of a PTT that did not take.
 
 ## 4. Bands and frequencies
 
@@ -639,13 +649,15 @@ listens, the remaining ToT, and the upload state.
 | power to dBm, and exactness | **done** |
 | the `wsprd` output parser | **done** — written against captured real output, and confirmed against the deck's own `wsprd` 2.7.0 |
 | spot deduplication | **done** — a window can decode one transmission twice |
-| the slot schedule, hopping, the ToT | not started |
-| capture and playback | not started |
-| the spot log | not started |
+| the slot schedule, hopping, the ToT | **done** — `src/wsprsched.py` |
+| capture and decode, polled | **done** — `src/wsprrx.py`, no sound card in any test |
+| playback | not started — the WAV write and `aplay` |
 | the screen and menus | not started |
 | the uploader | **done** — `src/wsprnet.py`, protocol read from WSJT-X's source, 59 checks with no network |
 | the band table | **done** — `src/wsprbands.py`, confirmed three ways (§4) |
 | audio level | **done** — `wspr.audio_level`, no `audioop` (§6b) |
+| the spot log | **done** — `src/wsprlog.py`, two record kinds in one file, sessions derived |
+| PTT | **done** — `rigctld_client.set_ptt` / `ptt`, verified against a stand-in |
 | **the whole receive path, end to end** | **proven on the air 2026-10-17** — see §12a |
 
 `tests/test_wspr.py` covers what exists: 91 checks, including the round trip
@@ -678,6 +690,43 @@ genuinely different report rather than a duplicate of itself.
 Deep search makes duplicates likelier, which is a cost of `-d` worth knowing
 alongside its 33.7 s — but not a reason to leave it off, since the fix is
 four lines and a sort.
+
+## 10c. Capture and decode do not wait for each other
+
+`wsprsched` decides when; `src/wsprrx.py` does it. Two subprocesses, both
+**polled** and never waited on, because the main loop draws five times a
+second while `arecord` runs for 114 seconds and `wsprd` for up to 34 on a
+Pi 3A+. A `tick()` that waited for either would freeze the panel for the
+length of a slot.
+
+**They are independent on purpose.** There are about six seconds between the
+end of one window and the start of the next, and a decode routinely outlives
+that. A decode still running when the next slot opens must not delay the
+capture: the next window starts on time, and the decode finishes when it
+finishes. So the receiver holds one capture and one decode and they are not
+the same slot's.
+
+Four conditions it distinguishes, where a simpler design would conflate
+them:
+
+* **No end marker is a dead decoder, not an empty window.** `wsprd` prints
+  `<DecodeFinished>` whether or not anything decoded, so its absence means
+  the run did not finish. Treating the two alike would record a silent band
+  for a decoder that was killed — and silence is a fact somebody might
+  upload.
+* **An empty window is a success.** Nothing heard is the ordinary outcome
+  on a quiet band and is counted as a decode, not a failure.
+* **A capture that wrote nothing, or exited badly, is a failure** with
+  `arecord`'s own last line kept for the screen — including the "Device or
+  resource busy" that means fldigi still holds the codec.
+* **A wedged decoder is killed** at `DECODE_TIMEOUT_S`, generous at 110 s
+  against the 33.7 s a deep search measured. That exists so a stuck `wsprd`
+  cannot accumulate, not to cut short one that is working.
+
+**A second capture is refused rather than replacing the first.** Two
+`arecord` processes on one exclusive codec is the second one failing, and a
+capture that silently replaced the one in progress would lose a window
+without saying so.
 
 ## 11. Testing
 
