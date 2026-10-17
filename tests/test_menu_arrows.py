@@ -31,10 +31,15 @@ DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
 # The deck's own settings are a screen of their own AND the screen the deck
 # opens on, so there is no hop to make: F1 from the boot screen is its menu.
 DECK = ["\x1bOP"]
-# And one ^O reaches the digimodes from there WHATEVER the logging state is:
-# the ring wraps, so the last stop is the conversation whether the log is on
-# it (settings | log | digimodes) or not (settings | digimodes).
-DIGI = CTRL_O
+# And TWO ^O reach the digimodes from there WHATEVER the logging state is:
+# the ring wraps, so the last stop is WSPR and the one before it the
+# conversation, whether the log is on the ring (settings | log | digimodes |
+# WSPR) or not (settings | digimodes | WSPR).
+#
+# **One hop was right until WSPR made the ring four areas.** It then landed
+# on WSPR, where none of the digimode menus exist, and 31 checks in this file
+# failed at once. The hop is named here so a fifth area is one edit.
+DIGI = CTRL_O + CTRL_O
 # Station is gone from this menu: the screen behind it edits those fields
 # directly, each with its substitution token beside it. F1 on the boot screen
 # opens Display and System.

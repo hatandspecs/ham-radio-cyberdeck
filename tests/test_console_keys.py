@@ -52,6 +52,11 @@ def cap(name, term="linux"):
 
 CQ = "CQ CQ CQ DE"          # the opening of the default MEMORY_5
 
+# **Two backwards hops, not one.** WSPR made the ring four areas --
+# settings | log | digimodes | WSPR -- so one `^O` back from the boot screen
+# wraps onto WSPR, where F5 is not a memory key and nothing is composed.
+TO_CHAT = "\x0f\x0f"
+
 
 def compose_of(screen):
     """The compose line: two rows above the hint line."""

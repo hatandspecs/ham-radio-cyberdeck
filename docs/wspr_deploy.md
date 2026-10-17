@@ -214,46 +214,77 @@ session** — but it has to be right before the receive path can be judged,
 because a capture that decodes nothing because of a mixer setting looks
 exactly like a capture path that does not work.
 
-## 4b. On the deck — the sudoers rule WSPR cannot work without
+## 4b. On the deck — the polkit rule WSPR cannot work without
 
 **WSPR stops fldigi to take the codec, and `cyberdeck-ui` runs as `deck`.**
-A plain `sudo systemctl stop cyberdeck-fldigi` from inside the service asks
-for a password, has no tty to ask on, and exits non-zero. fldigi keeps the
-codec, every `arecord` fails `audio open error: Device or resource busy`,
-and a session runs its slot clock for an hour decoding nothing.
+Without authorization for that, fldigi keeps the codec, every `arecord`
+fails `audio open error: Device or resource busy`, and a session runs its
+slot clock for an hour decoding nothing.
 
-The deck refuses to start WSPR in that state rather than pretending to run,
-and reports the systemctl failure — but the rule is what makes the feature
-work:
+**sudo is not the route.** Measured on the deck, 2026-10-17: a sudoers
+`NOPASSWD` rule for `systemctl stop cyberdeck-fldigi` parses, and
+`sudo -u deck sudo -n systemctl stop cyberdeck-fldigi` succeeds from a login
+shell — and the identical call from inside `cyberdeck-ui.service` still
+leaves fldigi holding the codec. The service has no tty and no PAM session,
+and its `CapabilityBoundingSet` is narrowed to `CAP_SYS_TTY_CONFIG`, so the
+setuid helper cannot hold what it needs after becoming root.
+
+**polkit is**, and it is the route this deck already uses for WiFi — see the
+comment at the top of `polkit/10-cyberdeck-networkmanager.rules`, which
+states the same failure in full: a systemd service has no seat and no
+session, polkit sees a subject that is neither active nor inactive, and the
+call falls through to `auth_admin` with no agent to ask.
+
+`polkit/10-cyberdeck-services.rules` is scoped to one user, one action, one
+unit and three verbs. **Notably not `cyberdeck-ui` itself**, which would let
+the terminal stop the thing asking.
+
+On the laptop:
 
 ```bash
-sudo tee /etc/sudoers.d/cyberdeck-wspr >/dev/null <<'EOF'
-deck ALL=(root) NOPASSWD: /usr/bin/systemctl stop cyberdeck-fldigi, \
-    /usr/bin/systemctl start cyberdeck-fldigi, \
-    /usr/bin/systemctl restart cyberdeck-fldigi
-EOF
-sudo chmod 440 /etc/sudoers.d/cyberdeck-wspr
-sudo visudo -c -f /etc/sudoers.d/cyberdeck-wspr
+cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+rsync -av polkit/10-cyberdeck-services.rules deck@cyberdeck.local:/tmp/
 ```
 
-`visudo -c` prints `parsed OK`. **Two commands only, each named in full.** A
-blanket `NOPASSWD: ALL` would hand the whole board to anything that reaches
-the UI process, and `systemctl` without an argument list is the same thing
-with extra steps.
-
-To verify as the service user, which is the only account the answer matters
-for:
+On the deck:
 
 ```bash
-sudo -u deck sudo -n systemctl stop cyberdeck-fldigi
+sed 's/@DECK_USER@/deck/' /tmp/10-cyberdeck-services.rules \
+  | sudo install -D -m 644 /dev/stdin \
+    /etc/polkit-1/rules.d/10-cyberdeck-services.rules
+sudo systemctl restart polkit
+```
+
+Then verify as the service user, which is the only account the answer
+matters for. `systemctl` with no `sudo` is the call the deck makes:
+
+```bash
+sudo -u deck systemctl stop cyberdeck-fldigi
 systemctl is-active cyberdeck-fldigi
-sudo -u deck sudo -n systemctl start cyberdeck-fldigi
+sudo -u deck systemctl start cyberdeck-fldigi
+systemctl is-active cyberdeck-fldigi
 ```
 
-The first prints nothing, the second `inactive`, the third nothing. A
-`sudo: a password is required` from either means the rule is not in effect —
-check the path `which systemctl` reports against the one in the rule, since
-the rule matches on the absolute path.
+Nothing, `inactive`, nothing, `active`. An `Interactive authentication
+required` from either `sudo -u deck` line means the rule is not in effect:
+check that `polkit` restarted, and that the unit name in the rule matches
+`systemctl list-units 'cyberdeck*'`.
+
+A sudoers file from an earlier attempt grants privileges nothing uses and
+can be removed:
+
+```bash
+sudo rm -f /etc/sudoers.d/cyberdeck-wspr
+```
+
+### Two defenses in the deck itself
+
+Because this failure was silent for a whole session: `_service` reports a
+non-zero exit with systemctl's own last line, turning an authorization
+refusal into a sentence naming the rule file, and **`_wspr_start` refuses to
+start while fldigi is still active** instead of running a slot clock over a
+codec it does not have. WSPR without the codec is not a degraded WSPR; it is
+none.
 
 ## 5. If the package is not in the archive
 

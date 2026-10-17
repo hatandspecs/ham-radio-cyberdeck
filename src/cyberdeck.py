@@ -2167,7 +2167,7 @@ class Deck:
             # two minutes, and the only sign was a truncated error. WSPR
             # without the codec is not a degraded WSPR, it is none.
             self._wspr_note("fldigi still holds the audio — WSPR cannot "
-                            "capture (see docs/wspr_deploy.md, sudoers)")
+                            "capture (see docs/wspr_deploy.md §4b)")
             return
         self.wspr.start(time.time())
         self.wspr_spots = []
@@ -2202,19 +2202,28 @@ class Deck:
         """
         import subprocess
         try:
-            r = subprocess.run(["sudo", "systemctl", action, unit],
+            # **No `sudo`.** polkit authorises this, through
+            # `polkit/10-cyberdeck-services.rules` — the same route the WiFi
+            # screen uses and for the same reason. A sudoers rule for the
+            # same two commands works from a login shell and fails from
+            # inside the service, which has no tty, no PAM session, and a
+            # `CapabilityBoundingSet` narrowed to CAP_SYS_TTY_CONFIG.
+            r = subprocess.run(["systemctl", action, unit],
                                capture_output=True, text=True, timeout=60,
                                stdin=subprocess.DEVNULL)
             if r.returncode != 0:
-                # A silent False here cost a session of dead captures: with
-                # no sudoers rule, `sudo` wants a password, there is no tty
-                # to ask on, systemctl exits non-zero, fldigi keeps the
-                # codec and every `arecord` fails "Device or resource busy".
-                # The reason the deck already had is now reported.
+                # A silent False here cost a session of dead captures: fldigi
+                # kept the codec and every `arecord` failed "Device or
+                # resource busy" with nothing on screen to say why. The
+                # message names the file that fixes it, as `wifi.py` does for
+                # its own polkit rule.
                 why = (r.stderr or r.stdout or "").strip().splitlines()
-                self._wspr_note(f"systemctl {action} {unit} failed: "
-                                + (why[-1][:60] if why else
-                                   f"exit {r.returncode}"))
+                tail = why[-1][:52] if why else f"exit {r.returncode}"
+                if "polkit" in tail.lower() or "authoriz" in tail.lower() \
+                        or "authentication" in tail.lower():
+                    tail = "not authorized — see polkit/10-cyberdeck-" \
+                           "services.rules"
+                self._wspr_note(f"systemctl {action} {unit}: {tail}")
             return r.returncode == 0
         except Exception as exc:
             self._wspr_note(f"systemctl {action} {unit}: {exc}")
