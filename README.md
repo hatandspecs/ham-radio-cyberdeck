@@ -39,10 +39,12 @@ It began as the digimodes alone, with the rest hanging off its menu — which
 made the digimode screen the deck's home by accident rather than by anyone's
 decision. They are peers now.
 
-**A fourth is in progress**: WSPR, with transmit, band hopping and spot
-upload. The encoder, decoder parsing, scheduler and uploader are built and
-tested, and the receive path is proven on the air; nothing is wired into the
-interface yet. See [`wspr_design.md`](docs/wspr_design.md).
+**A fourth joined them**: WSPR, with transmit, band hopping and spot upload
+to wsprnet. It is the only area that is **exclusive** — while a session
+runs, the ring does not leave it and fldigi is stopped, because the USB
+codec takes one capture client. Proven on the air on 2026-10-17: 5 W on
+40 m reached 43 receivers in one slot, and 20 m reached Belgium and
+Colombia. See [`wspr_design.md`](docs/wspr_design.md).
 
 ## How
 
@@ -471,6 +473,15 @@ and `F2` / `F3` are that application's own two sub-views.
 | `↑` `↓` | Pick a station field |
 | `Enter` | Edit it in place |
 | `F2` `F3` | Display, System |
+
+| Key | WSPR |
+|---|---|
+| `F2` | Name the session — an unnamed run is logged as `general` |
+| `F3` | Band picker: a number or `Enter` selects and tunes; `Space` toggles the hop rotation |
+| `↑` `↓` | Pick a spot; `Esc` or arrowing off the top follows the newest again |
+| `Ctrl-C` | Stop WSPR — the same key that aborts an over |
+| `F1` `a` | Audio levels, and the two calibration screens |
+| `F1` `w` | Start or stop; `d` decode, `t` transmit, `n` transmit next slot |
 
 Menus take arrow keys as well as their single-key shortcuts: `↑` `↓` move a
 `▸` marker, `Enter` chooses. Transmit starts **inhibited** at every power-on;
@@ -1086,8 +1097,7 @@ It was MIT until 2026-10-15. Two reasons for the change, and one honest
 limitation.
 
 The first reason is the company this program keeps. It drives fldigi (GPLv3)
-and reads hamlib (LGPL); the WSPR work planned next uses `wsprd` out of WSJT-X
-(GPLv3). Calling another program as a separate process imposes nothing either
+and reads hamlib (LGPL); the WSPR area runs `wsprd` out of WSJT-X (GPLv3). Calling another program as a separate process imposes nothing either
 way, but bundling one does, and a permissive license here was the odd one out
 in a stack that is GPL from top to bottom.
 

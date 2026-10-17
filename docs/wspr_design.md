@@ -870,7 +870,15 @@ read `code=exited, status=1/FAILURE`, which means the shutdown path — abort
 transmit, unpark the decoder, restore the console palette — now actually
 runs on a restart.
 
-Nine test files, 604 checks. Only one of them needs a terminal.
+**Proven on the air, 2026-10-17.** 5 W on 40 m reached 43 receivers in a
+single slot; 20 m reached ON5KQ in Belgium at 6060 km, HK4CZE in Colombia,
+and the whole US west coast. Receive decoded eleven stations in one slot,
+including K5NAV at 0.2 W over 2781 km. The uploader's `version=cyberdeck`
+is visible in wsprnet's own records.
+
+Eleven test files: the engines, the screen, the grid arithmetic, the capture
+mixer and one that drives the panel through a pty. Only the last needs a
+terminal.
 
 
 | Piece | State |

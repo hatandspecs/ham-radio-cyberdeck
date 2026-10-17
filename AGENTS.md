@@ -93,7 +93,7 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 - **This project is GPLv3 as of 2026-10-15, and was MIT before that.** Do not
   "restore" the MIT license or copy a permissive header into a new file: the
   change was deliberate. The reason is the stack — fldigi is GPLv3, hamlib is
-  LGPL, and the planned WSPR work uses `wsprd` out of WSJT-X, which is GPLv3,
+  LGPL, and the WSPR area runs `wsprd` out of WSJT-X, which is GPLv3,
   so bundling any of it under a noncommercial or permissive license would
   conflict. A noncommercial license was considered and rejected for exactly
   that reason: GPLv3 §10 forbids adding restrictions, so "noncommercial only"
