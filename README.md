@@ -9,16 +9,23 @@ on the screen but the terminal.
 ## Why
 
 **A radio station should be operable without a desktop.** The usual way to
-run digital modes is a laptop, a window manager, a mouse, and an application
-designed for all three. Everything in that stack is a thing to carry, charge,
-boot and click. None of it is radio.
+run digital modes, or a logbook, or WSPR, is a laptop, a window manager, a
+mouse, and an application designed for all three. Everything in that stack is
+a thing to carry, charge, boot and click. None of it is radio — and opening a
+laptop to operate, after a day spent in front of one, feels like clocking
+back in for a second shift.
 
-So the deck removes the stack. fldigi still does the modem work — it is the
-best thing there is at that and reimplementing it would be foolish — but it
-runs invisibly under Xvfb while a purpose-built terminal owns the console.
-The result reads like a dedicated 1980s packet terminal and does modern
-digital modes, and it runs for hours on a battery because there is almost
-nothing running.
+So the deck removes the stack. fldigi still does the modem work and `wsprd`
+still does the WSPR decoding — both are the best things there are at those
+jobs and reimplementing them would be foolish — but they run invisibly while
+a purpose-built terminal owns the console. The result reads like a dedicated
+1980s packet terminal, does modern digital modes, keeps the log and runs the
+beacons, and it runs for hours on a battery because there is almost nothing
+running.
+
+**What belongs on it is whatever would otherwise need the laptop.** That is
+the whole selection rule, and it is why the deck grew from one application to
+three rather than staying a digimode terminal.
 
 **The constraint is the design.** 512 MB of RAM, one core's worth of
 headroom, a 66x20 console, a font with a small glyph set, and no network most
