@@ -647,15 +647,23 @@ did, which is why the install needed no service restart.
 
    **What is left to wire** is calling it from the draw loop with
    `wsprsched`'s decisions and putting the spots through `wsprlog`.
-2. **The transmit path.** `wspr.samples` renders and **PTT now exists**
-   (`set_ptt` / `ptt`, added 2026-10-17 with `tests/test_rigctld.py`, 25
-   checks). What is missing is the WAV write and `aplay`.
+2. ~~The transmit path.~~ **DONE** — `src/wsprtx.py`, 55 checks, no radio
+   in any of them. Renders (cached), keys, plays via `aplay`, unkeys.
 
-   **`ptt()` returns None for "cannot read", never False**, and
-   `set_ptt()` returning True means the command was sent and NOT that the
-   radio is keyed — a Yaesu set command answers with silence. Anything
-   keying the radio reads `ptt()` back. The failure guarded against is a
-   transmitter left keyed.
+   **Six of its eleven test blocks are about PTT rather than WSPR**, which
+   is the right proportion for the module that keys a transmitter. Every
+   path out of a transmission unkeys: completion, a failed `aplay`, a
+   wedged player past `TX_TIMEOUT_S` (118 s — longer than the 110.6 s
+   signal, shorter than the 120 s slot), `stop()` from the middle, and a
+   player that could not be started.
+
+   **`ptt()`'s three answers are distinguished**: False means the radio did
+   not key and nothing is played; None means unreadable and it proceeds with
+   a note, because refusing would take transmit away from a radio whose
+   readback is unsupported.
+
+   **The audio is cached** and a POWER CHANGE invalidates it. A cache that
+   beaconed the old wattage would announce a power the radio is not making.
 3. ~~The spot log.~~ **DONE** — `src/wsprlog.py`, 51 checks. Two record
    kinds in one file (`kind=rx` a station heard, `kind=tx` a beacon sent),
    sessions keyed `(name, start)` and DERIVED from the records with
@@ -667,7 +675,19 @@ did, which is why the install needed no service restart.
    quoting implementation — `qsolog.format_line` and `qsolog.read_lines` were
    generalized out for this, and `format_record`/`read` now call them — so
    there is one place the format lives.
-4. **The screen, the menus, the four toggles, the danger zone.**
+4. ~~The screen, the menus, the four toggles, the danger zone.~~ **DONE** —
+   `render.wspr_screen`, `render.wspr_toggles`, `render.wspr_power`,
+   `menus.wspr_menu`, `menus.wspr_danger_menu`. 93 checks in
+   `tests/test_wspr_screen.py`, every row asserted to be exactly the screen
+   width at 40, 50, 66 and 80 columns.
+
+   **`render._pad` was needed and is worth knowing about**: a row built from
+   several `(text, attr)` segments has no single string to `ljust`, and an
+   earlier version padded by a whole WIDTH rather than the remainder,
+   producing rows wider than the screen that curses refuses to draw. The
+   danger menu also cut a session name mid-word at 63 columns ("from Satu"),
+   so the name moved to the footer — the same fault the log columns were
+   rebuilt to avoid, found again in a new place.
 5. **The exclusive lock** — `AREA_LOCKED` plus stopping fldigi.
 6. **The TX test tone** and its time bound.
 

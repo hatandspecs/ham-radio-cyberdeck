@@ -398,6 +398,46 @@ shows the snap rather than refusing: a 0.8 dB error in a reported power is
 not a reason to stop a beacon, and the highlight is what makes an operator
 want to fix it. Refusing would turn a readout into an obstacle.
 
+### Keying, and the four ways out
+
+`src/wsprtx.py` keys the radio, plays the rendered audio and unkeys. Three
+properties come before every feature in it, because the worst failure the
+deck has is a transmitter left keyed:
+
+1. **Every path out of a transmission drops PTT** — completion, a failed
+   `aplay`, a player that wedged past its deadline, `stop()` from the middle,
+   and a player that could not be started at all. That last is the case that
+   would otherwise leave the radio keyed with nothing going out.
+2. **It is time-bounded.** `TX_TIMEOUT_S` is 118 s: longer than the 110.6 s
+   signal, shorter than the 120 s slot. Nothing legitimate reaches it, and a
+   wedged player cannot hold the air into the next slot.
+3. **PTT is read back.** `set_ptt` returning True means the command was
+   sent; a Yaesu answers a set command with silence. So the state is
+   confirmed, and the three answers are distinguished: **False means the
+   radio did not key** and nothing is played, while **None means the state
+   could not be read** and the transmission proceeds with a note — refusing
+   on None would take transmit away from a radio whose readback is simply
+   unsupported, which is a worse failure than the one being prevented.
+
+`stop()` is the single route used by `Ctrl-C`, leaving WSPR, the time-out
+timer and shutdown, so it works from every state and never raises.
+
+### The audio is rendered once
+
+A WSPR message is identical for every transmission of a session — same call,
+same grid, same power — and rendering costs about two seconds on a Pi 3A+.
+Rendering per beacon would spend that in every slot for nothing, so the WAV
+is cached, keyed on everything the audio depends on.
+
+**A power change invalidates it**, which is the one of the three an operator
+adjusts mid-session. A cache that beaconed the old wattage would announce a
+power the radio is not making, which is the same fault §6 keeps `my_dbm` and
+`tx_power` separate to make visible.
+
+The file carries **one second of silence first**, because WSPR starts at the
+even minute plus one and padding the file is more reliable than timing the
+start of playback to a tenth of a second.
+
 ### Tones and timing
 
 162 symbols at 8192/12000 s each — 0.6827 s per symbol, 110.6 s total —
@@ -651,8 +691,8 @@ listens, the remaining ToT, and the upload state.
 | spot deduplication | **done** — a window can decode one transmission twice |
 | the slot schedule, hopping, the ToT | **done** — `src/wsprsched.py` |
 | capture and decode, polled | **done** — `src/wsprrx.py`, no sound card in any test |
-| playback | not started — the WAV write and `aplay` |
-| the screen and menus | not started |
+| transmit: render, key, play, unkey | **done** — `src/wsprtx.py`, no radio in any test |
+| the screen and menus | **done** — `render.wspr_screen`, `menus.wspr_menu`, `menus.wspr_danger_menu` |
 | the uploader | **done** — `src/wsprnet.py`, protocol read from WSJT-X's source, 59 checks with no network |
 | the band table | **done** — `src/wsprbands.py`, confirmed three ways (§4) |
 | audio level | **done** — `wspr.audio_level`, no `audioop` (§6b) |

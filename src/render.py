@@ -1607,3 +1607,166 @@ def no_keyboard_screen(bonded, width, height, tick=0, can_pair=True):
     out.append([(" " + ("tap to pair   any key dismisses" if can_pair
                         else "any key dismisses")[:width - 1], "dim")])
     return out[:height]
+
+
+# -- WSPR ----------------------------------------------------------------
+#
+# A screen the deck takes over entirely: while WSPR runs, the ring is locked
+# and nothing else is reachable, so this is the whole display rather than a
+# panel inside one. See `docs/wspr_design.md` §2 and §10.
+
+#: How many spots fit before the footer and the state block. Derived in
+#: `wspr_screen` from the height, named here so a test can reason about it.
+WSPR_HEADER_ROWS = 2
+WSPR_STATE_ROWS = 4
+
+
+def _pad(segments, width):
+    """Segments padded or clipped to exactly `width`.
+
+    Needed because a row built from several `(text, attr)` pieces has no
+    single string to `ljust`, and padding by a whole width -- which an
+    earlier version did -- produces a row wider than the screen that curses
+    then refuses to draw.
+    """
+    used = sum(len(t) for t, _a in segments)
+    if used < width:
+        return list(segments) + [(" " * (width - used), "")]
+    if used == width:
+        return list(segments)
+    out, room = [], width
+    for text, attr in segments:
+        if room <= 0:
+            break
+        out.append((text[:room], attr))
+        room -= len(text[:room])
+    return out
+
+
+def wspr_toggles(state):
+    """The four toggles as one line of `(text, attr)`.
+
+    Four independent switches, not a run button — `docs/wspr_design.md` §6a.
+    The one that looks odd is the useful one: WSPR on with Decode off is the
+    receive level check, audio flowing with the Fano decoder not running.
+
+    Each is drawn bright when on and dim when off, because an operator
+    glancing at this needs the answer from the shape of the line rather than
+    from reading four words.
+    """
+    out = []
+    for label, on in (("WSPR", state.get("wspr")),
+                      ("DECODE", state.get("decode")),
+                      ("TX", state.get("transmit")),
+                      ("TX NEXT", state.get("tx_next"))):
+        out.append((f" {label} ", "reverse" if on else "dim"))
+        out.append((" ", ""))
+    return out
+
+
+def wspr_power(watts, dbm, exact, ceiling=0, fallback=False):
+    """The power block: ceiling, the reading, and the dBm it encodes to.
+
+    **The dBm is highlighted when it is exactly encodable**, which is the
+    whole point of showing three numbers together — §6. Only 1, 2, 5, 10,
+    20, 50 and 100 W land on a value WSPR can carry; 3 W is 34.77 dBm and
+    goes out as 33. An operator adjusting the power control watches for the
+    highlight, and the highlight is the confirmation that what the beacon
+    announces is what the radio is doing.
+
+    A reading that had to fall back to the configured value is marked, never
+    shown as though it came from the radio: a beacon announcing a wattage the
+    radio is not making is worse than one announcing nothing.
+    """
+    out = []
+    if ceiling:
+        out.append((f" max {ceiling} W ", "dim"))
+    if watts in (None, "", 0):
+        out.append((" power unknown ", "dim"))
+        return out
+    out.append((f" {watts} W", "bright" if not fallback else ""))
+    if fallback:
+        out.append((" (configured)", "dim"))
+    out.append(("  ", ""))
+    if dbm is None:
+        out.append((" no dBm ", "dim"))
+        return out
+    out.append((f" {dbm} dBm ", "reverse" if exact else ""))
+    if not exact:
+        out.append((" snapped", "dim"))
+    return out
+
+
+def wspr_screen(spots, width, height, state=None, message="", footer=""):
+    """The WSPR screen: what is being heard, and what the deck is doing.
+
+    `spots` are the most recent first — the opposite of the contact log,
+    because a WSPR session accumulates hundreds and the question is always
+    "what is coming in now" rather than "what came in an hour ago".
+
+    `state` carries the toggles, the band, the schedule, the power, the
+    time-out and the upload state. Pure: a list of lines, each a list of
+    `(text, attr)` segments, and nothing about curses.
+    """
+    st = dict(state or {})
+    out = []
+
+    # Header: the session, the band, and what the slot is about to do.
+    session = str(st.get("session") or "no session")
+    band = str(st.get("band") or "")
+    dial = st.get("dial_hz") or 0
+    left = f" WSPR  {session}"
+    if band:
+        left += f"  {band}"
+        if dial:
+            left += f"  {frequency(dial)}"
+        if st.get("hopping"):
+            left += "  hop"
+    right = ""
+    if st.get("next_tx") is not None:
+        right = "next: TX  " if st.get("next_tx") else "next: RX  "
+    clock = str(st.get("clock") or "")
+    right += clock
+    pad = max(1, width - len(left) - len(right))
+    out.append([((left + " " * pad + right)[:width], "reverse")])
+    out.append(rule(width))
+
+    # The spots, newest first. The arithmetic is named rather than guessed:
+    # two header rows, the column heading, the rule above the state block,
+    # four state rows, and the footer.
+    body = max(1, height - WSPR_HEADER_ROWS - 1 - 1 - WSPR_STATE_ROWS - 1)
+    heading = f" {'UTC':<5} {'dB':>4} {'CALL':<10}{'GRID':<7}{'dBm':>4}  KM"
+    out.append([(heading[:width].ljust(width), "dim")])
+    shown = list(spots)[:body]
+    for spot in shown:
+        when = str(spot.get("when", ""))[11:16] or str(spot.get("hhmm", ""))
+        km = spot.get("km")
+        line = (f" {when:<5} {spot.get('snr', ''):>4} "
+                f"{str(spot.get('call', '')):<10}"
+                f"{str(spot.get('grid', '') or '-'):<7}"
+                f"{spot.get('dbm', ''):>4}"
+                f"{('  ' + str(km)) if km else ''}")
+        out.append([(line[:width].ljust(width), "")])
+    while len(out) < WSPR_HEADER_ROWS + 1 + body:
+        out.append([(" " * width, "")])
+
+    out.append(rule(width))
+
+    # The state block: toggles, power, then the counters and the timer.
+    out.append(_pad(wspr_toggles(st), width))
+    out.append(_pad(wspr_power(st.get("watts"), st.get("dbm"),
+                               st.get("dbm_exact"), st.get("ceiling", 0),
+                               st.get("power_fallback")), width))
+    counts = (f" heard {st.get('heard', 0)}  sent {st.get('sent', 0)}"
+              f"  upload {st.get('upload') or 'off'}")
+    tot = st.get("timeout_left")
+    if tot is not None:
+        counts += f"   {int(tot) // 60}:{int(tot) % 60:02d} left"
+    if st.get("decoding"):
+        counts += "   decoding"
+    out.append([(counts[:width].ljust(width), "dim")])
+
+    out.append([((" " + message)[:width].ljust(width),
+                 "bright" if message else "")])
+    out.append([(footer[:width].ljust(width), "dim")])
+    return out[:height]
