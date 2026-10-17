@@ -255,10 +255,20 @@ check("and the time to the next one", "1:23 to next" in flat, flat)
 check("the bar is filled proportionally",
       flat.count("#") == round(render.WSPR_SLOT_CELLS * 37 / 120.0), flat)
 check("and the rest is not", "." in flat, flat)
-check("RX next when the next slot does not transmit", "RX next" in flat, flat)
+# **"to next: RX", with the mode as the only emphasis.** It read "RX next"
+# / "TX next" highlighted whole, which collided with the `TX NEXT` toggle on
+# the switch row above -- that one means the one-shot is ARMED, and two
+# different things drawn the same way in the same block is worse than either
+# being unlabeled.
+check("the next slot's mode reads as part of the phrase",
+      "to next: RX" in flat, flat)
+equals("and an RX slot is not highlighted",
+       [t for t, a in seg if a == "reverse"], [])
 seg = render.wspr_slot(0, to_next=120, next_tx=True)
 flat = "".join(t for t, _a in seg)
-check("TX next when it does", "TX next" in flat, flat)
+check("a TX slot says so", "to next: TX" in flat, flat)
+equals("and the mode alone is highlighted, not the phrase",
+       [t for t, a in seg if a == "reverse"], ["TX"])
 check("an empty bar at the top of the slot", "#" not in flat, flat)
 seg = render.wspr_slot(120, to_next=0)
 check("and a full one at the end",
@@ -378,7 +388,7 @@ running = "\n".join(plain(render.wspr_screen(
                           "next_tx": True, "clock": "0512Z", "wspr": True,
                           "slot_in": 37, "slot_to_next": 83})))
 check("while the next slot's intention is on the slot row",
-      "TX next" in running, running)
+      "next: TX" in running, running)
 
 print("\nboth audio levels are on the screen, with what was measured")
 seg = render.wspr_levels(25, 70, -26.0)
@@ -406,6 +416,22 @@ check("and named as hot", "hot" in flat, flat)
 flat = "".join(t for t, _a in render.wspr_levels(25, 70, None))
 check("no reading yet shows no figure", "dBFS" not in flat, flat)
 
+# **And "not yet" is told apart from "deaf".** The figure comes from a
+# COMPLETED 114-second window, so for the first two minutes of a session
+# there is honestly nothing to show -- and a bare dash there was read as the
+# deck not hearing the radio at all.
+flat = "".join(t for t, _a in
+               render.wspr_levels(25, 70, None, measuring=True))
+check("a window in progress says so", "measuring" in flat, flat)
+flat = "".join(t for t, _a in
+               render.wspr_levels(25, 70, None, measuring=False))
+check("and nothing recording says only that", "measuring" not in flat, flat)
+# A real reading wins over either.
+flat = "".join(t for t, _a in
+               render.wspr_levels(25, 70, -36.0, measuring=True))
+check("a reading beats the placeholder", "-36 dBFS" in flat, flat)
+check("and the placeholder is gone", "measuring" not in flat, flat)
+
 print("\nthe levels row keeps the width properties")
 for w, h in GRIDS:
     st = {"band": "40 m", "inhibited": True, "tx_level": 100,
@@ -430,9 +456,12 @@ seg = render.wspr_toggles({"wspr": True, "hopping": False})
 equals("dim when off",
        [a for t, a in seg if t.strip() == "HOP"], ["dim"])
 
-print("\nthe state rows use the width instead of bunching to the left")
-# Reported as crowded: every row packed left and left a third of the panel
-# empty. `_spread` distributes the gaps.
+print("\nonly the counters are spread; the rest stay packed")
+# Spreading was tried on every state row and read worse: five switches
+# strung across 66 columns stop looking like one group of related things,
+# and the power and level rows lost the sense that their parts belong
+# together. The counters are four independent figures, which is the one
+# row the full width suits.
 st = {"session": "general", "band": "20 m", "dial_hz": 14095600,
       "hopping": True, "hop_count": 3, "wspr": True, "decode": True,
       "transmit": True, "slot_in": 37, "slot_to_next": 83,
@@ -442,25 +471,28 @@ st = {"session": "general", "band": "20 m", "dial_hz": 14095600,
       "timeout_left": 2400}
 rows = plain(render.wspr_screen([], 66, 20, state=st, message="",
                                 footer=" F1"))
-toggles = next(r for r in rows if "DECODE" in r)
-check("the toggles reach the right-hand side",
-      len(toggles.rstrip()) > 60, repr(toggles))
 counts = next(r for r in rows if "heard 17" in r)
-check("so do the counters", len(counts.rstrip()) > 60, repr(counts))
+check("the counters reach the right-hand side",
+      len(counts.rstrip()) > 60, repr(counts))
+toggles = next(r for r in rows if "DECODE" in r)
+check("the toggles stay together on the left",
+      len(toggles.rstrip()) < 45, repr(toggles))
 levels = next(r for r in rows if "TX audio" in r)
-check("and the levels", len(levels.rstrip()) > 60, repr(levels))
+check("and so do the levels", len(levels.rstrip()) < 50, repr(levels))
 
-# **Spreading must not eat the spaces INSIDE a group.** Grouping by
-# stripping produced `max 10 W5 W` and `37 dBmsnapped`.
+# **Nothing may be run together.** An earlier attempt grouped by stripping
+# whitespace, which removed the single spaces doing the separating and
+# produced `max 10 W5 W` and `37 dBmsnapped`.
 power = next(r for r in rows if "max 10" in r)
 check("the ceiling keeps its unit", "max 10 W" in power, repr(power))
-check("the dBm keeps its gap", "37 dBm  snapped" in power or
-      "37 dBm snapped" in power, repr(power))
+check("the reading is beside it", "max 10 W  5 W" in power, repr(power))
 check("and nothing is run together",
       "W5 W" not in power and "dBmsnapped" not in power, repr(power))
-check("the levels keep theirs",
+check("the levels keep their gaps",
       "RX gain 100%" in levels and "level -36 dBFS" in levels,
       repr(levels))
+check("and are not run together",
+      "%RX" not in levels and "%level" not in levels, repr(levels))
 
 print("\nspreading degrades rather than breaking at narrow widths")
 for w, h in GRIDS:

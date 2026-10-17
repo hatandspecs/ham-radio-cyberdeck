@@ -749,6 +749,12 @@ Matching the rest of the deck, which means the shape is already decided:
   digimode screen (tuner, modes) and the log screen (activities, schemas):
   **`F2` the session list, `F3` the band selection.** The parallel is exact —
   `F2` is "which session am I in" on both screens.
+* **`Ctrl-C` stops WSPR**, as it aborts an over on the conversation screen.
+  Byte 3 reaches `getch` rather than raising SIGINT because `curses.raw()`
+  disables ISIG. `Ctrl-X` was used first and was wrong: that key means CLEAR
+  everywhere else on the deck — the transcript, the entry form — and giving
+  it a second meaning in one application is an inconsistency paid for under
+  pressure.
 * **`Ctrl-B`** toggles transmit inhibit, as everywhere else, and refuses to
   arm outside a data mode.
 * **The menu is grouped** the way the logging menu is — state, then session,
@@ -833,7 +839,7 @@ it.
 ### Esc releases the selection before anything else
 
 Tested after the running check, Esc answered every press with "WSPR is
-running — ^X stops it", and an operator who had scrolled into the list could
+running — ^C stops it", and an operator who had scrolled into the list could
 not get back out. The selection is released first, running or not. While a
 spot is selected the footer is about the list, because that is what the keys
 are doing and because Esc releasing the selection is the one thing there is

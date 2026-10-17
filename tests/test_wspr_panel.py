@@ -33,7 +33,7 @@ F1 = {"xterm": "\x1bOP", "linux": "\x1b[[A"}
 F2 = {"xterm": "\x1bOQ", "linux": "\x1b[[B"}
 F3 = {"xterm": "\x1bOR", "linux": "\x1b[[C"}
 CTRL_O, CTRL_P = "\x0f", "\x10"
-ESC, ENTER, CTRL_X = "\x1b", "\r", "\x18"
+ESC, ENTER, CTRL_C = "\x1b", "\r", "\x03"
 
 # The deck opens on DECK & RIG. The ring is settings | log | digimodes | wspr,
 # so `^O` wraps backwards straight onto WSPR -- which is also the cheapest
@@ -63,7 +63,11 @@ for term in ("xterm", "linux"):
           body.lstrip().startswith("WSPR "), body[:120])
     check(f"{term}: and the config was accepted",
           "unknown setting" not in body, body[:200])
-    check(f"{term}: with no session yet", "no session" in body, body[:120])
+    # A run always has a name: `_wspr_ensure_session` gives an unnamed one
+    # the default before any spot is written, so spots always belong to
+    # something the danger zone can clear and an export can scope.
+    check(f"{term}: with the default session name",
+          "general" in body, body[:120])
     check(f"{term}: the four toggles are shown",
           all(w in body for w in ("DECODE", "TX NEXT")), body)
     check(f"{term}: and the footer offers the menu",
@@ -127,10 +131,13 @@ check("at its dial frequency, grouped as the radio reads it",
 print("\na number selects that band alone — it does not build a rotation")
 body = deck([TO_WSPR, F3["linux"], "4", ESC], "4 selects 20 m only",
             settle=3.4)
-# **Not `"hop" not in body`.** The header now names hopping either way, so
-# "no hop" contains "hop" and that assertion inverted itself the moment the
-# header started telling the truth about the off state.
-check("no rotation from one keypress", "no hop" in body[:140], body[:140])
+# **Hopping is not in the header at all now.** It is a toggle on the switch
+# row, beside DECODE and TX, because saying it in both places left the
+# header repeating an answer from the row below. So the header is asserted
+# to be free of it, and the toggle is checked where it lives.
+check("the header says nothing about hopping",
+      "hop" not in body[:140].lower(), body[:140])
+check("and the toggle row is where it is answered", "HOP" in body, body)
 
 print("\nSpace builds a rotation; the header counts it")
 # **Not `"hop" in body`** -- the header says "no hop" when hopping is off,
@@ -141,7 +148,10 @@ print("\nSpace builds a rotation; the header counts it")
 # 40 m is configured; Space on row 0 adds 80 m beside it.
 body = deck([TO_WSPR, F3["linux"], " ", ESC], "80 m beside 40 m",
             settle=3.8)
-check("the header counts the rotation", "hop 2" in body[:140], body[:140])
+# The rotation is reported in the message line and on the toggle, not in
+# the header.
+check("a rotation is reported", "hop" in body.lower(), body[-300:])
+check("and HOP is on the toggle row", "HOP" in body, body)
 check("and + is gone rather than silently meaning something else",
       "+n" not in body, body[-200:])
 
@@ -170,9 +180,16 @@ body = deck([TO_WSPR, F1["linux"], "u"], "u toggles upload", settle=3.2)
 check("it reports the three conditions rather than just 'on'",
       "wsprnet" in body or "upload" in body.lower(), body[-400:])
 
-print("\nCtrl-X on a stopped WSPR says so rather than doing nothing")
-body = deck([TO_WSPR, CTRL_X], "^X with WSPR stopped", settle=3.0)
+print("\nCtrl-C on a stopped WSPR says so rather than doing nothing")
+# **Ctrl-C, not Ctrl-X.** Ctrl-C aborts an over on the conversation screen,
+# and Ctrl-X means CLEAR everywhere on the deck -- the transcript and the
+# entry form -- so using it for "stop" in one application only was an
+# inconsistency to pay for under pressure.
+body = deck([TO_WSPR, CTRL_C], "^C with WSPR stopped", settle=3.0)
 check("it says it is not running", "not running" in body, body[-300:])
+check("and the footer teaches the keys",
+      "^B inhibit" in body and ("^C stop" in body or "^O ^P" in body),
+      body[-200:])
 
 print("\nEsc does not leave the WSPR area")
 # Esc backs out WITHIN an application and never leaves one -- the same rule
@@ -221,12 +238,15 @@ body = deck([TO_WSPR, F3["linux"], "\x1b[B", " ", ESC],
             "Space on 40 m, the only selected band", settle=3.4)
 check("it says why it refused", "only band" in body, body[-300:])
 
-print("\nthe screen names band hopping either way")
+print("\nband hopping is a toggle, highlighted when it is on")
 body = deck([TO_WSPR], "one band, no hopping", settle=3.0)
-check("off, in as many words", "no hop" in body[:200], body[:200])
+check("the toggle is there with one band", "HOP" in body, body)
+check("and the header does not mention it",
+      "hop" not in body[:140].lower(), body[:140])
 body = deck([TO_WSPR], "three bands", settle=3.0,
             extra="WSPR_BANDS = 40 m,30 m,20 m\n")
-check("and on, with the count", "hop 3" in body[:200], body[:200])
+check("and it is still the toggle that says so, with three bands",
+      "HOP" in body, body)
 
 print("\nthe slot clock is on the screen")
 body = deck([TO_WSPR], "stopped: no stale clock", settle=3.0)
@@ -236,18 +256,23 @@ check("stopped, it says so rather than showing a clock",
 print("\nthe hop check is offered, and refuses without rig control")
 # The mode check moved to the band picker; its case is below.
 
-print("\ncalibrate transmit audio opens a screen, not a one-shot")
-# It was a menu item that fired a ten-second tone and reported refusals to
-# a message line UNDERNEATH the still-open menu -- so it read as doing
-# nothing. A level set against a power meter means adjusting while watching,
-# which is a screen.
-body = deck([TO_WSPR, F1["linux"], "a", "c"], "c opens transmit calibration",
-            settle=3.6)
-check("the calibration screen is drawn", "WSPR CALIBRATE" in body, body[:140])
-check("it is the transmit one", "TRANSMIT" in body, body[:140])
-check("the level is on it", "TX audio level" in body, body)
-check("and the keys that change it are advertised",
-      "+" in body and "-" in body, body[-200:])
+print("\ncalibration is refused with a reason while WSPR is off")
+# **Both calibrations open the sound card, and fldigi holds it while WSPR is
+# off** -- so with WSPR off they produced a capture-device error from inside
+# a screen that looked ready. The menu item now says why before it is
+# entered, which is the only part this file can drive: starting WSPR for
+# real stops fldigi and takes the codec, which no test here does.
+for key, what in (("c", "transmit"), ("m", "receive")):
+    body = deck([TO_WSPR, F1["linux"], "a", key],
+                f"{key} with WSPR off ({what})", settle=3.6)
+    check(f"{what}: it is refused rather than opened",
+          "WSPR CALIBRATE" not in body, body[:140])
+    check(f"{what}: and says WSPR must be on",
+          "WSPR must be on" in body, body[-300:])
+    # The menu is closed first, or the message lands underneath it -- the
+    # fault that made "calibrate transmit audio" read as doing nothing.
+    check(f"{what}: with the menu closed so it can be read",
+          "Calibrate transmit" not in body, body)
 
 print("\nthe arrows select and scroll the spot list")
 body = deck([TO_WSPR, "\x1b[B"], "down arrow on an empty list", settle=3.0)

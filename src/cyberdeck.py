@@ -1266,8 +1266,7 @@ class Deck:
         # refusal. The same shape as the refusal when a schema change meets
         # a part-typed contact.
         if self.wspr_running:
-            self._wspr_note("WSPR is running — stop it before leaving "
-                            "(F1, then w)")
+            self._wspr_note("WSPR is running — ^C stops it, or F1 then w")
             self.screen = WSPR
             return
         ring = [a for a in RING if a != AREA_LOG or self.log_on]
@@ -2785,7 +2784,7 @@ class Deck:
              + (f" = {dbm} dBm{'' if exact else ' (snapped)'}"
                 if dbm is not None else ""),
              "",
-             "It stops by itself. Ctrl-X stops it sooner."],
+             "It stops by itself. Ctrl-C stops it sooner."],
             self._wspr_do_test_tone,
             back=WSPR,
             footer="Enter transmit   any other key does not")
@@ -3330,6 +3329,7 @@ class Deck:
             "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
             "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
             "dbfs": self.wspr_dbfs,
+            "measuring": bool(self.wspr_rx and self.wspr_rx.busy_capturing),
         }
         # The arrows are advertised: a key that scrolls a list nobody knows
         # scrolls is a key that does not exist. Both forms fit 66 columns,
@@ -3339,11 +3339,16 @@ class Deck:
             # that is what the keys are doing and because Esc releasing the
             # selection is the thing an operator cannot otherwise discover.
             footer = (" ↑↓ PgUp PgDn Home End move   Esc follow the newest"
-                      "   F1 menu")
+                      "   ^B inhibit")
         else:
-            footer = (" F1 menu F2 session F3 band ↑↓ spots ^X stop"
-                      if self.wspr_running else
-                      " F1 menu F2 session F3 band ↑↓ spots ^O ^P screen")
+            # `^B inhibit` is advertised here because the interlock is the
+            # one key an operator reaches for under time pressure, and it
+            # moved off Tab -- so the key that used to work by accident now
+            # has to be taught.
+            footer = (" F1 menu F2 session F3 band ↑↓ spots "
+                      "^B inhibit ^C stop" if self.wspr_running else
+                      " F1 menu F2 session F3 band ↑↓ spots "
+                      "^B inhibit ^O ^P")
         for i, line in enumerate(render.wspr_screen(
                 self.wspr_spots, w, h, state=state,
                 message=self.wspr_message, footer=footer)):
@@ -3511,9 +3516,9 @@ class Deck:
             "listening": bool(self.wspr_rx and self.wspr_rx.probing),
             "dbfs": self.wspr_cal_dbfs,
         }
-        footer = ("  + - level   Enter send a tone   ^X stop   Esc back"
-                  if tx else
-                  "  + - level   Esc back")
+        footer = ("  + - level  Enter send a tone  ^B inhibit  ^C stop  "
+                  "Esc back" if tx else
+                  "  + - level   ^B inhibit   Esc back")
         for i, line in enumerate(render.wspr_cal_screen(
                 w, h, state=state, message=self.wspr_message,
                 footer=footer)):
@@ -3538,7 +3543,9 @@ class Deck:
         elif ch in (10, 13, curses.KEY_ENTER):
             if self.wspr_cal == "tx":
                 self._wspr_cal_tone()
-        elif ch == 24:                                  # Ctrl-X
+        elif ch == 3:                                   # Ctrl-C
+            # Aborting a transmission, which is exactly what Ctrl-C does on
+            # the conversation screen.
             if self.wspr_tx is not None:
                 self.wspr_tx.stop()
             self._wspr_note("stopped")
@@ -3582,10 +3589,14 @@ class Deck:
                               sink=self._wspr_set_session)
         elif ch == curses.KEY_F3:
             self._open_menu("wspr_band")
-        elif ch == 24:                                  # Ctrl-X
-            # Stop. The same key that clears the transcript elsewhere, which
-            # is the nearest thing the deck has to a "stop what you are
-            # doing" and is dead on this screen otherwise.
+        elif ch == 3:                                   # Ctrl-C
+            # **Ctrl-C, as in the digimodes.** It aborts an over there --
+            # byte 3 reaches `getch` because `curses.raw()` disables ISIG,
+            # which is why it is a key here and not a signal. Ctrl-X was
+            # used first and was wrong: that key means CLEAR everywhere else
+            # on the deck, on the transcript and on the entry form, and
+            # making it mean "stop" in one application only is the kind of
+            # inconsistency an operator pays for under pressure.
             if self.wspr_running:
                 self._wspr_stop("stopped by hand")
             else:
@@ -3602,14 +3613,14 @@ class Deck:
         elif ch == 27:                                  # Esc
             # **The selection is released FIRST, whether WSPR is running or
             # not.** Tested in the wrong order, the running check answered
-            # every Esc with "^X stops it" and an operator who had scrolled
+            # every Esc with "^C stops it" and an operator who had scrolled
             # into the list could not get back out of it -- reported in
             # exactly those terms.
             if self.wspr_sel is not None:
                 self.wspr_sel = None       # back to following the newest
                 self._wspr_note("following the newest spot again")
             elif self.wspr_running:
-                self._wspr_note("WSPR is running — ^X stops it")
+                self._wspr_note("WSPR is running — ^C stops it")
             else:
                 self.screen = WSPR
         return True

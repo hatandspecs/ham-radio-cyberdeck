@@ -763,6 +763,78 @@ grant that does not prompt could only have come from the rule.
 | **KM empty** | WSPR carries a grid and no distance. `src/grid.py` computes it, **validated against this station's own wsprnet rows**: inside 0.5 km on every six-character path from 498 to 6855 km. Not stored — both figures are derivable from the two grids already in each record |
 | **The screen was tight** | The spot row used 44 of 66 columns with no gaps. Respaced, with KM and AZ |
 
+### On-air, and what the second day of panel testing found — 2026-10-17
+
+**WSPR works, confirmed by wsprnet.** 5 W on 40 m reached 43 receivers in one
+slot; 20 m reached ON5KQ in Belgium (6060 km), HK4CZE in Colombia, and the
+whole US west coast. Receive decoded eleven stations in a slot, including
+K5NAV at 0.2 W over 2781 km.
+
+**The single most expensive discovery: the ALSA card index moves.** The
+C-Media codec was card 1 in the morning and card 2 after a reboot, with HDMI
+taking 1. `plughw:1,0` was compiled into `wsprrx`/`wsprtx` AND `WSPR_DEVICE`
+was never read, so capture pointed at the HDMI card and failed "No such file
+or directory" -- a different fault from "Device or resource busy" and one no
+amount of stopping fldigi fixes. **Everything now addresses the card by name
+(`plughw:CARD=Device,DEV=0`, `amixer -c Device`).**
+
+The same bug hid a second one: `WSPR_RX_CARD` defaulted to `1`, so every
+capture-gain `amixer` call went to the HDMI card and silently did nothing
+while the deck reported a percentage it had never set. `Mic Capture Volume`
+on this codec runs 0-35 spanning -12 to +23 dB and ships at 20 (+8 dB), so
+there is 15 dB of real headroom. **AGC ships ON and is now turned off for a
+session and restored after** -- a correctness fix, not a level one: it
+compresses a constant-envelope signal and corrupts the SNR uploaded to
+wsprnet as a measurement.
+
+**And a trap I set myself:** adding the four hardware addresses to
+`_REMEMBERED` meant a state file written when the codec was card 1 beat the
+corrected default, so the fix could not take effect. A device address is not
+a preference. They are excluded, with the reason in the code.
+
+| Finding | Resolution |
+|---|---|
+| **15 test files called `report()` without `sys.exit()`** | They exited 0 with failures, so the suite could not fail and several of my own "OK" reports were unverified. All now exit non-zero; re-running by COUNTING failures found two real breakages |
+| `TX_POWER` was typed `int` | `0.5` truncated to `0`, so a QRPp station could not state its power. New `config.watts` type keeps fractions, whole numbers whole |
+| `_power_now` ended with `int(watts)` | Half a watt became `"0 W"`, which `dbm_for_watts` refuses -- surfacing as "power unknown" from a radio answering perfectly. Keeps 3 decimals now (1 mW is 0 dBm) |
+| `_draw_wspr` called the radio every draw | A CAT round trip with a 2 s timeout, five times a second: every arrow keypress waited on the radio. Cached 1.5 s, the discipline `_radio_now` already documented |
+| The spot counts were re-parsed every draw | And again by `_menu_for` while a menu was open. Both cached, invalidated on write |
+| `rigctld_client.mode()` returns a TUPLE | My hop-check compared it against a set of strings, so it could only ever report "could not read". Uses `mode()[0]` |
+| `_key` read PTT back instantly | The FTX-1 had not reported it yet, so the deck keyed, read "not keyed", unkeyed and refused -- a brief click then "the radio did not key". Polls up to 600 ms |
+| `tx next` plus the random choice transmitted twice running | The random choice is suppressed in any slot straight after a transmission. An explicit one-shot still fires: it was asked for |
+| The ToT ended the whole session | It is a transmitter timer. It now disarms transmit and leaves receive, decode and hopping running; re-arming restarts the clock |
+
+**Keys settled, and both were mine to get wrong:**
+
+* **`Ctrl-B` is transmit inhibit**, from any screen. It was `Ctrl-I`, which IS
+  byte 9, which IS `Tab` -- indistinguishable on any terminal and especially
+  the console, where `modifyOtherKeys` does not exist. So `Tab` armed and
+  inhibited the transmitter, including on a form where `Tab` means "next
+  field". Byte 9 now toggles nothing.
+* **`Ctrl-C` stops WSPR.** It already aborts an over on the conversation
+  screen -- `curses.raw()` disables ISIG so byte 3 reaches `getch` -- while
+  `Ctrl-X` means CLEAR everywhere on the deck. Using `Ctrl-X` for "stop" in
+  one application was the inconsistency.
+
+**Escape is a contract now, written into `docs/platform_design.md`:** one
+level per press, by the route the operator actually walked (a menu stack,
+not a fixed parent -- the WSPR band picker is reachable two ways and a fixed
+parent has to be wrong for one of them), and **no Escape past the top of a
+function may change state.** So mashing it always lands in the base state.
+
+**`src/grid.py`** computes distance and bearing from two Maidenhead
+locators, **validated against this station's own wsprnet rows**: inside
+0.5 km on every six-character path from 498 to 6855 km. Shown on the spot
+rows, never stored -- both are derivable from the two grids already in each
+record.
+
+**Layout, after two rounds of operator feedback:** only the counters row is
+spread across the width; the toggles, power and level rows read better
+packed. `HOP` is a toggle on the switch row, the interlock is `INH`/`INH off`
+in the header corner, and the slot row says `to next: TX` with only the mode
+highlighted -- `TX next` highlighted whole collided with the `TX NEXT`
+toggle, which means something different.
+
 ### The ring-hop trap, in full
 
 **Six test files hard-coded one `^O` from the boot screen** to reach the

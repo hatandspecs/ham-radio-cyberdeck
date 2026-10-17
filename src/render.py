@@ -1644,39 +1644,6 @@ def _pad(segments, width):
     return out
 
 
-def _groups(segments):
-    """Split a flat segment list into groups on its blank separators.
-
-    A group is a run of segments with something in it; a segment that is
-    only whitespace ends the group. **Text inside a group is not stripped**
-    -- an earlier version did, which removed the single spaces that were
-    separating `max 10 W` from `5 W` and produced `max 10 W5 W`. Only the
-    outer edges of a group are trimmed, so `_spread`'s gaps are the only
-    spacing between groups.
-    """
-    out, current = [], []
-    for text, attr in segments:
-        if text.strip():
-            current.append((text, attr))
-        elif current:
-            out.append(_trim(current))
-            current = []
-    if current:
-        out.append(_trim(current))
-    return out
-
-
-def _trim(group):
-    """Drop padding at a group's outer edges, keeping what is inside."""
-    if not group:
-        return group
-    first, last = group[0], group[-1]
-    group = list(group)
-    group[0] = (first[0].lstrip(), first[1])
-    group[-1] = (group[-1][0].rstrip(), group[-1][1])
-    return [(t, a) for t, a in group if t]
-
-
 def _spread(groups, width):
     """Lay out groups of segments across `width` with even gaps between them.
 
@@ -1754,9 +1721,6 @@ def wspr_power(watts, dbm, exact, ceiling=0, fallback=False):
     out = []
     if ceiling:
         out.append((f" max {ceiling} W ", "dim"))
-        # A separator, so the ceiling, the reading and the dBm are three
-        # groups the row can spread between rather than two.
-        out.append(("  ", ""))
     if watts in (None, "", 0):
         out.append((" power unknown ", "dim"))
         return out
@@ -1802,13 +1766,22 @@ def wspr_slot(seconds_in, capture=True, to_next=None, next_tx=None,
     if to_next is not None:
         out.append((f" {int(to_next) // 60}:{int(to_next) % 60:02d} to next",
                     "dim"))
+    # **"to next: TX", with only the TX highlighted.** It read "TX next",
+    # highlighted whole, which collided with the `TX NEXT` toggle on the
+    # switch row directly above -- that one means the one-shot is ARMED, and
+    # two different things drawn the same way in the same block is worse
+    # than either being unlabeled. Here the phrase is the label and only the
+    # mode is emphasised.
     if next_tx is not None:
-        out.append(("  TX next" if next_tx else "  RX next",
-                    "reverse" if next_tx else "dim"))
+        if to_next is None:
+            out.append((" next", "dim"))
+        out.append((": ", "dim"))
+        out.append(("TX" if next_tx else "RX",
+                    "reverse" if next_tx else ""))
     return out
 
 
-def wspr_levels(tx_level=None, rx_gain=None, dbfs=None):
+def wspr_levels(tx_level=None, rx_gain=None, dbfs=None, measuring=False):
     """The two audio levels and what the last capture measured.
 
     Transmit is a digital amplitude WSPR renders at; receive is the capture
@@ -1829,7 +1802,11 @@ def wspr_levels(tx_level=None, rx_gain=None, dbfs=None):
         out.append((f"RX gain {int(rx_gain)}%", ""))
     out.append(("  ", ""))
     if dbfs is None:
-        out.append(("level —", "dim"))
+        # **"waiting", not a bare dash, while a window is recording.** The
+        # figure comes from a COMPLETED 114-second capture, so for the first
+        # two minutes of a session there is honestly nothing to show -- and
+        # a dash there was read as the deck not hearing the radio at all.
+        out.append(("level measuring…" if measuring else "level —", "dim"))
         return out
     # **The same thresholds the meter draws, not a second copy.** These
     # were written out again here as -32 and -18, so widening the meter's
@@ -2050,13 +2027,13 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     out.append(rule(width))
 
     # The state block: toggles, power, then the counters and the timer.
-    # Each switch is its own group, so they spread evenly rather than
-    # bunching in the left third of the panel.
-    out.append(_spread([[seg] for seg in wspr_toggles(st)
-                        if seg[0].strip()], width))
-    out.append(_spread(_groups(wspr_power(
-        st.get("watts"), st.get("dbm"), st.get("dbm_exact"),
-        st.get("ceiling", 0), st.get("power_fallback"))), width))
+    # **Packed, not spread.** Spreading was tried and read worse: five
+    # switches strung across 66 columns stop looking like one group of
+    # related things. Only the counters below are spread.
+    out.append(_pad(wspr_toggles(st), width))
+    out.append(_pad(wspr_power(st.get("watts"), st.get("dbm"),
+                               st.get("dbm_exact"), st.get("ceiling", 0),
+                               st.get("power_fallback")), width))
     if st.get("slot_in") is not None:
         out.append(_pad(wspr_slot(st.get("slot_in"),
                                   capture=bool(st.get("in_capture", True)),
@@ -2065,8 +2042,9 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     else:
         out.append([(" slot  —  not running".ljust(width)[:width], "dim")])
 
-    out.append(_spread(_groups(wspr_levels(
-        st.get("tx_level"), st.get("rx_gain"), st.get("dbfs"))), width))
+    out.append(_pad(wspr_levels(st.get("tx_level"), st.get("rx_gain"),
+                                st.get("dbfs"),
+                                measuring=bool(st.get("measuring"))), width))
 
     groups = [[(f"heard {st.get('heard', 0)}", "dim")],
               [(f"sent {st.get('sent', 0)}", "dim")],

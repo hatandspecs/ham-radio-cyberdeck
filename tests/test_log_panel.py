@@ -623,13 +623,15 @@ check("the file is untouched", "[PAQP]" in text and "[KEEPME]" in text, text)
 
 # Selecting a type after pressing `d` and changing your mind must SELECT it,
 # not delete it: the pending flag has to clear.
-# Esc from the picker closes to the LOG SCREEN -- it has one exit however it
-# was reached -- so getting back in is F1 then v. The `8` is left in because
-# it is harmless on the log screen and because removing it is a change to a
-# scenario that passes; what it used to mean, "Logging on the root menu", is
-# gone, since F1 now opens the menu for the area the operator is in.
+#
+# **Esc now goes back ONE level, by the route taken.** The picker used to
+# have one exit however it was reached -- straight out to the log screen --
+# so this scenario went back in with `F3`. Opened from the logging menu with
+# `v`, Esc returns to that menu, and `F3` pressed inside a menu means
+# something else entirely. So `v` again is the way back in, which is also
+# the point: the pending delete must be cleared whichever route is taken.
 body, text = with_type([RING_FWD, F1["linux"], "v", "d", "\x1b",
-                        F3["linux"], PAQP_KEY],
+                        "v", PAQP_KEY],
                        "d then Esc then a number selects")
 check("the type still exists", "[PAQP]" in text, text)
 check("and was selected", "PAQP" in body, body[:200])
@@ -665,8 +667,9 @@ body, text = with_type([RING_FWD, F1["linux"], "v", "d", "c", PAQP_KEY],
 check("the type survives", "[PAQP]" in text, text)
 check("and the field picker is what opened", "SELECT FIELDS" in body, body[:200])
 
+# Same route back in, for the same reason as above.
 body, text = with_type([RING_FWD, F1["linux"], "v", "c", "\x1b",
-                        F3["linux"], PAQP_KEY],
+                        "v", PAQP_KEY],
                        "c then Esc then a number selects")
 check("the type still exists", "[PAQP]" in text, text)
 check("and was selected rather than copied", "PAQP" in body, body[:200])
