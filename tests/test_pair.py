@@ -3,7 +3,7 @@
 The BlueZ conversation itself cannot be tested here — there is no way to
 synthesise "a keyboard bonded successfully" — so `tools/bt_agent_probe.py`
 measured the one property the design rests on instead, against real hardware
-(design_doc.md section 16). What IS testable is everything around it: the
+(platform_design.md section 16). What IS testable is everything around it: the
 screen, the device model, and the refusal on a machine that cannot pair.
 
 That refusal matters as much as the feature. The application runs on ordinary

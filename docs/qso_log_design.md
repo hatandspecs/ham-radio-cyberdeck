@@ -13,12 +13,29 @@ that are omitted from a record entirely when unused (§6a). A ragchew on 40 m,
 a digital contact across the state and a park activation are the same record
 type with different fields filled in.
 
-Status: **design and prototype**. The cores — `src/qsolog.py`,
-`src/callbook.py`, `src/qrzlog.py` and `src/lotw.py` — exist with 370 checks
-in their own test files, none of which touch a network or need the rig, and
-`tools/qso.py` drives them from a terminal today (§8a). Nothing is wired into `cyberdeck.py` yet: the log screen
-renderer and the logging menu exist and are tested as pure functions, and the
-root-menu entry and key handler that reach them do not.
+One of four application design documents. The others are
+[`digimodes_design.md`](digimodes_design.md),
+[`deck_rig_design.md`](deck_rig_design.md) and
+[`wspr_design.md`](wspr_design.md). Requirements, hardware and the
+cross-cutting architecture are in [`platform_design.md`](platform_design.md).
+
+Status: **built, merged to `main` 2026-10-14, and in use.** About 1,400
+checks across the log's own test files, none of which touch a network or
+need a radio. The whole of it is worked from the panel — the entry form,
+reading a contact back, correcting any field of it, deleting one, the
+activities list, the schema picker and the field selector — and
+`tools/qso.py` drives the same cores from a terminal or over SSH (§8a).
+
+An earlier version of this paragraph said "design and prototype" and
+"nothing is wired into `cyberdeck.py` yet", which was true when it was
+written and was months out of date by the time anybody read it. **The
+sections below are dated where they record a decision; a date is what was
+true then and not a claim about now.**
+
+Four later sections carry the parts that arrived after the first build and
+are the ones most worth reading next: **§7f** one log with sessions inside
+it, **§7g** the schema decides the columns, **§7h** the danger zone, and
+**§7i** what follows an activity.
 
 **QRZ upload is paused** as of 2026-10-10: the code is complete and correct,
 and the account has no QRZ subscription, which their API requires for every

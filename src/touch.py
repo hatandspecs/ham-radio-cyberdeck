@@ -1,7 +1,7 @@
 """The panel's touchscreen, read directly from evdev.
 
 Touch was left out of the original design on the assumption that using it
-meant running X (design_doc.md section 15.2). It does not. The controller
+meant running X (platform_design.md section 15.2). It does not. The controller
 enumerates as an ordinary input device and a drag is a handful of integers
 read from a character device, so the console keeps its premise — no pointer,
 nothing to click — while gaining the one gesture that is awkward from a

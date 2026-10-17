@@ -1,4 +1,4 @@
-"""Full-screen menus, selected by a single key (docs/design_doc.md §5.8).
+"""Full-screen menus, selected by a single key (docs/digimodes_design.md §5.8).
 
 No pointer, no cursor to move, no nesting deeper than two: a menu is a list of
 labeled keys and pressing one does the thing. That is the fastest interface
@@ -119,6 +119,16 @@ MENU_PARENT = {
     # Esc out of the danger zone goes back to the logging menu, not out to the
     # screen: arriving there is deliberate and leaving should be too.
     "danger": "logging",
+    # The band picker has NO parent, so Esc closes it to the WSPR screen --
+    # the same rule the log's schema picker follows (§7i). An operator who
+    # pressed F3 from the screen expects Esc to return there, and sending
+    # them up to a menu they did not open is the inconsistency that was
+    # fixed once already on the log screen.
+    #
+    # The danger zone DOES go back to the WSPR menu: arriving there is
+    # deliberate and leaving should be, which is why `danger` does the same.
+    "wspr_danger": "wspr",
+    "wspr_audio": "wspr",
 }
 
 DISPLAY = {
@@ -453,7 +463,7 @@ SYSTEM = {
     "items": [
         ("b", "Pair a Bluetooth keyboard"),
         ("w", "WiFi — join a network, or switch the radio off"),
-        ("i", "Transmit inhibit on/off      Ctrl-I  (also Tab)"),
+        ("i", "Transmit inhibit on/off      Ctrl-B, any screen"),
         ("c", "Clear the transcript         Ctrl-X"),
         ("q", "Quit                         Ctrl-Q"),
     ],
@@ -601,3 +611,176 @@ def render(menu, width, height, selected=None):
     lines.append([("─" * width, "dim")])
     lines.append([(" " + menu["footer"][:width - 2], "dim")])
     return lines[:height]
+
+
+def wspr_menu(state=None):
+    """The WSPR menu. Grouped the way the logging menu is.
+
+    State, then the session, then the schedule, then the file — with the
+    current value on each line, because that is what makes the logging menu
+    readable without opening anything.
+
+    The four toggles are single keys and each shows its own state, so an
+    operator who opens this menu to check what is on does not have to open
+    anything else. See `docs/wspr_design.md` §6a and §10.
+    """
+    st = dict(state or {})
+
+    def onoff(key, extra=""):
+        return ("on" if st.get(key) else "off") + (f" — {extra}" if extra
+                                                   else "")
+
+    band = str(st.get("band") or "(none)")
+    if st.get("hopping"):
+        band += f"  hopping {st.get('hop_count', 0)} bands"
+    tot = st.get("timeout_minutes")
+    items = [
+        # -- what it is doing ---------------------------------------------
+        ("w", f"WSPR                         {onoff('wspr')}"),
+        ("d", f"Decode                       {onoff('decode')}"),
+        ("t", f"Transmit                     {onoff('transmit')}"),
+        ("n", f"Transmit next slot           {onoff('tx_next')}"),
+
+        # -- the session ---------------------------------------------------
+        ("e", f"Session                      "
+              f"{st.get('session') or '(none)'}"),
+        ("b", f"Band                         {band}"),
+
+        # -- the schedule --------------------------------------------------
+        ("p", f"Transmit percent             {st.get('tx_percent', 0)}%"),
+        # "Time-out" alone did not say time out of WHAT -- the slot, the
+        # decode and the session all have clocks. It is the session's.
+        ("o", f"Session ToT                  "
+              + (f"{tot} min" if tot else "off")),
+        ("u", f"Upload spots                 {st.get('upload') or 'off'}"),
+
+        # -- the file, and getting out ------------------------------------
+        ("f", f"Spot log                     "
+              f"{st.get('log_name') or 'wspr.log'}"),
+        ("x", f"Export this session          "
+              f"{st.get('heard', 0)} heard, {st.get('sent', 0)} sent"),
+    ]
+    # Only with a radio that can be tested into. Keyed and time-bounded, so
+    # it sits behind a menu rather than under a key that can be brushed.
+    # **One row, not three.** The transmit level, the capture gain and the
+    # test tone that sets them are one concern -- §6b calls it calibrating
+    # the audio -- and they were three rows that pushed this menu to 16.
+    # `menus.render` goes two-column above `height - 6`, which on the panel
+    # is 14, and the second column has no room for the values. A WSPR menu
+    # without its current values on the lines is the one thing this menu is
+    # for, so the item count is a design constraint and not an accident.
+    items.append(("a", f"Audio levels                 "
+                       f"TX {st.get('tx_level', 50)}%  "
+                       f"RX {st.get('rx_gain', 70)}%"))
+    # Last, and named so nobody arrives in it by accident.
+    items.append(("z", "Danger zone — clear spots"))
+    return {
+        "title": "WSPR",
+        "items": items,
+        "footer": "Esc back   ↑↓ move   Enter select   "
+                  "^O ^P locked while running",
+    }
+
+
+def wspr_audio_menu(state=None):
+    """Transmit level, capture gain, and the tone that sets the first.
+
+    Together because they are one job, and because the measured dBFS of the
+    last capture belongs beside the gain it judges -- a gain control with no
+    meter is a knob.
+
+    The two are set by DIFFERENT mechanisms and the menu says so, because an
+    operator who knows the deck shares a codec with fldigi will reasonably
+    ask which of these touches it. See §6a1.
+    """
+    st = dict(state or {})
+    dbfs = st.get("dbfs")
+    heard = ("no reading yet" if dbfs is None
+             else f"{float(dbfs):.0f} dBFS")
+    # **The levels are reported here and changed in the calibration
+    # screens.** Stepping them from this menu was a third way to do the same
+    # thing, with no meter in sight -- and a level set without watching
+    # something is a number changed, not a level set.
+    return {
+        "title": "WSPR AUDIO",
+        "items": [
+            (" ", f"   TX audio {st.get('tx_level', 50)}%"
+                  f"     RX gain {st.get('rx_gain', 70)}%"
+                  f"     {heard}"),
+            (" ", ""),
+            ("c", "Calibrate transmit        a tone, + and - to set"),
+            ("m", "Calibrate receive         a meter, + and - to set"),
+        ],
+        "footer": "Esc back   ↑↓ move   Enter select   "
+                  "the levels are set in those screens",
+    }
+
+
+def wspr_danger_menu(session="", heard=0, sent=0, total_heard=0,
+                     total_sent=0, sessions=0):
+    """The three ways to throw spots away. Counts broken out BY KIND.
+
+    "473 records" hides which: an operator about to lose a night of received
+    data cares about a different number than one clearing their own
+    transmission history. See `docs/wspr_design.md` §5a.
+    """
+    return {
+        "title": "WSPR DANGER ZONE",
+        "items": [
+            ("a", f"Forget all sessions          "
+                  f"{sessions} in the list, spots kept"),
+            # The session NAME is not on this line. With a name of any
+            # length the line ran past 66 and was cut mid-word -- "from
+            # Satu" -- which is the fault the log's columns were rebuilt to
+            # avoid. The name goes in the footer, where there is room, and
+            # the counts are what make the question worth reading.
+            ("s", f"Delete this session's spots  "
+                  f"{heard} heard + {sent} sent"),
+            ("m", f"Delete EVERY WSPR record     "
+                  f"{total_heard} heard + {total_sent} sent"),
+        ],
+        "footer": ("Esc back   ↑↓ move   Enter select   "
+                   + (session[:24] if session else "general")),
+    }
+
+
+def wspr_band_menu(chosen=(), current=""):
+    """Pick the band, or the set to hop through.
+
+    The keys are `menus.BANDS`' own -- same eleven bands, same digits, `a`
+    for 70 cm -- so a band key an operator already knows means the same band
+    here. The FREQUENCIES differ: that table holds digimode calling
+    frequencies and this one WSPR dial frequencies.
+
+    A band already in the rotation is marked `*` and the one in use is marked
+    `<`.
+
+    **A number or Enter selects that band alone and tunes to it; Space
+    toggles the highlighted band in and out of the hop rotation.** `[*]`
+    marks a band in the rotation and `<` the one in use.
+
+    Two idioms came before this one. Membership-toggling on a bare number
+    meant pressing 20 m from a default of 40 m gave a two-band rotation
+    rather than 20 m, when an operator pressing a band key means "go
+    there". Replacing it with `+` then a number fixed that and introduced a
+    worse problem: a two-key prefix with no visible state between the keys,
+    reported as undiscoverable in exactly those terms. Space acts on the row
+    the arrows are already on, and the `[*]` is the checkbox it implies.
+    """
+    import wsprbands
+    picked = set(chosen or ())
+    items = []
+    for key, label, dial in wsprbands.BANDS:
+        mark = "[*]" if label in picked else "[ ]"
+        here = " <" if label == current else ""
+        items.append((key, f"{mark} {label:<6} "
+                           f"{dial / 1_000_000:>11.6f} MHz{here}"))
+    title = "WSPR BAND"
+    if len(picked) > 1:
+        title += f" — hopping {len(picked)}"
+    # **No mode check here.** Selecting a band now SETS it to a data mode
+    # and gives the previous mode back on leaving -- the check this replaced
+    # told the operator to go and do by hand what the deck can do itself.
+    return {"title": title, "items": items,
+            "footer": "Esc back  Enter use this one  "
+                      "Space hop on/off  [*] in rotation"}

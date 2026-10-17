@@ -27,9 +27,13 @@ CB, CF = "\x0f", "\x10"          # Ctrl-O back, Ctrl-P forward on the ring
 F1 = "\x1b[[A"                   # TERM=linux F1
 DOWN, ENTER = "\x1b[B", "\r"
 
-# The deck OPENS on DECK & RIG. The ring reads settings | log | digimodes, so
-# from the boot screen `^P` is the log and `^P ^P` the conversation, while
-# `^O` wraps straight to the conversation.
+# The deck OPENS on DECK & RIG. The ring reads
+# settings | log | digimodes | WSPR, so from the boot screen `^P` is the log
+# and `^P ^P` the conversation, while `^O` wraps backwards onto WSPR.
+#
+# WSPR made it four areas. Every count in this file is from the boot screen,
+# so a fifth area is one edit here plus the three ring-size checks below,
+# which are about the size itself and cannot be hidden behind a name.
 #
 # Named rather than counted at each call site: the boot screen moved once and
 # every scenario in this file counts its steps from it.
@@ -82,12 +86,16 @@ check("and what it is attached to", "FTX-1" in body and "EFHW" in body,
       body[:400])
 
 print("\n^O walks left, and the ring wraps")
-body = deck([CB], "^O once: wraps to the conversation", extra=ON)
-check("one back wraps to the conversation",
-      "^T over" in body, body[-200:])
+body = deck([CB], "^O once: wraps onto WSPR", extra=ON)
+check("one back wraps onto WSPR, the last area on the ring",
+      "WSPR" in body, body[:200])
 
-body = deck([CF, CF, CF], "all the way round", extra=ON)
-check("three forward comes back to where it started",
+body = deck([CB, CB], "^O twice: the conversation", extra=ON)
+check("and two back reaches the conversation", "^T over" in body,
+      body[-200:])
+
+body = deck([CF, CF, CF, CF], "all the way round", extra=ON)
+check("four forward comes back to where it started",
       "DECK & RIG" in body, body[:200])
 
 print("\neach area remembers where it was left")
@@ -207,7 +215,10 @@ body = deck([CF], "^P with logging off")
 check("one forward goes straight to the conversation",
       "^T over" in body, body[-200:])
 body = deck([CF, CF], "^P twice with logging off")
-check("and two comes back to the settings", "DECK & RIG" in body, body[:200])
+check("two reaches WSPR", "WSPR" in body, body[:200])
+body = deck([CF, CF, CF], "^P three times with logging off")
+check("and three comes back to the settings", "DECK & RIG" in body,
+      body[:200])
 
 print("\nthe deck and rig screen is edited in place")
 # It was read-only and that was wrong: the station's own details were reachable

@@ -27,7 +27,11 @@ F3 = "\x1bOR"
 # Without this each one read the settings screen, where F2 and F3 are the
 # Display and System menus, and all five "from the conversation" checks
 # failed on a screen they were never meant to be looking at.
-TO_CHAT = "\x0f"
+# **Two backwards hops, not one.** WSPR made the ring four areas --
+# settings | log | digimodes | WSPR -- so one `^O` back from the boot
+# screen now wraps onto WSPR and every scenario below read the wrong
+# screen. Named here so the next area costs one edit per file.
+TO_CHAT = "\x0f\x0f"
 
 
 def body(scr):

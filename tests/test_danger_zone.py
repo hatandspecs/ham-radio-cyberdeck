@@ -170,4 +170,4 @@ check("with no activity selected, s explains itself",
       "no activity selected" in body, body[-400:])
 equals("and the one contact is untouched", len(left), 1)
 
-report()
+sys.exit(report())

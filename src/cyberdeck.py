@@ -17,7 +17,7 @@
 
 The only thing on the screen: a status line, the conversation, and what is
 being typed. No window manager, no pointer, nothing to click. fldigi does the
-modem work invisibly behind an XML-RPC connection (docs/design_doc.md §4).
+modem work invisibly behind an XML-RPC connection (docs/platform_design.md §4).
 
 Run it over SSH for development; on the deck it runs on tty1 against the
 framebuffer, where the color schemes use the real palette.
@@ -79,8 +79,19 @@ ACTS, CONFIRM = "activities", "confirm"
 # Shift+Left would work in the laptop rig and be a dead key on the deck: the
 # exact fault class `tests/test_console_keys.py` exists to catch. Control
 # characters are 7-bit and arrive identically on every terminal.
+# WSPR: a fourth area, and the only one that is EXCLUSIVE. While it is
+# running the ring does not leave it and fldigi is stopped -- the USB codec
+# holds one capture client and that is measured, not assumed. See
+# `docs/wspr_design.md` §2.
+WSPR = "wspr"
+# And its calibration screen, which is part of the WSPR area rather than a
+# menu: the levels are set against a meter, which means watching a reading
+# while pressing a key, and a menu cannot show a reading that moves.
+WSPRCAL = "wsprcal"
+
 AREA_SETTINGS, AREA_LOG, AREA_DIGI = "settings", "logging", "digimodes"
-RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI)
+AREA_WSPR = "wspr"
+RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI, AREA_WSPR)
 # Ctrl-O and Ctrl-P: adjacent keys, O left of P, so back and forward map onto
 # the ring the way they sit under the hand. Both were unbound, which is what
 # makes them the cheap answer -- PgUp and PgDn keep the paging and scrolling
@@ -98,6 +109,12 @@ RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI)
 # control character reaches the application is watching it arrive. It does.
 RING_BACK, RING_FWD = 15, 16                     # Ctrl-O, Ctrl-P
 
+# Transmit inhibit, on every screen. **Ctrl-B and not Ctrl-I**: Ctrl-I is
+# byte 9 and so is Tab, which no terminal can distinguish and the console
+# cannot even in principle -- so the interlock sat on the same key as "next
+# field". Ctrl-B was unbound.
+INHIBIT_KEY = 2
+
 # How long a dropped CAT read may keep reporting the last mode that was read.
 # Long enough to cover a handful of consecutive failures at five draws a
 # second, short enough that a radio switched off is admitted to quickly. See
@@ -111,6 +128,7 @@ AREA_OF = {
     LOG: AREA_LOG, ACTS: AREA_LOG, ENTRY: AREA_LOG,
     FIELDS: AREA_LOG, ORDER: AREA_LOG,
     CHAT: AREA_DIGI, TUNE: AREA_DIGI,
+    WSPR: AREA_WSPR, WSPRCAL: AREA_WSPR,
 }
 
 # Screens the ring must not leave. A question has to be answered and a field
@@ -123,7 +141,27 @@ AREA_LOCKED = (CONFIRM, PAIR, WIFI, NOKB)
 # this in step with the menus: a setting that is changeable and not listed here
 # silently reverts, which reads as the panel forgetting rather than as a bug.
 _REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
-               "MY_PARK", "EXCHANGE_TX")
+               "MY_PARK", "EXCHANGE_TX",
+               # **Every WSPR setting, because not one of them was here.**
+               # They are all reached from a WSPR menu or a calibration
+               # screen, which is the rule this tuple follows -- and without
+               # them a power cycle put the transmit level, the capture
+               # gain, the band rotation, the session name, the time-out and
+               # the upload toggle back to whatever the conf file said. The
+               # audio levels were reported as "not sticking through power
+               # cycles"; the rest were silently the same bug.
+               "WSPR_TX_LEVEL", "WSPR_RX_GAIN", "WSPR_BANDS",
+               "WSPR_TX_PERCENT", "WSPR_TIMEOUT_MIN", "WSPR_UPLOAD",
+               "WSPR_LOG_PATH", "WSPR_SESSION", "WSPR_SESSION_START")
+
+# **Deliberately NOT remembered: WSPR_DEVICE, WSPR_RX_CARD, WSPR_RX_CONTROL
+# and WSPR_RX_AGC.** They are hardware addresses, not preferences -- none of
+# them is reachable from a menu, which is the rule `_REMEMBERED` follows --
+# and persisting them is actively harmful. Remembering them once meant a
+# state file written when the codec was card 1 kept pointing a new build at
+# card 1 after the codec became card 2, which is the opposite of the fix:
+# the stale value won over a corrected default and the audio stayed dead.
+# These belong in the conf file, where a card that moves is a one-line edit.
 
 # Releasing the post-over receive hold. Not configuration: these describe how
 # a decaying transient is told apart from a station answering, which is a
@@ -199,6 +237,47 @@ class Deck:
         # Sessions the operator has deleted from the activities list. The
         # records keep their labels -- see §7f -- so the list has to be told.
         self.cfg.setdefault("FORGOTTEN_SESSIONS", [])
+        # -- WSPR. Nothing is built until the area is entered: the engines
+        # hold subprocess handles and a scheduler holds a session, and a deck
+        # that never opens WSPR should carry none of it.
+        self.wspr = None              # wsprsched.Schedule
+        self.wspr_rx = None           # wsprrx.Receiver
+        self.wspr_tx = None           # wsprtx.Transmitter
+        self.wspr_up = None           # wsprnet.Uploader
+        self.wspr_spots = []          # newest first, for the screen
+        self.wspr_sel = None          # None follows the newest spot
+        self.wspr_gain = None         # the capture mixer, built on first use
+        self.wspr_dbfs = None         # what the last capture measured
+        self._wspr_count_cache = None  # (heard, sent), or None when stale
+        self._wspr_count_key = None
+        # The power reading, which costs a CAT round trip and so may not be
+        # taken on every draw. See `_wspr_power`.
+        self._wspr_power_cache = (None, None, False)
+        self._wspr_power_at = 0.0
+        # Spawned `systemctl` calls waiting to be reaped. Never waited on:
+        # a stop that queues behind systemd's own start job takes tens of
+        # seconds, and the draw loop cannot be in that queue.
+        self._service_jobs = []
+        # band -> the mode it was in before WSPR changed it. Only bands
+        # actually changed appear, so leaving puts back exactly what was
+        # taken and nothing else.
+        self._wspr_modes = {}
+        self.wspr_cal = ""            # "", "tx" or "rx"
+        self.wspr_cal_dbfs = None
+        self.wspr_cal_from = ""       # the menu to go back to on Esc
+        # The menus an operator walked through to get where they are, so Esc
+        # retraces it one step at a time. See `_open_menu`.
+        self._menu_stack = []
+        self.wspr_message = ""
+        self.wspr_band = ""
+        self.wspr_fldigi_stopped = False
+        self.cfg.setdefault("WSPR_BANDS", "")
+        self.cfg.setdefault("WSPR_TX_PERCENT", 20)
+        self.cfg.setdefault("WSPR_TIMEOUT_MIN", 60)
+        self.cfg.setdefault("WSPR_UPLOAD", "yes")
+        self.cfg.setdefault("WSPR_SESSION", "")
+        self.cfg.setdefault("WSPR_SESSION_START", "")
+
         # The session `r` is renaming, as `(name, start)`. Held across the
         # editor, which is what hands the new name back.
         self._renaming = ("", "")
@@ -359,11 +438,11 @@ class Deck:
         # Powering on into a transmit-capable state is the wrong default for a
         # deck that lives in a bag: a stray Ctrl-T on a radio connected to an
         # unknown antenna is worse than an extra keystroke before the first
-        # over. Cleared with Ctrl-I, or F1 6 i.
+        # over. Cleared with Ctrl-B, or F1 6 i.
         if settings["INHIBIT_ON_START"] == "yes":
             self.session.inhibit(True)
             self.fldigi.receive_only(True)
-            self.session.note("transmit INHIBITED at startup — Ctrl-I to enable")
+            self.session.note("transmit INHIBITED at startup — Ctrl-B to enable")
 
         self._wifi_on_start(settings)
         self._pair_if_no_keyboard(settings)
@@ -459,6 +538,11 @@ class Deck:
         # thing that makes the interlock worth having is noticing promptly.
         self._watch_rig_mode()
 
+        # WSPR, if it is running. Every slot decision and every subprocess
+        # is collected here, on the poll the deck is already doing.
+        if self.wspr is not None:
+            self._wspr_poll()
+
         # The end of the over is established before anything is done with
         # `text`, because the poll in which trx_state flips to RX still
         # carries the tail of our own echo: fldigi's echo and its TX state do
@@ -514,7 +598,7 @@ class Deck:
             # Our own transmission, echoed back by fldigi as it goes out.
             # Held here rather than written to the transcript: it is drawn as
             # a transient TX line under the over while sending, and dropped
-            # when the over completes. See docs/design_doc.md §5.5 for why this is
+            # when the over completes. See docs/digimodes_design.md §5.5 for why this is
             # transient rather than permanent.
             self._tx_echo += text
             self.scroll = 0
@@ -604,6 +688,15 @@ class Deck:
             self.touch.taps()
             if rows:
                 self._log_scroll_by(rows)
+            return
+        if self.screen == WSPR:
+            # And the spot list, which is the third list of the same kind.
+            # A drag down reveals older spots, the same direction the arrows
+            # and PgDn go and the same direction paper moves under a finger.
+            rows = self.touch.poll()
+            self.touch.taps()
+            if rows:
+                self._wspr_move(rows)
             return
         if self.screen != CHAT:
             self.touch.poll()
@@ -1171,6 +1264,15 @@ class Deck:
         # application while they were being shown a logging menu, so the ring's
         # idea of where they were no longer matched the screen and the next
         # press skipped the conversation entirely.
+        # **WSPR running locks the ring.** Not a screen that refuses to
+        # draw: the key says what is in the way, because a ring key that did
+        # nothing would read as a broken key rather than as a deliberate
+        # refusal. The same shape as the refusal when a schema change meets
+        # a part-typed contact.
+        if self.wspr_running:
+            self._wspr_note("WSPR is running — ^C stops it, or F1 then w")
+            self.screen = WSPR
+            return
         ring = [a for a in RING if a != AREA_LOG or self.log_on]
         if here not in ring:
             here = AREA_DIGI
@@ -1184,6 +1286,12 @@ class Deck:
                 self.screen = LOG
         elif where == AREA_DIGI and self.screen not in (CHAT, TUNE):
             self.screen = CHAT
+        elif where == AREA_WSPR:
+            # Through `_open_wspr`, not by setting the screen: the engines
+            # are built on entering the area, and a screen set directly drew
+            # a WSPR area with no scheduler behind it -- so every toggle
+            # reported `off` including Decode, which defaults to on.
+            self._open_wspr()
 
     def _settings_rows(self):
         """The station, as `(label, token, value, config key)` per row.
@@ -2025,6 +2133,757 @@ class Deck:
             return
         self._open_editor("MY_PARK", "My reference", sink=self._set_my_park)
 
+    # -- WSPR --------------------------------------------------------------
+    #
+    # The engines are built on entering the area and torn down on leaving it.
+    # `wsprsched` decides what each slot does; `wsprrx` and `wsprtx` do it;
+    # `wsprlog` records it; `wsprnet` reports it. None of them knows what time
+    # it is or where the radio is -- this is where those come from.
+
+    @property
+    def wspr_running(self):
+        """Whether WSPR has the deck. The ring reads this, so it is cheap."""
+        return self.wspr is not None and self.wspr.wspr
+
+    def _wspr_note(self, text):
+        """A message for the WSPR screen. Not the transcript.
+
+        Same reasoning as `_log_note`: housekeeping about sessions and bands
+        was never part of the on-air conversation, and the WSPR screen draws
+        its own message line.
+        """
+        self.wspr_message = text
+
+    def _wspr_dir(self):
+        """Where captures and `wsprd`'s own files go.
+
+        Under the state directory rather than beside the log: these are
+        working files, one per slot, and a directory that accumulates 114 KB
+        every two minutes does not belong next to the contact log.
+        """
+        base = os.path.dirname(self._state_path() or "") or "/tmp"
+        return os.path.join(base, "wspr")
+
+    def _wspr_bands(self):
+        """The bands to hop through, as labels. One means no hopping."""
+        import wsprbands
+        out = []
+        for part in str(self.cfg.get("WSPR_BANDS", "") or "").split(","):
+            label = wsprbands.normalise(part)
+            if label and label not in out:
+                out.append(label)
+        return out or [wsprbands.normalise("40m")]
+
+    def _wspr_build(self):
+        """Make the engines. Idempotent, so entering the area twice is safe."""
+        import wsprnet
+        import wsprrx
+        import wsprsched
+        import wsprtx
+        if self.wspr is None:
+            self.wspr = wsprsched.Schedule(
+                bands=self._wspr_bands(),
+                tx_percent=self.cfg.get("WSPR_TX_PERCENT", 20),
+                timeout_minutes=self.cfg.get("WSPR_TIMEOUT_MIN", 60),
+                # Seeded from the callsign so two decks do not share a
+                # transmit schedule and collide in the same slots forever.
+                seed=sum(ord(c) for c in self.cfg.get("CALLSIGN", "") or "x"))
+        if self.wspr_rx is None:
+            self.wspr_rx = wsprrx.Receiver(
+                self._wspr_dir(),
+                device=self.cfg.get("WSPR_DEVICE") or wsprrx.DEFAULT_DEVICE)
+        if self.wspr_tx is None:
+            self.wspr_tx = wsprtx.Transmitter(
+                self._wspr_dir(), rig=self._log_rig(),
+                device=self.cfg.get("WSPR_DEVICE") or wsprtx.DEFAULT_DEVICE)
+        # Reapplied on every build, not only on the first: the setting is
+        # changed from the menu and the transmitter is not rebuilt for it.
+        # The setter drops the rendered audio when the value moves, so the
+        # next beacon goes out at the new amplitude.
+        self.wspr_tx.level = self.cfg.get("WSPR_TX_LEVEL", 50)
+        if self.wspr_gain is None:
+            import wsprgain
+            self.wspr_gain = wsprgain.Gain(
+                card=self.cfg.get("WSPR_RX_CARD", "Device"),
+                control=self.cfg.get("WSPR_RX_CONTROL", "Mic"),
+                agc=self.cfg.get("WSPR_RX_AGC", "Auto Gain Control"))
+        if self.wspr_up is None:
+            self.wspr_up = wsprnet.Uploader()
+
+    def _open_wspr(self):
+        """Enter the WSPR area. Does NOT start it."""
+        self._wspr_build()
+        self.screen = WSPR
+        if not self.wspr_band:
+            self.wspr_band = self._wspr_bands()[0]
+
+    def _wspr_start(self):
+        """Take the deck: stop fldigi, start the slot clock.
+
+        **fldigi is stopped, not asked to release the audio.** The USB codec
+        reports `Subdevices: 0/1` while fldigi holds it and `arecord` fails
+        "Device or resource busy" -- measured on the deck, so this is the only
+        arrangement that works rather than a precaution.
+        """
+        self._wspr_build()
+        if self.wspr.wspr:
+            return
+        if not self.cfg.get("CALLSIGN"):
+            self._wspr_note("set a callsign on the deck & rig screen first")
+            return
+        if not self.cfg.get("LOCATOR"):
+            self._wspr_note("set a locator — WSPR sends the grid")
+            return
+        # A run the operator did not name is still a run, so it gets the
+        # default name and a pinned start here rather than writing spots
+        # with no session for the danger zone and the export to miss.
+        self._wspr_ensure_session()
+        # Starting without the codec produced a session that looked live and
+        # decoded nothing: the slot clock ran, `arecord` failed every two
+        # minutes, and the only sign was a truncated error. WSPR without the
+        # codec is not a degraded WSPR, it is none.
+        if not self._wspr_take_audio():
+            return
+        # The capture mixer, now that fldigi is down and nothing else is
+        # listening. The previous value is remembered and put back by
+        # `_wspr_stop`, which is what makes this WSPR's level rather than a
+        # change to the station.
+        why = self.wspr_gain.apply(self.cfg.get("WSPR_RX_GAIN", 70))
+        if why:
+            self._wspr_note(f"capture gain: {why}")
+        # And the AGC off, which matters for correctness rather than level:
+        # it compresses a constant-envelope signal and corrupts the SNR that
+        # gets uploaded to wsprnet as a measurement.
+        why = self.wspr_gain.silence_agc()
+        if why:
+            self._wspr_note(f"AGC: {why}")
+        self.wspr.start(time.time())
+        self.wspr_spots = []
+        self.wspr_sel = None
+        self.wspr_dbfs = None
+        self._wspr_note(f"WSPR started on {self.wspr_band} — "
+                        f"^O ^P are locked until it stops")
+
+    def _wspr_stop(self, why=""):
+        """Give the deck back: stop everything, restart fldigi.
+
+        Ordered so the radio is safe first. The transmitter's own `stop`
+        unkeys from any state, and it is called before anything else can
+        fail.
+        """
+        if self.wspr_tx is not None:
+            self.wspr_tx.stop()
+        if self.wspr_rx is not None:
+            self.wspr_rx.stop()
+        if self.wspr is not None:
+            self.wspr.stop()
+        # Every band WSPR put into a data mode gets its own mode back.
+        self._wspr_release_modes()
+        # Before fldigi comes back, so the level it finds is the one it had.
+        if self.wspr_gain is not None:
+            why = self.wspr_gain.restore()
+            if why:
+                self._wspr_note(f"could not restore the capture gain: {why}")
+            self.wspr_gain.restore_agc()
+        self._wspr_give_audio()
+        self._wspr_note(f"WSPR stopped{' — ' + why if why else ''}")
+
+    def _fldigi_holds_audio(self):
+        """Whether the fldigi service is still up, and so still holding the
+        USB codec.
+
+        Asked of systemd rather than of the audio device: opening the device
+        to find out would itself have to be released again, and `is-active`
+        needs no privilege -- which matters precisely in the case this
+        exists for, where `stop` failed for want of one.
+        """
+        import subprocess
+        try:
+            # A short timeout: this is asked from the draw path, and
+            # `is-active` answers in milliseconds or not at all.
+            r = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "cyberdeck-fldigi"],
+                timeout=3, stdin=subprocess.DEVNULL,
+                capture_output=True)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def _wspr_take_audio(self):
+        """Ask systemd to stop fldigi. **Does not wait for it.**
+
+        This used to stop fldigi and then block until the codec was free,
+        polling with `time.sleep` and retrying -- on the keypress path, so
+        the draw loop stopped. Right after a reboot, when `cyberdeck-ui`
+        has just restarted and systemd is still starting fldigi because of
+        the UI's own `Wants=`, a `stop` queues behind that start job: the
+        panel froze for 30 to 40 seconds on the first toggle.
+        **Nothing on a keypress path may wait on systemd.**
+
+        So the command is spawned and the question "is the codec free" is
+        asked again before each capture, which is where the answer actually
+        matters. There is room for that: the scheduler skips the slot it is
+        already inside, so the first window is up to two minutes away.
+        """
+        if not self._fldigi_holds_audio():
+            return True
+        self.wspr_fldigi_stopped = self._service_async(
+            "stop", "cyberdeck-fldigi")
+        return self.wspr_fldigi_stopped
+
+    def _wspr_give_audio(self):
+        """Start fldigi again, if this code is what stopped it. Also async:
+        leaving must not block either."""
+        if self.wspr_fldigi_stopped:
+            self._service_async("start", "cyberdeck-fldigi")
+            self.wspr_fldigi_stopped = False
+
+    def _service_async(self, action, unit):
+        """Spawn systemctl and return. Reaped by `_service_reap`.
+
+        Returns whether the command was SPAWNED, not whether it worked --
+        the same distinction `rigctld_client.set_ptt` draws, and for the
+        same reason: the answer arrives later.
+        """
+        import subprocess
+        try:
+            proc = subprocess.Popen(
+                ["systemctl", action, unit],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                text=True, stdin=subprocess.DEVNULL)
+        except Exception as exc:
+            self._wspr_note(f"systemctl {action} {unit}: {exc}")
+            return False
+        self._service_jobs.append((proc, action, unit))
+        del self._service_jobs[8:]
+        return True
+
+    def _service_reap(self):
+        """Collect finished systemctl jobs and report the ones that failed.
+
+        Polled from `_wspr_poll`, so a failure is reported a fraction of a
+        second after it happens rather than being waited for.
+        """
+        for job in list(self._service_jobs):
+            proc, action, unit = job
+            if proc.poll() is None:
+                continue
+            self._service_jobs.remove(job)
+            if proc.returncode == 0:
+                continue
+            why = ""
+            try:
+                why = (proc.stderr.read() or "").strip().splitlines()[-1]
+            except Exception:
+                pass
+            if "polkit" in why.lower() or "authoriz" in why.lower() \
+                    or "authentication" in why.lower():
+                why = ("not authorized — see "
+                       "polkit/10-cyberdeck-services.rules")
+            self._wspr_note(f"systemctl {action} {unit}: "
+                            + (why[:52] if why else
+                               f"exit {proc.returncode}"))
+
+    def _wspr_data_mode(self):
+        """The mode name to put the radio in for WSPR.
+
+        `PKTUSB` is what hamlib calls the FTX-1's DATA-U and what the radio
+        reports when it is in it, so it is also what setting it back
+        requires. Configurable because another radio names it differently.
+        """
+        return str(self.cfg.get("WSPR_MODE", "PKTUSB")).strip().upper()
+
+    def _wspr_claim_mode(self, band):
+        """Put this band in a data mode, remembering what it was in.
+
+        **The radio remembers a mode per band**, so a rotation can be three
+        bands in DATA-U and one in LSB, and the only symptom is a slot that
+        transmits nothing useful. A menu item that reported which bands were
+        wrong came first; setting them is better, provided what was there is
+        given back -- which is what `_wspr_release_modes` is for.
+
+        Nothing is remembered for a band already in a data mode, so leaving
+        WSPR does not set a mode the operator had set themselves.
+        """
+        rig = self._log_rig()
+        if rig is None:
+            return
+        try:
+            found = (rig.mode()[0] or "").upper()
+        except Exception:
+            return
+        if not found:
+            # A mode that cannot be read is not a mode known to be wrong,
+            # and changing it blind would be a change with nothing to undo.
+            return
+        if found in qsolog.RIG_DATA_MODES:
+            return
+        want = self._wspr_data_mode()
+        try:
+            if not rig.set_mode(want):
+                return
+        except Exception:
+            return
+        # Remembered only once the command went, and only the FIRST mode
+        # seen on this band: visiting a band twice must not record the mode
+        # WSPR itself set as the one to go back to.
+        self._wspr_modes.setdefault(band, found)
+        self._wspr_note(f"{band} was {found} — set to {want}")
+
+    def _wspr_release_modes(self, only=None):
+        """Give every band its own mode back.
+
+        The radio holds one mode at a time, so this has to VISIT each band
+        it changed. `only` restores a single band, which is the free case:
+        the radio is already tuned there.
+
+        Called on stop and on leaving the area, and the band the operator
+        was on is returned to last so the radio is left where they left it.
+        """
+        if not self._wspr_modes:
+            return
+        rig = self._log_rig()
+        if rig is None:
+            self._wspr_modes.clear()
+            return
+        import wsprbands
+        bands = ([only] if only is not None
+                 else list(self._wspr_modes.keys()))
+        here = self.wspr_band
+        done = []
+        for band in bands:
+            was = self._wspr_modes.get(band)
+            if not was:
+                continue
+            try:
+                if band != self.wspr_band:
+                    hz = wsprbands.dial_hz(band)
+                    if hz:
+                        rig.set_frequency(hz)
+                        time.sleep(0.25)
+                rig.set_mode(was)
+                time.sleep(0.1)
+                done.append(band)
+            except Exception:
+                continue
+        for band in done:
+            self._wspr_modes.pop(band, None)
+        # Back to where the operator was, if visiting others moved the radio.
+        if only is None and here and bands != [here]:
+            hz = wsprbands.dial_hz(here)
+            if hz:
+                try:
+                    rig.set_frequency(hz)
+                except Exception:
+                    pass
+        if done:
+            self._wspr_note("mode restored on " + ", ".join(done))
+
+    def _wspr_poll(self):
+        """One tick of WSPR. Called from `poll`, so it never blocks."""
+        if self.wspr is None:
+            return
+        now = time.time()
+        self._service_reap()
+        for action, what in self.wspr.tick(now):
+            if action == "stop":
+                self._wspr_stop(what)
+                return
+            if action == "tx_off":
+                # Receive keeps running: the timer is about the
+                # transmitter. Said loudly, because an operator who comes
+                # back to a screen that is still decoding needs to know
+                # that it has stopped beaconing.
+                self._wspr_note(f"transmit off — {what}. Spots still "
+                                f"coming in; F1 then t arms it again")
+                continue
+            if action == "tune":
+                self._wspr_tune(what)
+            elif action == "capture":
+                self._wspr_capture(what)
+            elif action == "transmit":
+                self._wspr_transmit(what)
+        self._wspr_collect()
+
+    def _wspr_tune(self, band):
+        """Put the radio on a band's WSPR dial frequency.
+
+        Through `rigctld_client` and not fldigi: fldigi is stopped, which
+        takes its rig control with it. Verified on the deck -- the rigctld
+        unit keeps the serial port when fldigi goes down.
+        """
+        import wsprbands
+        hz = wsprbands.dial_hz(band)
+        if not hz:
+            return
+        # The band being LEFT gets its mode back first, while the radio is
+        # still on it -- which is the only moment restoring it is free.
+        if self.wspr_band and self.wspr_band != band \
+                and self.wspr_band in self._wspr_modes:
+            self._wspr_release_modes(only=self.wspr_band)
+        self.wspr_band = band
+        rig = self._log_rig()
+        if rig is not None:
+            try:
+                rig.set_frequency(hz)
+            except Exception as exc:
+                self._wspr_note(f"could not tune: {exc}")
+                return
+            # And the band being arrived at is put into a data mode, which
+            # is what makes a rotation work without the operator setting
+            # each band by hand.
+            self._wspr_claim_mode(band)
+
+    def _wspr_capture(self, band):
+        """Begin a window, unless fldigi still has the codec.
+
+        **This is where "is the audio free" is answered**, not on the
+        keypress that started the session -- see `_wspr_take_audio`. Asking
+        here costs one `systemctl is-active` per two minutes and keeps the
+        draw loop out of systemd's way entirely. A window skipped because
+        the codec was still busy says so and the next slot tries again.
+        """
+        import datetime as _dt
+        import wsprbands
+        if self._fldigi_holds_audio():
+            self._wspr_note("fldigi still has the audio — skipping this "
+                            "window (see docs/wspr_deploy.md §4b)")
+            return
+        when = _dt.datetime.now(_dt.timezone.utc)
+        self.wspr_rx.start_capture(when, band or self.wspr_band,
+                                   wsprbands.dial_hz(band
+                                                      or self.wspr_band))
+
+    def _wspr_transmit(self, band):
+        """Beacon this slot. Refused outside a data mode.
+
+        The interlock is the deck's own: `_rig_mode_ok` reads through
+        `_rig_mode_held`, so a dropped CAT read cannot be mistaken for a
+        radio that left its data mode.
+        """
+        if not self._rig_mode_ok():
+            # **Named band.** The radio remembers a mode per band, so on a
+            # hopping session this fires for one band out of four and "the
+            # rig is not in a data mode" does not say which to go and set.
+            # `Check hop bands for DATA-U` on the menu answers it for the
+            # whole rotation without waiting for the slot to come round.
+            self._wspr_note(f"{band or self.wspr_band} is not in a data "
+                            f"mode — not transmitting on it")
+            return
+        if self.session.inhibited:
+            self._wspr_note("transmit is inhibited — Ctrl-B to arm")
+            return
+        watts, dbm, exact = self._wspr_power()
+        if dbm is None:
+            self._wspr_note("cannot read the power — not transmitting")
+            return
+        why = self.wspr_tx.beacon(self.cfg.get("CALLSIGN", ""),
+                                  str(self.cfg.get("LOCATOR", ""))[:4],
+                                  dbm)
+        if why:
+            self._wspr_note(f"beacon failed: {why}")
+            return
+        self._wspr_record_tx(band or self.wspr_band, dbm, watts)
+
+    def _wspr_power(self, cache_s=1.5):
+        """`(watts, dbm, exact)` for the beacon, or `(None, None, False)`.
+
+        **Cached, because this is on a draw path.** It reads the radio over
+        CAT -- a socket round trip with a two-second timeout -- and
+        `_draw_wspr` called it on every draw, five times a second. Moving the
+        spot selection therefore waited on the radio for every keypress,
+        which is the lag an operator reported on the arrows. `_radio_now`
+        carries the same warning for the same reason: nothing on a draw path
+        may call the radio without a cache.
+        """
+        now = time.monotonic()
+        if self._wspr_power_at and now - self._wspr_power_at < cache_s:
+            return self._wspr_power_cache
+        got = self._wspr_power_read()
+        self._wspr_power_cache = got
+        self._wspr_power_at = now
+        return got
+
+    def _wspr_power_read(self):
+        """The uncached reading. Everything else goes through `_wspr_power`.
+
+        The dBm the message carries is derived from what the radio is
+        actually making, snapped to a value WSPR can encode. A ceiling is
+        required: without `TX_POWER_MAX` the CAT reading is a fraction and
+        cannot be turned into watts at all.
+        """
+        import wspr as _w
+        text = self._power_watts()
+        if not text:
+            return None, None, False
+        try:
+            watts = float(text)
+            dbm, exact = _w.dbm_for_watts(watts)
+        except Exception:
+            return None, None, False
+        return text, dbm, exact
+
+    def _wspr_record_tx(self, band, dbm, watts):
+        import wsprbands
+        import wsprlog
+        rec = wsprlog.tx_record(
+            self._utc_now(), band=band,
+            dial_hz=wsprbands.dial_hz(band), my_dbm=dbm, tx_power=watts,
+            activity=self.cfg.get("WSPR_SESSION", ""),
+            activity_start=self.cfg.get("WSPR_SESSION_START", ""),
+            my_call=self.cfg.get("CALLSIGN", ""),
+            my_grid=self.cfg.get("LOCATOR", ""),
+            my_rig=self.cfg.get("RIG", ""),
+            my_antenna=self.cfg.get("ANTENNA", ""))
+        try:
+            self._wspr_counts_stale()
+            wsprlog.append(wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")),
+                           rec)
+        except OSError as exc:
+            self._wspr_note(f"could not write the spot log: {exc}")
+
+    def _wspr_collect(self):
+        """Drain the engines. Every event here is the result of a subprocess."""
+        import wsprbands
+        import wsprlog
+        import wsprnet
+        for event in self.wspr_rx.tick():
+            kind = event[0]
+            if kind == "captured":
+                path, band = event[1], event[2]
+                # The WSJT-X analog: the figure that says whether the
+                # capture gain is right. Measured on the file that was just
+                # written, so it costs no extra audio handling, and strided
+                # so a 114-second window is not walked sample by sample on a
+                # 512 MB board.
+                import wsprgain
+                level = wsprgain.level_of(path)
+                self.wspr_dbfs = level[2] if level else None
+                if self.wspr.decode:
+                    self.wspr_rx.start_decode(path, band,
+                                              wsprbands.dial_hz(band))
+            elif kind == "spots":
+                self._wspr_store(event[1], event[2])
+            elif kind == "failed":
+                self._wspr_note(f"{event[1]}: {event[2]}")
+        for event in self.wspr_tx.tick():
+            if event[0] == "failed":
+                self._wspr_note(f"transmit: {event[2]}")
+
+    def _wspr_store(self, spots, band):
+        """Log the spots, show them, and report them if armed."""
+        import wsprbands
+        import wsprlog
+        import wsprnet
+        if not spots:
+            return
+        path = wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", ""))
+        when = self._utc_now()
+        common = dict(when=when, band=band,
+                      activity=self.cfg.get("WSPR_SESSION", ""),
+                      activity_start=self.cfg.get("WSPR_SESSION_START", ""),
+                      my_call=self.cfg.get("CALLSIGN", ""),
+                      my_grid=self.cfg.get("LOCATOR", ""),
+                      my_rig=self.cfg.get("RIG", ""),
+                      my_antenna=self.cfg.get("ANTENNA", ""))
+        try:
+            wsprlog.append_spots(path, spots, **common)
+            self._wspr_counts_stale()
+        except OSError as exc:
+            self._wspr_note(f"could not write the spot log: {exc}")
+        # Newest first, which is the order the screen wants.
+        #
+        # **Distance and bearing are computed here, not stored.** WSPR
+        # carries a grid square and no distance; wsprnet and wspr.rocks fill
+        # their own km column the same way, from the two locators. They are
+        # left out of the log record deliberately: both are derivable from
+        # the two grids that ARE in it, and a log holding a figure beside
+        # the data it came from invites the two to disagree.
+        import grid
+        mine = self.cfg.get("LOCATOR", "")
+        for spot in spots:
+            theirs = str(spot.get("grid", "") or "")
+            self.wspr_spots.insert(0, dict(
+                spot, when=when, band=band,
+                km=grid.distance_km(mine, theirs),
+                az=grid.azimuth_deg(mine, theirs)))
+        del self.wspr_spots[200:]
+        # Three conditions, all the operator's: running, the toggle on, and
+        # a network. None of them is decided here.
+        armed = (self.wspr_running
+                 and self.cfg.get("WSPR_UPLOAD") == "yes"
+                 and self._online())
+        if not armed:
+            return
+        for spot in spots:
+            self.wspr_up.submit(wsprnet.spot_params(
+                spot, self.cfg.get("CALLSIGN", ""),
+                self.cfg.get("LOCATOR", ""),
+                wsprbands.dial_hz(band), when[2:10].replace("-", ""),
+                when[11:16].replace(":", "")), armed=True)
+
+    def _utc_now(self):
+        import datetime as _dt
+        return _dt.datetime.now(_dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+
+    def _wspr_test_tone(self):
+        """A steady tone for setting audio drive. Keys the radio.
+
+        Behind the menu and a confirmation rather than under a key, because
+        it transmits. The interlock and the inhibit both apply unchanged --
+        this is a transmission like any other -- and it stops by itself,
+        which is the property that matters most: a test tone is a
+        transmitter left keyed.
+        """
+        import wsprtx
+        # **The menu closes before any refusal is reported.** All three of
+        # these wrote to `wspr_message`, which is drawn on the WSPR screen --
+        # underneath the menu that was still open. From the operator's side
+        # the key did nothing at all: "calibrate transmit audio does
+        # nothing". The commonest case is the third, since the inhibit
+        # starts on and cannot be lifted until the rig reads DATA-U.
+        if self.wspr_running:
+            self._close_menu()
+            self._wspr_note("stop WSPR first — it owns the audio")
+            return
+        if not self._rig_mode_ok():
+            self._close_menu()
+            self._wspr_note("rig is not in a data mode — set DATA-U, "
+                            "then calibrate")
+            return
+        if self.session.inhibited:
+            self._close_menu()
+            self._wspr_note("transmit is inhibited — Ctrl-B on the WSPR "
+                            "screen arms it, once the rig reads DATA-U")
+            return
+        self._wspr_build()
+        secs = int(wsprtx.TEST_TONE_S)
+        watts, dbm, exact = self._wspr_power()
+        self._ask_confirm(
+            "TRANSMIT A TEST TONE",
+            [f"{secs} seconds of carrier on {self.wspr_band}.",
+             "",
+             "Set the radio's drive so its power meter reads what",
+             "the deck reports, and watch for the dBm to highlight.",
+             "",
+             f"Reading now: {watts or '?'} W"
+             + (f" = {dbm} dBm{'' if exact else ' (snapped)'}"
+                if dbm is not None else ""),
+             "",
+             "It stops by itself. Ctrl-C stops it sooner."],
+            self._wspr_do_test_tone,
+            back=WSPR,
+            footer="Enter transmit   any other key does not")
+
+    def _wspr_do_test_tone(self):
+        why = self.wspr_tx.test_tone()
+        self._wspr_note(f"test tone failed: {why}" if why
+                        else "test tone transmitting")
+
+    def _wspr_forget_all(self):
+        """Take every WSPR session off the list. Destroys nothing."""
+        import wsprlog
+        path = wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", ""))
+        try:
+            records = wsprlog.read(path)
+        except OSError as exc:
+            self._wspr_note(f"could not read the spot log: {exc}")
+            return
+        pairs = [[s["name"], s["start"]]
+                 for s in wsprlog.sessions_in(records)]
+        if not pairs:
+            self._wspr_note("the list is already empty")
+            self._close_menu()
+            return
+        self.cfg["WSPR_FORGOTTEN"] = pairs
+        self._save_state()
+        self._close_menu()
+        self._wspr_note(f"{len(pairs)} session"
+                        f"{'' if len(pairs) == 1 else 's'} forgotten — "
+                        f"every spot is still in the log")
+
+    def _wspr_ask_clear_session(self):
+        import wsprlog
+        name = self.cfg.get("WSPR_SESSION", "")
+        start = self.cfg.get("WSPR_SESSION_START", "")
+        if not name:
+            self._wspr_note("no session selected")
+            self._close_menu()
+            return
+        path = wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", ""))
+        heard, sent = wsprlog.counts(wsprlog.read(path), name, start)
+        if not (heard or sent):
+            self._wspr_note(f"{name} has no spots")
+            self._close_menu()
+            return
+        self._ask_confirm(
+            "DELETE THIS SESSION'S SPOTS",
+            [f"{heard} heard and {sent} sent, from {name[:30]}.",
+             "",
+             "They are removed from the spot log permanently.",
+             "Nothing on the deck can put them back.",
+             "",
+             "Anything already uploaded to wsprnet is not changed."],
+            lambda n=name, t=start: self._wspr_clear_session(n, t),
+            back=WSPR,
+            footer="Enter delete them   any other key keeps them")
+
+    def _wspr_clear_session(self, name, start):
+        import wsprlog
+        try:
+            self._wspr_counts_stale()
+            gone = wsprlog.remove_session(
+                wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")),
+                name, start)
+        except OSError as exc:
+            self._wspr_note(f"could not write the spot log: {exc}")
+            return
+        self.wspr_spots = []
+        self.wspr_sel = None
+        self._wspr_note(f"{gone} record{'' if gone == 1 else 's'} deleted "
+                        f"from {name}")
+
+    def _wspr_ask_clear_all(self):
+        import wsprlog
+        path = wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", ""))
+        records = wsprlog.read(path)
+        heard, sent = wsprlog.counts(records)
+        if not records:
+            self._wspr_note("the spot log is already empty")
+            self._close_menu()
+            return
+        self._ask_confirm(
+            "DELETE EVERY WSPR RECORD",
+            [f"All {heard} heard and {sent} sent, across",
+             f"{len(wsprlog.sessions_in(records))} session"
+             f"{'' if len(wsprlog.sessions_in(records)) == 1 else 's'}.",
+             "",
+             "The spot log is left empty. Nothing on the deck",
+             "can put any of them back.",
+             "",
+             "The contact log is a different file and is untouched."],
+            self._wspr_clear_all,
+            back=WSPR,
+            footer="Enter empty it   any other key keeps it")
+
+    def _wspr_clear_all(self):
+        import wsprlog
+        try:
+            self._wspr_counts_stale()
+            gone = wsprlog.clear(
+                wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")))
+        except OSError as exc:
+            self._wspr_note(f"could not write the spot log: {exc}")
+            return
+        self.wspr_spots = []
+        self.wspr_sel = None
+        if self.cfg.get("WSPR_FORGOTTEN"):
+            self.cfg["WSPR_FORGOTTEN"] = []
+            self._save_state()
+        self._wspr_note(f"spot log emptied — {gone} record"
+                        f"{'' if gone == 1 else 's'} deleted")
+
     def _log_note(self, text):
         """A message about logging, shown on the logging screens only.
 
@@ -2403,6 +3262,385 @@ class Deck:
             curses.curs_set(0)
         except curses.error:
             pass
+
+    def _draw_wspr(self, h, w):
+        """The WSPR screen. No radio queries: `_radio_now` caches, and the
+        power reading here comes through it."""
+        import wsprbands
+        import wsprlog
+        import wsprnet
+        import wsprsched
+        now = time.time()
+        watts, dbm, exact = self._wspr_power()
+        sched = self.wspr
+        # **Cached.** This read and parsed the whole spot log on every draw,
+        # and the draw loop runs on every keypress -- so scrolling the list
+        # re-parsed a file that grows all session, which is the lag an
+        # operator reported on the arrows. The counts change only when a
+        # spot is stored, the session changes, or the log is emptied, and
+        # each of those drops the cache.
+        heard, sent = self._wspr_counts()
+        state = {
+            "session": self.cfg.get("WSPR_SESSION", ""),
+            "band": self.wspr_band,
+            "dial_hz": wsprbands.dial_hz(self.wspr_band),
+            "hopping": len(self._wspr_bands()) > 1,
+            "hop_count": len(self._wspr_bands()),
+            "clock": time.strftime("%H%MZ", time.gmtime()),
+            # The slot clock runs off the same arithmetic the scheduler acts
+            # on, not a second copy of it: what the operator watches and what
+            # fires the capture cannot then disagree.
+            "slot_in": (now - wsprsched.slot_start(now)
+                        if sched and sched.wspr else None),
+            "in_capture": wsprsched.in_capture(now),
+            "slot_to_next": wsprsched.seconds_to_next_slot(now),
+            "selected": self.wspr_sel,
+            "wspr": bool(sched and sched.wspr),
+            "decode": bool(sched and sched.decode),
+            "transmit": bool(sched and sched.transmit),
+            "tx_next": bool(sched and sched.tx_next),
+            "next_tx": (sched.will_transmit(now + 120)
+                        if sched and sched.wspr else None),
+            "watts": watts, "dbm": dbm, "dbm_exact": exact,
+            "ceiling": self.cfg.get("TX_POWER_MAX", 0),
+            "heard": heard, "sent": sent,
+            "upload": wsprnet.upload_state(
+                self.cfg.get("WSPR_UPLOAD") == "yes", self._online(),
+                self.wspr_running),
+            "timeout_left": (sched.timeout_remaining(now)
+                             if sched else None),
+            "decoding": bool(self.wspr_rx and self.wspr_rx.busy_decoding),
+            # The inhibit, which this screen did not show at all: transmit
+            # was refused and nothing on screen said why.
+            "inhibited": bool(self.session.inhibited),
+            "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
+            "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+            "dbfs": self.wspr_dbfs,
+            "measuring": bool(self.wspr_rx and self.wspr_rx.busy_capturing),
+        }
+        # The arrows are advertised: a key that scrolls a list nobody knows
+        # scrolls is a key that does not exist. Both forms fit 66 columns,
+        # which is the panel.
+        if self.wspr_sel is not None:
+            # While a spot is selected the footer is about the list, because
+            # that is what the keys are doing and because Esc releasing the
+            # selection is the thing an operator cannot otherwise discover.
+            footer = (" ↑↓ PgUp PgDn Home End move   Esc follow the newest"
+                      "   ^B inhibit")
+        else:
+            # `^B inhibit` is advertised here because the interlock is the
+            # one key an operator reaches for under time pressure, and it
+            # moved off Tab -- so the key that used to work by accident now
+            # has to be taught.
+            footer = (" F1 menu F2 session F3 band ↑↓ spots "
+                      "^B inhibit ^C stop" if self.wspr_running else
+                      " F1 menu F2 session F3 band ↑↓ spots "
+                      "^B inhibit ^O ^P")
+        for i, line in enumerate(render.wspr_screen(
+                self.wspr_spots, w, h, state=state,
+                message=self.wspr_message, footer=footer)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _wspr_counts(self):
+        """`(heard, sent)` for the current session, from cache.
+
+        Invalidated by `_wspr_counts_stale`, which every path that changes
+        the log calls. A time-based cache was the alternative and is worse:
+        it makes a spot that has just been logged take a second to appear in
+        a counter that is sitting right next to it.
+        """
+        import wsprlog
+        key = (self.cfg.get("WSPR_SESSION", ""),
+               self.cfg.get("WSPR_SESSION_START", ""))
+        if self._wspr_count_cache is not None \
+                and self._wspr_count_key == key:
+            return self._wspr_count_cache
+        heard = sent = 0
+        try:
+            records = wsprlog.read(
+                wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")))
+            heard, sent = wsprlog.counts(records, key[0], key[1])
+        except Exception:
+            pass
+        self._wspr_count_cache = (heard, sent)
+        self._wspr_count_key = key
+        return self._wspr_count_cache
+
+    def _wspr_counts_stale(self):
+        """Drop the cached counts. Called by anything that writes the log."""
+        self._wspr_count_cache = None
+
+    # -- the calibration screen -------------------------------------------
+    #
+    # A level set against a meter means watching a reading while pressing a
+    # key, which a menu cannot do. `+` and `-` mean the same thing on both
+    # halves; what differs is the instrument -- the radio's own power meter
+    # for transmit, the deck's dBFS reading for receive.
+
+    CAL_LEVELS = (5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 75, 100)
+
+    def _open_wspr_cal(self, kind):
+        """Enter calibration. `kind` is "tx" or "rx"."""
+        self._wspr_build()
+        self.wspr_cal = kind
+        self.wspr_cal_dbfs = None
+        # Remembered BEFORE the menu is closed, so Esc out of calibration
+        # goes back to the audio menu rather than all the way to the screen.
+        self.wspr_cal_from = self.menu or ""
+        self._close_menu()
+        if kind == "rx":
+            # The codec is already WSPR's: the menu refuses to open this
+            # with WSPR off, so there is nothing to take here and nothing to
+            # give back. One mechanism owns fldigi, which is `_wspr_start`.
+            why = self.wspr_gain.apply(self.cfg.get("WSPR_RX_GAIN", 70))
+            if why:
+                self._wspr_note(f"capture gain: {why}")
+        self.screen = WSPRCAL
+        self._wspr_note("+ and - set the level" + (
+            "; Enter sends a tone" if kind == "tx" else ""))
+
+    def _close_wspr_cal(self):
+        """Leave calibration, putting back whatever it took."""
+        kind, self.wspr_cal = self.wspr_cal, ""
+        if self.wspr_tx is not None:
+            self.wspr_tx.stop()           # unkeys from any state
+        if self.wspr_rx is not None:
+            self.wspr_rx.stop_probe()
+        # The gain is NOT restored here: the session still owns the codec
+        # and the level the operator just set is the level it should run at.
+        # `_wspr_stop` puts it back when the session ends.
+        self.screen = WSPR
+        back, self.wspr_cal_from = self.wspr_cal_from, ""
+        if back:
+            self._open_menu(back, remember=False)
+
+    def _wspr_cal_step(self, up):
+        """Move the level being calibrated one step."""
+        tx = self.wspr_cal == "tx"
+        setting = "WSPR_TX_LEVEL" if tx else "WSPR_RX_GAIN"
+        order = list(self.CAL_LEVELS)
+        now = int(self.cfg.get(setting, 50 if tx else 70))
+        if now in order:
+            at = order.index(now)
+        else:
+            at = min(range(len(order)), key=lambda i: abs(order[i] - now))
+        at = max(0, min(len(order) - 1, at + (1 if up else -1)))
+        nxt = order[at]
+        if nxt == now:
+            self._wspr_note("at the end of the range")
+            return
+        self.cfg[setting] = nxt
+        self._save_state()
+        if tx:
+            if self.wspr_tx is not None:
+                self.wspr_tx.level = nxt
+                # **Re-sent at the new level if a tone is running.** The
+                # audio is a rendered file, so changing the level mid-play
+                # means playing a new one -- which from the operator's side
+                # is what adjusting during the test looks like.
+                if self.wspr_tx.keyed:
+                    self.wspr_tx.stop()
+                    self._wspr_cal_tone()
+            self._wspr_note(f"TX audio level {nxt}%")
+        else:
+            note = f"RX capture gain {nxt}%"
+            if self.wspr_gain is not None:
+                why = self.wspr_gain.apply(nxt)
+                if why:
+                    note += f" — {why}"
+            self._wspr_note(note)
+
+    def _wspr_cal_tone(self):
+        """Send a calibration tone. Longer than the menu's, to adjust under."""
+        import wsprtx
+        if not self._rig_mode_ok():
+            self._wspr_note("rig is not in a data mode — no tone")
+            return
+        if self.session.inhibited:
+            self._wspr_note("transmit is inhibited — Ctrl-B arms it")
+            return
+        why = self.wspr_tx.test_tone(seconds=wsprtx.CAL_TONE_S)
+        if why:
+            self._wspr_note(f"tone failed: {why}")
+
+    def _wspr_cal_poll(self):
+        """Keep the receive meter moving. Called from the draw loop."""
+        if self.wspr_cal != "rx" or self.wspr_rx is None:
+            return
+        import wsprgain
+        path = self.wspr_rx.probe_done()
+        if path:
+            level = wsprgain.level_of(path)
+            self.wspr_cal_dbfs = level[2] if level else None
+        if not self.wspr_rx.probing and not self.wspr_rx.busy_capturing:
+            self.wspr_rx.start_probe()
+
+    def _draw_wspr_cal(self, h, w):
+        """The calibration screen."""
+        self._wspr_cal_poll()
+        if self.wspr_tx is not None:
+            for event in self.wspr_tx.tick():
+                if event[0] == "failed":
+                    self._wspr_note(f"tone: {event[2]}")
+        tx = self.wspr_cal == "tx"
+        watts = dbm = exact = None
+        fallback = False
+        if tx:
+            watts, dbm, exact = self._wspr_power()
+        state = {
+            "kind": "tx" if tx else "rx",
+            "band": self.wspr_band,
+            "level": self.cfg.get("WSPR_TX_LEVEL", 50) if tx
+            else self.cfg.get("WSPR_RX_GAIN", 70),
+            "watts": watts, "dbm": dbm, "dbm_exact": exact,
+            "ceiling": self.cfg.get("TX_POWER_MAX", 0),
+            "power_fallback": fallback,
+            "keyed": bool(self.wspr_tx and self.wspr_tx.keyed),
+            "listening": bool(self.wspr_rx and self.wspr_rx.probing),
+            "dbfs": self.wspr_cal_dbfs,
+        }
+        footer = ("  + - level  Enter send a tone  ^B inhibit  ^C stop  "
+                  "Esc back" if tx else
+                  "  + - level   ^B inhibit   Esc back")
+        for i, line in enumerate(render.wspr_cal_screen(
+                w, h, state=state, message=self.wspr_message,
+                footer=footer)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_wspr_cal(self, ch):
+        key = chr(ch).lower() if 32 <= ch < 127 else ""
+        # Both spellings of each: the console has no keypad distinction and
+        # `=` is unshifted `+` on a small keyboard.
+        if key in ("+", "=") or ch == curses.KEY_RIGHT:
+            self._wspr_cal_step(True)
+        elif key in ("-", "_") or ch == curses.KEY_LEFT:
+            self._wspr_cal_step(False)
+        elif ch == curses.KEY_UP:
+            self._wspr_cal_step(True)
+        elif ch == curses.KEY_DOWN:
+            self._wspr_cal_step(False)
+        elif ch in (10, 13, curses.KEY_ENTER):
+            if self.wspr_cal == "tx":
+                self._wspr_cal_tone()
+        elif ch == 3:                                   # Ctrl-C
+            # Aborting a transmission, which is exactly what Ctrl-C does on
+            # the conversation screen.
+            if self.wspr_tx is not None:
+                self.wspr_tx.stop()
+            self._wspr_note("stopped")
+        elif ch == 27:                                  # Esc
+            self._close_wspr_cal()
+        return True
+
+    def _wspr_move(self, by):
+        """Move the spot selection. The list is newest first, so down is
+        older -- the same direction the eye reads it.
+
+        **Arrowing up off the top releases the selection**, which is how a
+        list is left: it clamped at the newest spot instead, so the only way
+        out was Esc and an operator arrowing back out of the list found the
+        highlight stuck on the first row. Esc still works and the footer
+        still says so; this is the gesture people actually try.
+        """
+        total = len(self.wspr_spots)
+        if not total:
+            self.wspr_sel = None
+            return
+        if self.wspr_sel is None:
+            # Nothing selected: moving down takes the newest, moving up has
+            # nothing above it to reach.
+            if by > 0:
+                self.wspr_sel = 0
+            return
+        at = self.wspr_sel + by
+        if at < 0:
+            self.wspr_sel = None
+            self._wspr_note("following the newest spot again")
+            return
+        self.wspr_sel = min(total - 1, at)
+
+    def _handle_wspr(self, ch):
+        if ch == curses.KEY_F1:
+            self._open_menu("wspr")
+        elif ch == curses.KEY_F2:
+            self._open_editor(None, "WSPR session name",
+                              text=self.cfg.get("WSPR_SESSION", ""),
+                              sink=self._wspr_set_session)
+        elif ch == curses.KEY_F3:
+            self._open_menu("wspr_band")
+        elif ch == 3:                                   # Ctrl-C
+            # **Ctrl-C, as in the digimodes.** It aborts an over there --
+            # byte 3 reaches `getch` because `curses.raw()` disables ISIG,
+            # which is why it is a key here and not a signal. Ctrl-X was
+            # used first and was wrong: that key means CLEAR everywhere else
+            # on the deck, on the transcript and on the entry form, and
+            # making it mean "stop" in one application only is the kind of
+            # inconsistency an operator pays for under pressure.
+            if self.wspr_running:
+                self._wspr_stop("stopped by hand")
+            else:
+                self._wspr_note("WSPR is not running")
+        elif ch in (curses.KEY_UP, curses.KEY_DOWN):
+            self._wspr_move(-1 if ch == curses.KEY_UP else 1)
+        elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            self._wspr_move(-8 if ch == curses.KEY_PPAGE else 8)
+        elif ch == curses.KEY_HOME:
+            self.wspr_sel = 0 if self.wspr_spots else None
+        elif ch == curses.KEY_END:
+            self.wspr_sel = (len(self.wspr_spots) - 1
+                             if self.wspr_spots else None)
+        elif ch == 27:                                  # Esc
+            # **The selection is released FIRST, whether WSPR is running or
+            # not.** Tested in the wrong order, the running check answered
+            # every Esc with "^C stops it" and an operator who had scrolled
+            # into the list could not get back out of it -- reported in
+            # exactly those terms.
+            if self.wspr_sel is not None:
+                self.wspr_sel = None       # back to following the newest
+                self._wspr_note("following the newest spot again")
+            elif self.wspr_running:
+                self._wspr_note("WSPR is running — ^C stops it")
+            else:
+                self.screen = WSPR
+        return True
+
+    def _wspr_ensure_session(self):
+        """Give the session a name if it has none. Returns the name."""
+        import wsprlog
+        name = str(self.cfg.get("WSPR_SESSION", "") or "").strip()
+        if not name:
+            name = wsprlog.DEFAULT_SESSION
+            self._wspr_counts_stale()
+            self.cfg["WSPR_SESSION"] = name
+            self.cfg["WSPR_SESSION_START"] = self._utc_now()
+            self._save_state()
+        elif not self.cfg.get("WSPR_SESSION_START"):
+            # A name with no start cannot be told from another run under the
+            # same name, which is what the start exists to separate.
+            self.cfg["WSPR_SESSION_START"] = self._utc_now()
+            self._save_state()
+        return name
+
+    def _wspr_set_session(self, name):
+        """Name a WSPR session. The start is pinned here, as the log's is."""
+        name = str(name or "").strip()
+        import wsprlog
+        self._wspr_counts_stale()
+        # Clearing it means "back to the default run", not "no session":
+        # spots keep belonging to something that can be exported and cleared.
+        name = name or wsprlog.DEFAULT_SESSION
+        self.cfg["WSPR_SESSION"] = name
+        self.cfg["WSPR_SESSION_START"] = self._utc_now()
+        self._save_state()
+        self._wspr_note(f"session {name}")
 
     def _handle_activities(self, ch):
         rows = self._activity_choices()
@@ -3293,6 +4531,10 @@ class Deck:
             self._draw_entry(h, w)
         elif self.screen == SET:
             self._draw_settings(h, w)
+        elif self.screen == WSPRCAL:
+            self._draw_wspr_cal(h, w)
+        elif self.screen == WSPR:
+            self._draw_wspr(h, w)
         elif self.screen == ACTS:
             self._draw_activities(h, w)
         elif self.screen == CONFIRM:
@@ -3395,6 +4637,58 @@ class Deck:
             return menus.SYSTEM
         if m == "memories":
             return menus.memories_menu(self.cfg)
+        if m == "wspr":
+            import wsprlog
+            import wsprnet
+            # Through the cache: `_menu_for` runs on every keypress while
+            # the menu is open, so a read here is the same lag the draw loop
+            # had on the arrows.
+            heard, sent = self._wspr_counts()
+            bands = self._wspr_bands()
+            sched = self.wspr
+            return menus.wspr_menu({
+                "wspr": bool(sched and sched.wspr),
+                "decode": bool(sched and sched.decode),
+                "transmit": bool(sched and sched.transmit),
+                "tx_next": bool(sched and sched.tx_next),
+                "session": self.cfg.get("WSPR_SESSION", ""),
+                "band": self.wspr_band or (bands[0] if bands else ""),
+                "hopping": len(bands) > 1, "hop_count": len(bands),
+                "tx_percent": self.cfg.get("WSPR_TX_PERCENT", 20),
+                "timeout_minutes": self.cfg.get("WSPR_TIMEOUT_MIN", 60),
+                "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
+                "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+                "dbfs": self.wspr_dbfs,
+                "upload": menus and wsprnet.upload_state(
+                    self.cfg.get("WSPR_UPLOAD") == "yes", self._online(),
+                    self.wspr_running),
+                "log_name": os.path.basename(wsprlog.log_path(
+                    self.cfg.get("WSPR_LOG_PATH", ""))),
+                "heard": heard, "sent": sent,
+            })
+        if m == "wspr_band":
+            return menus.wspr_band_menu(self._wspr_bands(), self.wspr_band)
+        if m == "wspr_audio":
+            return menus.wspr_audio_menu({
+                "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
+                "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+                "dbfs": self.wspr_dbfs})
+        if m == "wspr_danger":
+            import wsprlog
+            try:
+                records = wsprlog.read(wsprlog.log_path(
+                    self.cfg.get("WSPR_LOG_PATH", "")))
+            except Exception:
+                records = []
+            heard, sent = wsprlog.counts(
+                records, self.cfg.get("WSPR_SESSION", ""),
+                self.cfg.get("WSPR_SESSION_START", ""))
+            all_heard, all_sent = wsprlog.counts(records)
+            return menus.wspr_danger_menu(
+                session=self.cfg.get("WSPR_SESSION", ""),
+                heard=heard, sent=sent, total_heard=all_heard,
+                total_sent=all_sent,
+                sessions=len(wsprlog.sessions_in(records)))
         if m == "danger":
             return menus.danger_menu(
                 activity=self._activity_name(),
@@ -3510,6 +4804,22 @@ class Deck:
         # which also made it a dead key on power-on once the deck started on
         # DECK & RIG instead.
 
+        # **Ctrl-B arms and inhibits transmit from anywhere.** It was on the
+        # conversation and the two WSPR screens only, so the answer to "can
+        # this deck transmit" depended on which screen the operator happened
+        # to be looking at.
+        #
+        # **It was Ctrl-I and could not stay there.** Ctrl-I IS byte 9, which
+        # IS Tab: no terminal distinguishes them, and the console least of
+        # all -- `modifyOtherKeys`, which lets xterm tell them apart, does
+        # not exist under `TERM=linux`. So Tab toggled the transmitter's
+        # interlock, including on a form where Tab means "next field". One
+        # key, unbound before this, and byte 9 no longer arms anything.
+        if ch == INHIBIT_KEY and not self.menu \
+                and self.screen not in (PAIR, WIFI, NOKB, CONFIRM):
+            self._toggle_inhibit()
+            return True
+
         if self.menu:
             return self._handle_menu(ch)
 
@@ -3545,6 +4855,11 @@ class Deck:
         # the only thing a keystroke can mean while it is on screen.
         if self.screen == CONFIRM:
             return self._handle_confirm(ch)
+
+        if self.screen == WSPRCAL:
+            return self._handle_wspr_cal(ch)
+        if self.screen == WSPR:
+            return self._handle_wspr(ch)
 
         if self.screen == ACTS:
             return self._handle_activities(ch)
@@ -3606,8 +4921,6 @@ class Deck:
             self._tx_echo = ""
         elif ch == 12:                       # Ctrl-L
             self.scr.clearok(True)
-        elif ch == 9:                        # Ctrl-I, and Tab: same byte
-            self._toggle_inhibit()
         elif ch == 24:                       # Ctrl-X
             self._clear_transcript()
         # On the conversation screen the arrows edit the line, as they would
@@ -3754,8 +5067,24 @@ class Deck:
         # ended has no reference -- so an empty string is restored and only a
         # missing key falls back to the conf.
         for key in _REMEMBERED:
-            if key in state and isinstance(state[key], str):
-                self.cfg[key] = state[key]
+            if key not in state:
+                continue
+            # **Coerced through the schema, not required to be a string.**
+            # This accepted `str` only, so every numeric setting in the
+            # tuple was written to the state file and then ignored on the
+            # way back in -- LOG_LINES, and now the WSPR levels, percent and
+            # time-out. JSON round-trips an int as an int, so the test for
+            # `str` was a test that those keys would never restore.
+            want = configmod.SCHEMA.get(key, (None, str, ""))[1]
+            value = state[key]
+            if want is str:
+                if isinstance(value, str):
+                    self.cfg[key] = value
+                continue
+            try:
+                self.cfg[key] = want(value)
+            except (TypeError, ValueError):
+                pass
         scheme = state.get("color")
         if scheme in colors.SCHEMES:
             self.scheme = scheme
@@ -3874,7 +5203,19 @@ class Deck:
         # a log of it is noise in the middle of a contact.
         self._save_state()
 
-    def _open_menu(self, which):
+    def _open_menu(self, which, remember=True):
+        """Open a menu. `remember` pushes the one being left, so Esc returns.
+
+        **Esc goes back ONE level, to wherever the operator actually came
+        from.** `MENU_PARENT` could only express a fixed parent, which is
+        wrong for a menu reachable two ways: the WSPR band picker is `F3`
+        from the screen and `b` from the menu, and a fixed parent has to be
+        wrong for one of them. It sent every sub-menu back to the screen,
+        so backing out of a sub-sub-menu left the whole area.
+
+        The stack records the route taken. `MENU_PARENT` stays as the
+        fallback for a menu opened with nothing beneath it.
+        """
         # Arriving at any menu cancels a pending type delete. Without this,
         # `d` then Esc left the flag set, and the next number typed in the
         # picker deleted that type instead of selecting it -- a destructive
@@ -3882,6 +5223,9 @@ class Deck:
         self._pending_type_delete = False
         self._pending_type_copy = False
         self._pending_type_edit = False
+        if remember and self.menu and self.menu != which:
+            self._menu_stack.append(self.menu)
+            del self._menu_stack[8:]       # a menu tree this deep is a bug
         self.menu = which
         self.menu_page = 0
         self.menu_sel = self._first_selectable(which)
@@ -3898,6 +5242,7 @@ class Deck:
         self._pending_type_copy = False
         self._pending_type_edit = False
         self.menu = None
+        self._menu_stack = []
         try:
             curses.curs_set(1)
         except curses.error:
@@ -3961,9 +5306,15 @@ class Deck:
             # it has none. The screen underneath belongs to the area the menu
             # was opened from, so backing out never crosses an area boundary
             # -- which it did when every menu's parent was one shared root.
+            # The route taken, then the declared parent, then out. One
+            # level per press, and the last press closes -- never a jump
+            # from a sub-sub-menu straight to the screen.
+            if self._menu_stack:
+                self._open_menu(self._menu_stack.pop(), remember=False)
+                return True
             parent = menus.MENU_PARENT.get(m)
             if parent:
-                self._open_menu(parent)
+                self._open_menu(parent, remember=False)
             else:
                 self._close_menu()
             return True
@@ -4091,6 +5442,222 @@ class Deck:
             if key.isdigit() and 1 <= int(key) <= 8:
                 slot = int(key) + 4
                 self._open_editor(f"MEMORY_{slot}", f"F{slot}")
+            return True
+
+        if m == "wspr":
+            if key == "w":
+                if self.wspr_running:
+                    self._wspr_stop("stopped from the menu")
+                else:
+                    self._wspr_start()
+            elif key == "d":
+                self._wspr_build()
+                self.wspr.decode = not self.wspr.decode
+                self._wspr_note("decoding on" if self.wspr.decode else
+                                "decoding off — audio still captured, so "
+                                "the level reading is live")
+            elif key == "t":
+                self._wspr_build()
+                # Through the setter, which restarts the time-out when
+                # transmit is armed -- see `Schedule.set_transmit`.
+                self.wspr.set_transmit(not self.wspr.transmit, time.time())
+                if self.wspr.transmit:
+                    mins = self.cfg.get("WSPR_TIMEOUT_MIN", 60)
+                    self._wspr_note(f"transmit armed — {mins} min ToT"
+                                    if mins else "transmit armed")
+                else:
+                    self._wspr_note("transmit off")
+            elif key == "n":
+                self._wspr_build()
+                self.wspr.arm_tx_next(time.time())
+                self._wspr_note("beaconing on the next slot")
+            elif key == "e":
+                self._close_menu()
+                self._open_editor(None, "WSPR session name",
+                                  text=self.cfg.get("WSPR_SESSION", ""),
+                                  sink=self._wspr_set_session)
+                return True
+            elif key == "b":
+                self._open_menu("wspr_band")
+                return True
+            elif key == "p":
+                # Cycles rather than prompts: it is one of four or five
+                # values in practice, and a picker for that is more keys
+                # than the thing is worth.
+                order = (0, 10, 20, 30, 50, 100)
+                now = int(self.cfg.get("WSPR_TX_PERCENT", 20))
+                nxt = order[(order.index(now) + 1) % len(order)] \
+                    if now in order else 20
+                self.cfg["WSPR_TX_PERCENT"] = nxt
+                if self.wspr is not None:
+                    self.wspr.tx_percent = nxt
+                self._save_state()
+            elif key == "o":
+                order = (0, 15, 30, 60, 120, 240)
+                now = int(self.cfg.get("WSPR_TIMEOUT_MIN", 60))
+                nxt = order[(order.index(now) + 1) % len(order)] \
+                    if now in order else 60
+                self.cfg["WSPR_TIMEOUT_MIN"] = nxt
+                if self.wspr is not None:
+                    self.wspr.timeout_minutes = nxt
+                self._save_state()
+            elif key == "u":
+                on = self.cfg.get("WSPR_UPLOAD") != "yes"
+                self.cfg["WSPR_UPLOAD"] = "yes" if on else "no"
+                self._save_state()
+                self._wspr_note(
+                    "spots will be reported to wsprnet while WSPR runs and "
+                    "there is a network" if on else "spot upload off")
+            elif key == "f":
+                self._open_editor("WSPR_LOG_PATH", "Spot log")
+            elif key == "a":
+                self._open_menu("wspr_audio")
+                return True
+            elif key == "z":
+                self._open_menu("wspr_danger")
+            return True
+
+        if m == "wspr_band":
+            import wsprbands
+
+            # **Space toggles the highlighted band in and out of the hop
+            # rotation; a number or Enter selects that band alone.** The
+            # first idiom for this was `+` then a number, which an operator
+            # reported as undiscoverable -- "I don't get what +n means" --
+            # and they were right: a two-key prefix with no visible state
+            # between the keys teaches nobody. Space on the row the arrows
+            # are already on is a checkbox, and the menu shows `[*]` for a
+            # band that is in.
+            #
+            # `+` is NOT kept as a synonym. Its meaning would have changed
+            # silently -- it took the band from the NEXT key and would now
+            # toggle whichever row the cursor is on -- and a learned key
+            # that still works while meaning something else is worse than
+            # one that is gone.
+            if key == " ":
+                opts = menus.selectable(self._menu_for(
+                    m, *reversed(self.scr.getmaxyx())))
+                at = self.menu_sel if self.menu_sel in opts else (
+                    opts[0] if opts else 0)
+                label = wsprbands.BANDS[at][1] if at < len(
+                    wsprbands.BANDS) else ""
+                if not label:
+                    return True
+                bands = self._wspr_bands()
+                if label in bands:
+                    if len(bands) == 1:
+                        self._wspr_note(f"{label} is the only band — "
+                                        "something has to be selected")
+                        return True
+                    bands.remove(label)
+                else:
+                    bands.append(label)
+                picked_set = True
+            else:
+                label = next((l for k, l, _h in wsprbands.BANDS
+                              if k == key), "")
+                if not label:
+                    return True
+                bands = [label]
+                picked_set = False
+            if label:
+                # Kept in band order, not the order they were pressed, so
+                # the rotation is predictable from the picker.
+                order = [l for _k, l, _h in wsprbands.BANDS]
+                bands.sort(key=order.index)
+                was = self.wspr_band
+                self.cfg["WSPR_BANDS"] = ",".join(bands)
+                if self.wspr is not None:
+                    self.wspr.bands = bands
+                if self.wspr_band not in bands:
+                    self.wspr_band = bands[0]
+                self._save_state()
+                # **Tune, here, on the selection.** It only set the band and
+                # waited for the scheduler to tune on the next slot, so
+                # picking a band with WSPR stopped moved a label and left
+                # the radio where it was -- and the spec asks for the
+                # opposite: selecting a band tunes to its WSPR dial.
+                #
+                # Unselecting the band in use tunes too: it changes which
+                # band the deck is on, and a deck that says 40 m while the
+                # radio sits on 20 m is the same fault in a second place.
+                if not picked_set or self.wspr_band != was:
+                    dial = wsprbands.dial_hz(self.wspr_band)
+                    self._wspr_tune(self.wspr_band)
+                    where = f"{self.wspr_band} — {render.frequency(dial)}"
+                else:
+                    where = ""
+                if picked_set:
+                    rot = (f"hop: {', '.join(bands)}" if len(bands) > 1
+                           else f"hop off — {bands[0]} only")
+                    self._wspr_note(f"{rot}{'   ' + where if where else ''}")
+                else:
+                    self._wspr_note(where)
+            return True
+
+        if m == "wspr_audio":
+            if key in ("c", "m"):
+                # **Gated on WSPR being on, with a reason.** Both of these
+                # open the sound card, and fldigi holds it while WSPR is
+                # off -- so with WSPR off they produced a capture-device
+                # error from inside a screen that looked ready. A menu item
+                # that cannot work is told so before it is entered.
+                if not self.wspr_running:
+                    self._close_menu()
+                    self._wspr_note("WSPR must be on to calibrate audio "
+                                    "— F1, then w")
+                    return True
+                self._open_wspr_cal("tx" if key == "c" else "rx")
+                return True
+            if key in ("t", "r"):
+                # Cycled rather than prompted, as the transmit percent is:
+                # both are set by ear against a power meter or a dBFS
+                # reading, which is a "try the next one down" operation and
+                # not a number anybody knows in advance.
+                order = (5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100)
+                setting = ("WSPR_TX_LEVEL" if key == "t"
+                           else "WSPR_RX_GAIN")
+                now = int(self.cfg.get(setting, 50 if key == "t" else 70))
+                nxt = (order[(order.index(now) + 1) % len(order)]
+                       if now in order else
+                       min(order, key=lambda v: abs(v - now)))
+                self.cfg[setting] = nxt
+                self._save_state()
+                if key == "t":
+                    # Straight onto the transmitter, which drops the
+                    # rendered audio so the next beacon uses the new level.
+                    if self.wspr_tx is not None:
+                        self.wspr_tx.level = nxt
+                    self._wspr_note(f"TX audio level {nxt}% — "
+                                    "send a test tone and read the meter")
+                else:
+                    note = f"RX capture gain {nxt}%"
+                    # Only live while WSPR owns the codec; otherwise fldigi
+                    # has it and the deck must not touch a control fldigi is
+                    # using. It applies at the next start.
+                    if self.wspr_running and self.wspr_gain is not None:
+                        why = self.wspr_gain.apply(nxt)
+                        note += f" — {why}" if why else " — set now"
+                    else:
+                        note += " — applies when WSPR starts"
+                    self._wspr_note(note)
+            return True
+
+        if m == "wspr_danger":
+            # Refused while running, which the contact log's danger zone has
+            # no need to be: a capture is appending every two minutes, and
+            # emptying a file a running decoder is about to write to is a
+            # race with no useful outcome.
+            if self.wspr_running:
+                self._wspr_note("stop WSPR first — it is writing to the log")
+                self._close_menu()
+                return True
+            if key == "a":
+                self._wspr_forget_all()
+            elif key == "s":
+                self._wspr_ask_clear_session()
+            elif key == "m":
+                self._wspr_ask_clear_all()
             return True
 
         if m == "danger":
@@ -4314,7 +5881,7 @@ class Deck:
             mode = (self.fldigi.rig_mode() or "?").strip()
             self.session.note(
                 f"transmit stays inhibited — the radio is in {mode}, not a "
-                f"data mode. Change it on the radio, then Ctrl-I again.")
+                f"data mode. Change it on the radio, then Ctrl-B again.")
             return
         self.session.inhibit(not self.session.inhibited)
         self.fldigi.receive_only(self.session.inhibited)
@@ -4418,16 +5985,31 @@ class Deck:
             # by a string on the next CAT read, which is a failure a long way
             # from the typing that caused it. A value that will not convert is
             # refused here, where the operator can see why.
+            # **The schema's own converter, whatever it is.** This tested
+            # `want is int` and sent everything else through as a string, so
+            # adding the `wattage` type -- which exists because sub-watt
+            # power has to be expressible -- would have stored "0.5" as text
+            # and left the arithmetic downstream to fail a long way from
+            # here. Any converter the schema names is applied.
             want = configmod.SCHEMA.get(e["key"], (None, str, ""))[1]
-            if want is int:
-                try:
-                    self.cfg[e["key"]] = int(float(text)) if text.strip() else 0
-                except ValueError:
-                    self.edit = None
-                    self._log_note(f"{e['title']}: {text!r} is not a number")
-                    return True
-            else:
+            if want is str:
                 self.cfg[e["key"]] = text
+            else:
+                try:
+                    if not text.strip():
+                        self.cfg[e["key"]] = want(0)
+                    elif want is int:
+                        # Through float, as before: "7.5" into a whole-watt
+                        # ceiling truncates rather than being refused, and
+                        # `int("7.5")` raises. Tolerance kept deliberately.
+                        self.cfg[e["key"]] = int(float(text))
+                    else:
+                        self.cfg[e["key"]] = want(text)
+                except (ValueError, TypeError):
+                    self.edit = None
+                    self._log_note(f"{e['title']}: {text!r} is not a "
+                                   f"{getattr(want, '__name__', 'value')}")
+                    return True
             if e["key"] == "LOG_PATH":
                 # Reopening rather than only remembering the new name: the
                 # contact list, the duplicate check and the next serial are
@@ -4501,7 +6083,23 @@ class Deck:
             watts = 0
         if not watts:
             watts = self.cfg.get("TX_POWER", 0) or 0
-        return f"{int(watts)} W" if watts else ""
+        if not watts:
+            return ""
+        # **`int(watts)` truncated half a watt to nothing.** The FTX-1 in its
+        # field configuration transmits down to 0.5 W and below, and WSPR
+        # encodes those exactly -- 0.5 W is 27 dBm, 0.1 W is 20. Rounding to
+        # a whole number turned every sub-watt reading into "0 W", which
+        # `dbm_for_watts` refuses, and the screen reported "power unknown"
+        # from a radio that was answering perfectly well.
+        #
+        # Whole watts stay whole, as `rigctld_client._watts` and
+        # `config.watts` both do: "5 W" and not "5.0 W".
+        # Three decimals, not two: 1 mW is 0 dBm and a real WSPR level, and
+        # `round(0.001, 2)` is 0.0 -- which would reintroduce the same bug
+        # one decimal place further down.
+        number = float(watts)
+        shown = int(number) if number == int(number) else round(number, 3)
+        return f"{shown} W"
 
     def _insert_memory(self, slot):
         """Put message memory `slot` in at the cursor.
@@ -4650,7 +6248,7 @@ class Deck:
         The two resume differently, on purpose. Decoding comes back by itself
         the moment the radio is in a data mode again -- a running decoder puts
         nothing on the air. Arming transmit stays the operator's act, which is
-        what `Ctrl-I` is, and what the message says.
+        what `Ctrl-B` is, and what the message says.
         """
         if not self.fldigi.connected:
             return
@@ -4670,7 +6268,7 @@ class Deck:
         parked = self.fldigi.park_decoder()
         was_armed = not self.session.inhibited
         if was_armed:
-            # Through the session's own setter, which is the route `Ctrl-I`
+            # Through the session's own setter, which is the route `Ctrl-B`
             # takes, so the state and the transcript cannot disagree about why
             # transmit is off.
             self.session.inhibit(True)
@@ -4697,11 +6295,11 @@ class Deck:
                           + (f": {', '.join(did)}" if did else ""))
         if parked and self.session.inhibited:
             self.session.note("decoding returns with the rig; "
-                              "Ctrl-I to arm transmit")
+                              "Ctrl-B to arm transmit")
         elif parked:
             self.session.note("decoding returns when the rig does")
         elif self.session.inhibited:
-            self.session.note("Ctrl-I to arm transmit once the rig is back")
+            self.session.note("Ctrl-B to arm transmit once the rig is back")
 
     def _report_rig_mode(self):
         """Say what mode the radio is in. Never change it.

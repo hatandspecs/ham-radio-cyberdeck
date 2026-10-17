@@ -3,7 +3,7 @@
 No hardware is needed and none should be: the protocol is a fixed-size struct
 and a handful of codes, so feeding it bytes exercises the same path a finger
 does. What cannot be tested here is whether the panel is wired to the driver,
-which is why the hardware check in design_doc.md section 16 exists.
+which is why the hardware check in platform_design.md section 16 exists.
 
 The device found on the deck reports multitouch protocol type B — slots and
 tracking IDs — but scrolling needs one finger's Y position and nothing else,

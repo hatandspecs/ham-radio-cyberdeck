@@ -1,31 +1,83 @@
 # Ham Radio Cyberdeck
 
-A self-contained HF station terminal. It started as a keyboard-to-keyboard
-digimode terminal and outgrew the name: the digital modes are now one of three
-applications on it, beside the contact log and the station's own settings.
-
-fldigi does the modem work invisibly; a purpose-built terminal is the only
-thing on the screen. No window manager, no mouse, no pointer, nothing to
-click — the feel of a dedicated 1980s packet terminal over modern digital
-modes.
-
-**Three applications of equal standing**, walked with `^O` and `^P`:
-
-| | |
-|---|---|
-| **Digimodes** | Keyboard-to-keyboard QSOs, tuning, mode selection, message memories |
-| **The log** | A contact log whose fields the operator defines, per activity |
-| **Deck & rig** | What this station is: callsign, locator, rig, antenna, power ceiling |
-
-It began as the first of those with the others hanging off its menu, which
-made the digimode screen the deck's home by accident rather than by anyone's
-decision. They are peers now, each one keystroke from both others.
+A self-contained HF station terminal: a Raspberry Pi 3A+, a 5-inch panel, a
+Bluetooth keyboard and a radio, with no window manager, no mouse and nothing
+on the screen but the terminal.
 
 ![The conversation screen](docs/screens/conversation-matrix.png)
 
-The conversation screen, which is one of the three. **The deck now opens on
-`DECK & RIG`** — what this station is set to, before any of it goes on the
-air.
+## Why
+
+**A radio station should be operable without a desktop.** The usual way to
+run digital modes is a laptop, a window manager, a mouse, and an application
+designed for all three. Everything in that stack is a thing to carry, charge,
+boot and click. None of it is radio.
+
+So the deck removes the stack. fldigi still does the modem work — it is the
+best thing there is at that and reimplementing it would be foolish — but it
+runs invisibly under Xvfb while a purpose-built terminal owns the console.
+The result reads like a dedicated 1980s packet terminal and does modern
+digital modes, and it runs for hours on a battery because there is almost
+nothing running.
+
+**The constraint is the design.** 512 MB of RAM, one core's worth of
+headroom, a 66x20 console, a font with a small glyph set, and no network most
+of the time. Every decision in this project traces back to one of those.
+
+## What
+
+**Three applications of equal standing**, walked with `^O` and `^P`, each
+one keystroke from both others:
+
+| | | Design |
+|---|---|---|
+| **Deck & rig** | What this station is — callsign, locator, rig, antenna, power ceiling. The screen the deck opens on. | [`deck_rig_design.md`](docs/deck_rig_design.md) |
+| **The log** | A contact log whose fields the operator defines. Sessions, ADIF export, callbook lookup, every field correctable on the panel. | [`qso_log_design.md`](docs/qso_log_design.md) |
+| **Digimodes** | Keyboard-to-keyboard QSOs: compose while receiving, tuning without a waterfall, mode selection, message memories. | [`digimodes_design.md`](docs/digimodes_design.md) |
+
+It began as the digimodes alone, with the rest hanging off its menu — which
+made the digimode screen the deck's home by accident rather than by anyone's
+decision. They are peers now.
+
+**A fourth joined them**: WSPR, with transmit, band hopping and spot upload
+to wsprnet. It is the only area that is **exclusive** — while a session
+runs, the ring does not leave it and fldigi is stopped, because the USB
+codec takes one capture client. Proven on the air on 2026-10-17: 5 W on
+40 m reached 43 receivers in one slot, and 20 m reached Belgium and
+Colombia. See [`wspr_design.md`](docs/wspr_design.md).
+
+## How
+
+It is an ordinary Python program. It needs a terminal and an fldigi to talk
+to, **and nothing else** — no Pi, no panel, no Bluetooth keyboard, no
+soldering. It opens no sound card and no serial port: it speaks XML-RPC to
+fldigi on the loopback interface, so any radio fldigi already works with is
+a radio this works with.
+
+Two ways to run it, and the first is a one-liner:
+
+| | |
+|---|---|
+| **On a laptop** — start fldigi, then `./src/cyberdeck.py`. That is the whole installation. | [How](#running-it-on-a-laptop-with-your-own-radio) |
+| **On a Pi 3A+** — flash a card with `tools/build_deck_image.sh` and it comes up on the panel at boot. | [How](#running-it-on-a-raspberry-pi-3a-with-the-ftx-1) · [Runbook](docs/deploy_cyberdeck_instructions.md) |
+
+The architecture is three layers, and the middle one is why the test suite is
+worth anything: **pure logic** that knows nothing about terminals (`qsolog`,
+`session`, `logform`, `activities`, `render`, `menus`, `wspr`), a **curses
+layer** that draws it (`cyberdeck.py`), and **clients** for the things
+outside (`fldigi_client`, `rigctld_client`, `callbook`). The renderers return
+lists of `(text, attribute)` segments, so every screen is testable at any
+width without a terminal — and the parts that cannot be tested that way are
+driven through a real pty under `TERM=linux`, because the console's terminfo
+is not xterm's and that difference has shipped bugs.
+
+**2,379 checks across 32 files**, all passing.
+
+**The documentation is split by function**, one design document each, with a
+platform document for everything that is not a function — hardware,
+architecture, rig control, transmit safety, boot, configuration, and the
+record of what was measured and what broke. Nothing is documented in two
+places, because the copy that is wrong is never the one being read.
 
 ## Start here
 
@@ -33,8 +85,10 @@ air.
 |---|---|---|
 | **Run it on a computer I already have** | Start fldigi, then `./src/cyberdeck.py` | [Running it on a laptop](#running-it-on-a-laptop-with-your-own-radio). Nothing else in this repository applies. |
 | **Build the deck** | Flash a card with `tools/build_deck_image.sh` | [The runbook](docs/deploy_cyberdeck_instructions.md) |
-| **Operate it** | — | [The operating tutorial](docs/operating_tutorial.md) |
-| **Understand why it is built this way** | — | [The design document](docs/design_doc.md) |
+| **Operate the digital modes** | — | [The digimodes operating tutorial](docs/digimodes_operating_tutorial.md) |
+| **Operate the log** | — | [The logging tutorial](docs/logging_tutorial.md) |
+| **Understand one application** | — | [digimodes](docs/digimodes_design.md) · [the log](docs/qso_log_design.md) · [deck & rig](docs/deck_rig_design.md) · [WSPR](docs/wspr_design.md) |
+| **Understand the platform** | — | [`platform_design.md`](docs/platform_design.md) — requirements, hardware, architecture, rig control, transmit safety, boot, configuration, and what was measured and what broke |
 
 The application is an ordinary Python program. It needs a terminal and an
 fldigi to talk to, and nothing else: no Pi, no panel, no Bluetooth keyboard, no
@@ -44,7 +98,7 @@ repository describes that machine — but none of it is required to use the
 terminal, and the laptop path above is a supported way to run it permanently
 rather than a demo mode.
 
-Full design rationale is in [design_doc.md](docs/design_doc.md). There is a
+Full design rationale is in [platform_design.md](docs/platform_design.md). There is a
 write-up of why it exists and what it is like to operate at
 **[A Keyboard-to-Keyboard Cyberdeck for the
 FTX-1](https://hatandspecs.github.io/hamradio/articles/keyboard-to-keyboard-cyberdeck/)**,
@@ -104,7 +158,7 @@ on exit.
   mode, transmit is inhibited and **the decoder is stopped** — fldigi's DSP is
   the largest thing running on a Pi 3A+ and in SSB or FM everything it decodes
   is noise. Decoding comes back by itself when the radio does; arming
-  transmit stays a deliberate `Ctrl-I`.
+  transmit stays a deliberate `Ctrl-B`.
 
 It deliberately does **not** do Cabrillo, weak-signal modes, waterfall
 display, image modes, or packet. Contest exchanges, serials and duplicate
@@ -399,7 +453,7 @@ and `F2` / `F3` are that application's own two sub-views.
 | `Ctrl-T` | Start the over — send the buffer and key the rig |
 | `Ctrl-Y` | Hand back — drop to receive when the buffer drains |
 | `Ctrl-C` | Abort transmit immediately |
-| `Ctrl-I` | Toggle transmit inhibit — also `Tab`, same byte |
+| `Ctrl-B` | Toggle transmit inhibit, from any screen |
 | `Ctrl-X` | Clear the transcript |
 | `PgUp` / `PgDn` | Scroll the transcript — or drag it on the touchscreen |
 
@@ -420,9 +474,18 @@ and `F2` / `F3` are that application's own two sub-views.
 | `Enter` | Edit it in place |
 | `F2` `F3` | Display, System |
 
+| Key | WSPR |
+|---|---|
+| `F2` | Name the session — an unnamed run is logged as `general` |
+| `F3` | Band picker: a number or `Enter` selects and tunes; `Space` toggles the hop rotation |
+| `↑` `↓` | Pick a spot; `Esc` or arrowing off the top follows the newest again |
+| `Ctrl-C` | Stop WSPR — the same key that aborts an over |
+| `F1` `a` | Audio levels, and the two calibration screens |
+| `F1` `w` | Start or stop; `d` decode, `t` transmit, `n` transmit next slot |
+
 Menus take arrow keys as well as their single-key shortcuts: `↑` `↓` move a
 `▸` marker, `Enter` chooses. Transmit starts **inhibited** at every power-on;
-`Ctrl-I` arms it. Command keys are case-folded, so they work with Caps Lock on
+`Ctrl-B` arms it. Command keys are case-folded, so they work with Caps Lock on
 — which is how RTTY is operated, since Baudot has no lowercase.
 
 **Pairing a keyboard needs no SSH.** `^O` `^O` → `F1` → `2` → `b`, or just switch the
@@ -528,8 +591,9 @@ There is no Station line: the deck & rig **screen** is the station editor, and
 a menu offering a second list of the same settings was the same information
 twice.
 
-`Ctrl-I` and `Tab` are the same byte — ASCII 9 — so `Tab` also toggles the
-inhibit. Watch the status line if you hit it by accident.
+The inhibit is `Ctrl-B`, from any screen. It was `Ctrl-I`, which is the same
+byte as `Tab` — ASCII 9 — so `Tab` armed and inhibited the transmitter,
+including on a form where `Tab` means "next field". `Ctrl-B` was unbound.
 
 ## How it is put together
 
@@ -599,7 +663,7 @@ Nothing else in the repository reaches the deck.
 | [`tools/qso.py`](tools/qso.py) | Log contacts from a terminal or over SSH; ADIF and LoTW export |
 | [`tools/run_tests.sh`](tools/run_tests.sh) | The whole suite, one command |
 | [`docs/deploy_cyberdeck_instructions.md`](docs/deploy_cyberdeck_instructions.md) | The full runbook, blank card to on the air |
-| [`docs/operating_tutorial.md`](docs/operating_tutorial.md) | How to actually work someone, for a first-timer |
+| [`docs/digimodes_operating_tutorial.md`](docs/digimodes_operating_tutorial.md) | How to actually work someone in a digital mode, for a first-timer |
 | [`docs/qso_log_design.md`](docs/qso_log_design.md) | The contact log: design, decisions, and what is not built |
 | [`docs/logging_tutorial.md`](docs/logging_tutorial.md) | How to actually log a contact, with screenshots |
 | `deck.conf` | How to build that card: hostname, panel, keyboard, radio |
@@ -982,7 +1046,7 @@ Working end to end:
   recalled; a second over queued behind it is split by a mark that is no
   longer visible. A new over is now refused while the previous one is still
   going out, and says to wait for `RX` or `Ctrl-C`.
-* **`Ctrl-I` mid-over looked like a stop and was not.** The inhibit blocks the
+* **`Ctrl-B` mid-over looked like a stop and was not.** The inhibit blocks the
   *next* over; it cannot end the one running. It now says so instead of
   leaving it to be inferred from a radio that stays keyed.
 * **A handed-back over could stay on the air with the screen showing `RX`.**
@@ -1033,8 +1097,7 @@ It was MIT until 2026-10-15. Two reasons for the change, and one honest
 limitation.
 
 The first reason is the company this program keeps. It drives fldigi (GPLv3)
-and reads hamlib (LGPL); the WSPR work planned next uses `wsprd` out of WSJT-X
-(GPLv3). Calling another program as a separate process imposes nothing either
+and reads hamlib (LGPL); the WSPR area runs `wsprd` out of WSJT-X (GPLv3). Calling another program as a separate process imposes nothing either
 way, but bundling one does, and a permissive license here was the odd one out
 in a stack that is GPL from top to bottom.
 

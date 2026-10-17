@@ -88,6 +88,44 @@ class Rigctld:
     def connected(self):
         return self._talk("f") is not None
 
+    def ptt(self):
+        """Whether the radio reports itself transmitting, or None if unknown.
+
+        `t` in the rigctld protocol: `1` transmitting, `0` receiving.
+
+        **None is not False.** A radio that cannot be read is not a radio
+        known to be receiving, and the difference matters to anything deciding
+        whether it is safe to act. Callers that treat the two alike are the
+        reason this returns three values rather than two.
+        """
+        reply = self._talk("t")
+        if reply is None:
+            return None
+        reply = reply.strip()
+        if reply.startswith("RPRT"):
+            # hamlib's error form, e.g. RPRT -1 for an unsupported command.
+            return None
+        if reply in ("0", "1"):
+            return reply == "1"
+        return None
+
+    def set_ptt(self, on):
+        """Key or unkey the transmitter. Returns whether the command went.
+
+        `T 1` and `T 0`. The serial port rigctld holds carries PTT as well as
+        frequency and mode, which is what makes this possible with fldigi
+        stopped — and stopped is how WSPR runs, so this is WSPR's only way to
+        key the radio. See `docs/wspr_design.md` §3.
+
+        **Returning True means the command was SENT, not that the radio is
+        keyed.** A Yaesu set command answers with silence, so there is nothing
+        to confirm from; `ptt()` is how to find out what actually happened.
+        Anything keying a transmitter should read it back rather than assume,
+        because the failure here is a radio left transmitting.
+        """
+        return self._talk(f"T {1 if on else 0}",
+                          expect_reply=False) is not None
+
     def send_cat(self, command):
         """Forward a raw CAT string such as 'FA014075000;' to the radio."""
         return self._talk(f"w {command}", expect_reply=False) is not None
@@ -177,6 +215,25 @@ class Rigctld:
             return False
         return self.send_cat(f"FA{hz:09d};")
 
+    def set_mode(self, mode, width=0):
+        """Set the operating mode. Returns whether the command went.
+
+        hamlib's own names -- `PKTUSB` is what the FTX-1's DATA-U reports as
+        and what setting it back requires. `width` of 0 asks rigctld for the
+        radio's normal passband for that mode, which is what is wanted in
+        every case here: WSPR does not care about the filter and changing it
+        would be a second thing to put back.
+
+        **Returning True means the command was SENT.** Read `mode()` back to
+        find out what the radio did, the same discipline `set_ptt` carries
+        and for the same reason.
+        """
+        name = str(mode or "").strip().upper()
+        if not name:
+            return False
+        return self._talk(f"M {name} {int(width)}",
+                          expect_reply=False) is not None
+
     def mode(self):
         """(mode, passband_hz) as the radio reports them, or ("", 0).
 
@@ -230,8 +287,17 @@ class Rigctld:
         Anything unexpected at any step returns 0, and the caller falls back
         to a configured fixed wattage.
 
-        **Unverified against a radio.** Written from the rigctld protocol
-        documentation; nothing here has seen a real reply.
+        **Verified against the FTX-1, 2026-10-17.** Path 1: `max_watts=10`
+        returned 0.5 W from a radio set near the bottom of its range, and
+        `frequency()` and `mode()` returned 7038600.0 and `('PKTUSB', 3000)`
+        in the same run. Paths 2 and 3 are still unexercised. This docstring
+        said "nothing here has seen a real reply" until that run, which was
+        true when written and is the reason it is dated now.
+
+        **It answers with fldigi STOPPED**, which is the arrangement WSPR
+        runs in: `cyberdeck-rigctld.service` is a separate unit and keeps the
+        serial port when fldigi goes down. That is what makes WSPR's radio
+        control possible at all — see `docs/wspr_design.md` §3.
         """
         level = self._rf_power_level()
 

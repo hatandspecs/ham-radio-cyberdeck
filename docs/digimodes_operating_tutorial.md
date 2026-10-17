@@ -1,7 +1,16 @@
-# Keyboard to Keyboard — an Operating Tutorial
+# Digimodes Operating Tutorial
 
-For an operator who knows radio but has never run a live digital conversation.
-Every key in this document was read out of the deck's source, not remembered.
+Keyboard-to-keyboard conversation in fldigi's digital modes: how to actually
+work somebody with the deck.
+
+For an operator who knows radio but has never run a live digital
+conversation. Every key in this document was read out of the deck's source,
+not remembered.
+
+The deck has three other applications, each with a document of its own —
+the contact log, the deck-and-rig settings, and WSPR. This tutorial is about
+the digital modes only. The design behind it is
+[`digimodes_design.md`](digimodes_design.md).
 
 ---
 
@@ -166,7 +175,7 @@ appear and to get used to the screen.
 enforced inside the deck, so no keystroke can key the radio while it is set.
 Nothing to do here; just check the status line.
 
-`Ctrl-I`, or `F1` → `7` → `i`, clears it when you are ready to transmit. Set
+`Ctrl-B`, or `F1` → `7` → `i`, clears it when you are ready to transmit. Set
 `INHIBIT_ON_START = no` in `cyberdeck.conf` if you would rather it came up
 live.
 
@@ -752,7 +761,7 @@ bond cannot be replaced, only removed and made again.
 | `Ctrl-T` | **Start the over** — send the buffer, key the radio |
 | `Ctrl-Y` | **Hand back** — finish the over, return to receive |
 | `Ctrl-C` | **Abort** — drop PTT immediately |
-| `Ctrl-I` | Transmit inhibit on/off — **`Tab` does this too**, see below |
+| `Ctrl-B` | Transmit inhibit on/off, from any screen |
 | `Ctrl-X` | Clear the transcript |
 | `Ctrl-L` | Redraw the screen |
 | `Ctrl-Q` | Restart the terminal — asks you to press it again to confirm |
@@ -848,10 +857,14 @@ Menus that reflect radio state — Tuning especially — **show the current valu
 beside each entry, so you can see whether squelch is on rather than toggling it
 and guessing.
 
-> **`Tab` toggles transmit inhibit.** `Ctrl-I` and `Tab` are the same byte —
-> ASCII 9 — so the terminal cannot tell them apart. Pressing `Tab` mid-sentence
-> will silently enable or disable transmit. Watch the status line if you have
-> hit it by accident; there is no other way to tell.
+> **The inhibit is `Ctrl-B`, and `Tab` does nothing to it.** It was `Ctrl-I`
+> until 2026-10-17, which is the same byte as `Tab` — ASCII 9, which no
+> terminal can tell apart and the console cannot even in principle. Pressing
+> `Tab` silently armed or inhibited the transmitter. `Ctrl-B` was unbound and
+> is now the only key that does it, from any screen.
+>
+> `Tab` still moves between fields on the log entry form, which is the one
+> place it was ever meant to do anything.
 
 ### Tuning screen (`F2`)
 
@@ -1029,7 +1042,7 @@ This is worth knowing before it bites: **decide to hand back once.** If you
 think you may want to add another line, do not press `Ctrl-Y` yet — nothing
 is sent any sooner for having pressed it, and the only way back is to abort.
 
-**`Ctrl-I` mid-over does not stop the over.** The inhibit blocks the *next*
+**`Ctrl-B` mid-over does not stop the over.** The inhibit blocks the *next*
 one. `Ctrl-C` is the stop.
 
 **The deck remembers where you left it, ten seconds after you stop moving.**
@@ -1069,7 +1082,7 @@ trusted, so it should reconnect on its own; if not, SSH in and
 5. `F1` `2` `s` — squelch back on
 6. `F2`, then `↑`/`↓` to land on a real signal; `Esc`
 7. Read other people's contacts for half an hour
-8. `Ctrl-I` — enable transmit (it starts inhibited)
+8. `Ctrl-B` — enable transmit (it starts inhibited)
 9. Answer a CQ with section 7 in front of you
 
 Reduced power. ALC at zero. Time-out timer set.

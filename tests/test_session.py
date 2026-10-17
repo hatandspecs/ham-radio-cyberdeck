@@ -1,4 +1,4 @@
-"""Behavior of the over-based transmit model (docs/design_doc.md §5.4)."""
+"""Behavior of the over-based transmit model (docs/digimodes_design.md §5.4)."""
 import os
 import sys
 

@@ -13,10 +13,13 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 | Read | For |
 |---|---|
 | `README.md` | What it is, what each file does, the test table |
-| `docs/design_doc.md` | Numbered FR/NFR with honest status |
+| `docs/platform_design.md` | Numbered FR/NFR with honest status |
 | `docs/` | Runbook and operating tutorial |
 | `docs/screens/` | Rendered screenshots of every screen |
-| `docs/logging_tutorial.md` | Operating the contact log, with screenshots |
+| `docs/logging_tutorial.md` | Operating the contact log, with screenshots (its images predate the entry form and are stale) |
+| `docs/qso_log_design.md` | The logger's design and every decision in it — §7f one log and sessions, §7g the schema decides the columns, §7h danger zone, §7i what follows an activity |
+| `docs/wspr_deploy.md` | **Installing `wsprd` on the deck and benchmarking it.** Decode only; nothing in it transmits |
+| `docs/wspr_design.md` | **WSPR: design, with the pure layers built.** Branch `add-wspr`. Read §4 and §8 first — the audio device contention with fldigi and the five open questions are what the shape depends on |
 | `docs/logger_branch_deploy.md` | **Deploying this branch, and the recovery sequence back to `main`.** Read before touching the deck |
 | `slides/cyberdeck-talk.md` | The talk, as Marp markdown; `slides/diagrams/` holds the mermaid sources |
 
@@ -90,7 +93,7 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 - **This project is GPLv3 as of 2026-10-15, and was MIT before that.** Do not
   "restore" the MIT license or copy a permissive header into a new file: the
   change was deliberate. The reason is the stack — fldigi is GPLv3, hamlib is
-  LGPL, and the planned WSPR work uses `wsprd` out of WSJT-X, which is GPLv3,
+  LGPL, and the WSPR area runs `wsprd` out of WSJT-X, which is GPLv3,
   so bundling any of it under a noncommercial or permissive license would
   conflict. A noncommercial license was considered and rejected for exactly
   that reason: GPLv3 §10 forbids adding restrictions, so "noncommercial only"
@@ -464,6 +467,24 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
     There is nothing to infer from, and for a new activity guessing would
     undo the choice the picker asked for a keystroke earlier.
 
+- **A stand-in's worker thread is a race, and the suite is where it shows.**
+  `tests/test_rigctld.py` read `fake.seen[-1]` straight after `set_ptt`.
+  The client returns when its socket closes; the stand-in's server thread
+  appends to `seen` some microseconds later. It passed every interactive
+  run and raised `IndexError` in a full suite run, then passed on rerun —
+  **the worst way for a test to be wrong**, because a rerun "fixes" it.
+
+  The fix is `waited(count)`, which polls until the thread has recorded what
+  it should, with a deadline. **A `sleep` would have hidden it rather than
+  fixed it.** `tests/test_wsprnet.py` was already safe because it reads only
+  after `Uploader.wait()`, which blocks until the queue drains and the worker
+  exits — that method exists for this reason and not for production use.
+
+  Any new test with a background thread in its fixture: synchronize on the
+  thread's own progress, never on elapsed time. Hammering a suspect file —
+  `for i in $(seq 20); do python3 -u tests/x.py >/dev/null || echo FAIL; done`
+  — is how to tell a flake from a pass.
+
 - **Leaving a menu must disarm a pending two-key action, not only arriving
   at one.** `_open_menu` has always cleared `_pending_type_delete`; nothing
   cleared it on the way OUT, and that was covered by accident while Esc from
@@ -579,13 +600,326 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   `tests/test_log_panel.py` defaults to `linux`, so an xterm F1 is simply
   typed into the callsign field.
 
-## Where it stands
+## What is being worked on now
 
-**2124 checks across 29 files, all 29 green as of 2026-10-16** on the
-`function-ring` branch — a clean serial run with nothing edited while it was
-in flight. The two newest files are `test_decode_park.py` (60) and
-`test_activity_paths.py` (31), with `test_activity_follow.py` folded in as
-the pure half of the latter.
+**Branch `add-wspr`, uncommitted.** WSPR: transmit and receive, exclusive
+while running, band hopping, a session log, spot upload. The design is
+`docs/wspr_design.md` (845 lines) and the install runbook is
+`docs/wspr_deploy.md`.
+
+### Built, tested, and proven on real hardware
+
+| Piece | File | State |
+|---|---|---|
+| message encoder | `src/wspr.py` | **validated: the real `wsprd` decodes its output** |
+| `wsprd` output parser | `src/wspr.py` | **reads real off-air 2.7.0 output** |
+| spot dedupe | `src/wspr.py` | a window can decode one transmission twice |
+| power to dBm | `src/wspr.py` | with the exactness flag the display highlights |
+| audio level | `src/wspr.py` | pure Python, no `audioop` |
+| band table | `src/wsprbands.py` | all 11 dials confirmed three ways |
+| slot schedule, hopping, ToT | `src/wsprsched.py` | injected clock |
+| spot upload | `src/wsprnet.py` | protocol from WSJT-X's source, no network in tests |
+| grid distance and bearing | `src/grid.py` | **validated against this station's own wsprnet rows**, 498 to 6855 km |
+| capture mixer | `src/wsprgain.py` | injected runner, so no sound card in tests; read before write, restored on stop |
+| transmit level | `src/wsprtx.py` | digital amplitude, not the shared playback mixer |
+
+255 checks in `tests/test_wspr.py`, `test_wsprsched.py`, `test_wsprnet.py`.
+`tools/wspr_bench.py` benchmarks the decoder, `tools/wspr_rx.py` captures and
+decodes one real slot, `tools/wspr_level.py` reads a WAV's level.
+
+**The receive path is proven on the air** — 2026-10-17 0208 UTC, 40 m, two
+stations decoded, `-36.8 dBFS`, offsets 1453 and 1515 Hz above the dial. See
+`wspr_design.md` §12a for the seven things that established.
+
+### NOT built — this is what is left
+
+Nothing in `cyberdeck.py` imports any of it. The deck behaves exactly as it
+did, which is why the install needed no service restart.
+
+1. ~~The capture loop.~~ **DONE** — `src/wsprrx.py`, 53 checks, none of
+   which touch a sound card or `wsprd` (`spawn=` is the seam). Capture and
+   decode are **independent and polled**: a decode outliving its slot must
+   not delay the next capture, and a `tick()` that waited for either would
+   freeze the panel for 114 seconds.
+
+   It distinguishes four things a simpler design conflates: **no end marker
+   is a dead decoder, not an empty window** (recording silence for a killed
+   decoder would be a fact somebody uploads); an empty window IS a success;
+   a capture that wrote nothing or exited busy is a failure with `arecord`'s
+   own message kept; and a wedged decoder is killed at 110 s.
+
+   **What is left to wire** is calling it from the draw loop with
+   `wsprsched`'s decisions and putting the spots through `wsprlog`.
+2. ~~The transmit path.~~ **DONE** — `src/wsprtx.py`, 55 checks, no radio
+   in any of them. Renders (cached), keys, plays via `aplay`, unkeys.
+
+   **Six of its eleven test blocks are about PTT rather than WSPR**, which
+   is the right proportion for the module that keys a transmitter. Every
+   path out of a transmission unkeys: completion, a failed `aplay`, a
+   wedged player past `TX_TIMEOUT_S` (118 s — longer than the 110.6 s
+   signal, shorter than the 120 s slot), `stop()` from the middle, and a
+   player that could not be started.
+
+   **`ptt()`'s three answers are distinguished**: False means the radio did
+   not key and nothing is played; None means unreadable and it proceeds with
+   a note, because refusing would take transmit away from a radio whose
+   readback is unsupported.
+
+   **The audio is cached** and a POWER CHANGE invalidates it. A cache that
+   beaconed the old wattage would announce a power the radio is not making.
+3. ~~The spot log.~~ **DONE** — `src/wsprlog.py`, 51 checks. Two record
+   kinds in one file (`kind=rx` a station heard, `kind=tx` a beacon sent),
+   sessions keyed `(name, start)` and DERIVED from the records with
+   newest-wins, counts broken out by kind for the danger zone.
+
+   **`qsolog.read` would have discarded every beacon**, because it requires
+   a callsign and a transmission has no other station's call in it. That is
+   why `wsprlog.read` has its own predicate. The two log formats share one
+   quoting implementation — `qsolog.format_line` and `qsolog.read_lines` were
+   generalized out for this, and `format_record`/`read` now call them — so
+   there is one place the format lives.
+4. ~~The screen, the menus, the four toggles, the danger zone.~~ **DONE** —
+   `render.wspr_screen`, `render.wspr_toggles`, `render.wspr_power`,
+   `menus.wspr_menu`, `menus.wspr_danger_menu`. 93 checks in
+   `tests/test_wspr_screen.py`, every row asserted to be exactly the screen
+   width at 40, 50, 66 and 80 columns.
+
+   **`render._pad` was needed and is worth knowing about**: a row built from
+   several `(text, attr)` segments has no single string to `ljust`, and an
+   earlier version padded by a whole WIDTH rather than the remainder,
+   producing rows wider than the screen that curses refuses to draw. The
+   danger menu also cut a session name mid-word at 63 columns ("from Satu"),
+   so the name moved to the footer — the same fault the log columns were
+   rebuilt to avoid, found again in a new place.
+5. ~~The exclusive lock.~~ **DONE** — WSPR is a fourth ring area and
+   `_ring` refuses to leave it while running, saying what is in the way
+   rather than doing nothing. `_wspr_start` stops `cyberdeck-fldigi` and
+   `_wspr_stop` restarts it, ordered so the transmitter is unkeyed first.
+6. ~~The TX test tone.~~ **DONE** — behind the menu and a confirmation that
+   states the current reading, time-bounded by construction.
+
+**All of it is wired, deployed and passing**: `tests/test_wspr_panel.py` is
+62 checks through a real pty under both terminals, and the whole feature is
+604 checks across nine files. Deployed to the deck 2026-10-17 — the
+preflight printed four ring areas and no config notes.
+
+### Eleven things the first session on the panel found — 2026-10-17
+
+Driving the real UI turned up what no test had: one dead feature, one
+undiscoverable idiom, two labels that said the opposite of the truth, and
+seven gaps. All are fixed and tested.
+
+| What | Why it happened |
+|---|---|
+| **`arecord: Device or resource busy`, every slot** | **No sudoers rule exists.** `cyberdeck-ui` runs as `deck`; `sudo systemctl stop cyberdeck-fldigi` from inside it has no tty for a password prompt, exits non-zero, and fldigi keeps the exclusive codec. `docs/wspr_deploy.md` §4b is the rule — **a dependency of the feature, not hardening.** `_service` now reports the non-zero exit and `_wspr_start` refuses rather than running a slot clock over a codec it does not have |
+| Selecting a band did not tune the radio | `_wspr_tune` was called only from the scheduler, so with WSPR stopped the picker moved a label and left the radio where it was |
+| `+n` to add a hop band was undiscoverable | A two-key prefix with nothing visible between the keys. **Space toggles the highlighted row and `[*]` is the checkbox.** `+` was NOT kept as a synonym: its meaning would have changed silently |
+| No slot clock | WSPR is a schedule before it is a mode. `render.wspr_slot` reads the scheduler's own arithmetic, so the clock and the capture cannot disagree |
+| `Time-out` named neither what nor whose | Three clocks exist on that screen. It is **`Session ToT`** on the menu and `session m:ss left` on the screen |
+| "Calibrate transmit audio does nothing" | It was refusing correctly — transmit is inhibited until the rig reads DATA-U — and writing the reason to the message line **underneath the still-open menu.** Every refusal reached from a menu now closes it first |
+| `snapped` on a power that was not | The word appeared only when the value had been snapped *down*, which reads as the opposite. **Both states are named.** The test said `"snapped" in flat`, which matches `"not snapped"` — a vacuous pass of the kind this project keeps finding |
+| Hopping invisible when off | Its absence had to be read as "off" rather than "no such feature". The header says `hop 3` or `no hop` |
+| No band on a spot row | Two spots an hour apart on a hopping session answer different questions. The log file always had it; the screen did not |
+| Older spots unreachable | A session gathers hundreds, the screen holds ten. **The arrows select and scroll**, PgUp/PgDn by eight, Home/End to the ends, Esc back to following the newest |
+| A hop band in the wrong mode is silent | The radio holds one mode but **remembers one per band**. `Check hop bands for DATA-U` on the menu visits each, reads the mode back, and names the ones to go and set |
+
+**The five "pre-existing red" test files were the fourth ring area.** Six
+files hard-coded one `^O` from the boot screen to reach the digimodes or the
+conversation; with WSPR on the ring that hop lands on WSPR, so every
+scenario below it read the wrong screen. `test_area_ring.py` also asserted
+the ring's *size* three times. A fifth area costs one edit per file plus
+those three checks — the constants are named `TO_CHAT`/`TO_DIGI` at the top
+of each file for exactly that reason.
+
+### WSPR works on the air — 2026-10-17
+
+**Transmitting and being spotted worldwide.** From this station on 40 m at
+5 W: `HB9VQQ` in Switzerland at 6599 km, `WI6P` at 3617 km, `W7BJH` at
+3669 km, seven receivers in one slot. Receiving at the same time —
+`N3AIU`, `WW0WWV`, `W9RAG` at 0.2 W, `KF9KV` at -4 dB. The uploader's
+`version=cyberdeck` is visible in wsprnet's own records.
+
+**The audio failure was authorization, and sudo was the wrong tool.**
+`cyberdeck-ui` runs as `deck`, and stopping fldigi needs privilege. A
+sudoers `NOPASSWD` rule parses, works from a login shell, and still fails
+from inside the service — which has no tty, no PAM session, and a
+`CapabilityBoundingSet` narrowed to `CAP_SYS_TTY_CONFIG`. The route that
+works is **polkit**, which is what this deck already uses for WiFi:
+`polkit/10-cyberdeck-services.rules`, scoped to one user, one action
+(`manage-units`), one unit and three verbs. `docs/wspr_deploy.md` §4b is the
+install, and it is **a dependency of the feature, not hardening**. Verified
+on the deck: the stock policy for `manage-units` is `auth_admin_keep`, so a
+grant that does not prompt could only have come from the rule.
+
+### The second round of panel findings — same day
+
+| What | Why |
+|---|---|
+| **Scrolling the spot list was laggy** | `_draw_wspr` read and parsed the whole spot log on every draw, and the draw loop runs on every keypress. The menu did the same through `_menu_for`. Both cached, invalidated on write |
+| **No way out of the selected list** | Esc tested the running check first, so it always answered "^X stops it". The selection is released first now, and the footer changes to list keys while a spot is selected |
+| **TX audio ~2x too hot** | 50% amplitude made close to 10 W against a 5 W setting with the ALC half-scale. `WSPR_TX_LEVEL` scales the rendered samples — **not the playback mixer, which fldigi shares.** The test tone uses the same level, or it calibrates nothing |
+| **No RX gain from the deck** | `WSPR_RX_GAIN` sets the capture mixer, which IS shared — safe only because WSPR owns the codec exclusively. Read before write, restored on stop. Every capture's dBFS is shown beside it, which is what makes a gain control judgeable |
+| **No inhibit indicator** | Transmit was refused with nothing on screen to say why, while every other screen carries it. In the header, displacing `next: TX` — which under an inhibit is a false statement |
+| **KM empty** | WSPR carries a grid and no distance. `src/grid.py` computes it, **validated against this station's own wsprnet rows**: inside 0.5 km on every six-character path from 498 to 6855 km. Not stored — both figures are derivable from the two grids already in each record |
+| **The screen was tight** | The spot row used 44 of 66 columns with no gaps. Respaced, with KM and AZ |
+
+### On-air, and what the second day of panel testing found — 2026-10-17
+
+**WSPR works, confirmed by wsprnet.** 5 W on 40 m reached 43 receivers in one
+slot; 20 m reached ON5KQ in Belgium (6060 km), HK4CZE in Colombia, and the
+whole US west coast. Receive decoded eleven stations in a slot, including
+K5NAV at 0.2 W over 2781 km.
+
+**The single most expensive discovery: the ALSA card index moves.** The
+C-Media codec was card 1 in the morning and card 2 after a reboot, with HDMI
+taking 1. `plughw:1,0` was compiled into `wsprrx`/`wsprtx` AND `WSPR_DEVICE`
+was never read, so capture pointed at the HDMI card and failed "No such file
+or directory" -- a different fault from "Device or resource busy" and one no
+amount of stopping fldigi fixes. **Everything now addresses the card by name
+(`plughw:CARD=Device,DEV=0`, `amixer -c Device`).**
+
+The same bug hid a second one: `WSPR_RX_CARD` defaulted to `1`, so every
+capture-gain `amixer` call went to the HDMI card and silently did nothing
+while the deck reported a percentage it had never set. `Mic Capture Volume`
+on this codec runs 0-35 spanning -12 to +23 dB and ships at 20 (+8 dB), so
+there is 15 dB of real headroom. **AGC ships ON and is now turned off for a
+session and restored after** -- a correctness fix, not a level one: it
+compresses a constant-envelope signal and corrupts the SNR uploaded to
+wsprnet as a measurement.
+
+**And a trap I set myself:** adding the four hardware addresses to
+`_REMEMBERED` meant a state file written when the codec was card 1 beat the
+corrected default, so the fix could not take effect. A device address is not
+a preference. They are excluded, with the reason in the code.
+
+| Finding | Resolution |
+|---|---|
+| **15 test files called `report()` without `sys.exit()`** | They exited 0 with failures, so the suite could not fail and several of my own "OK" reports were unverified. All now exit non-zero; re-running by COUNTING failures found two real breakages |
+| `TX_POWER` was typed `int` | `0.5` truncated to `0`, so a QRPp station could not state its power. New `config.watts` type keeps fractions, whole numbers whole |
+| `_power_now` ended with `int(watts)` | Half a watt became `"0 W"`, which `dbm_for_watts` refuses -- surfacing as "power unknown" from a radio answering perfectly. Keeps 3 decimals now (1 mW is 0 dBm) |
+| `_draw_wspr` called the radio every draw | A CAT round trip with a 2 s timeout, five times a second: every arrow keypress waited on the radio. Cached 1.5 s, the discipline `_radio_now` already documented |
+| The spot counts were re-parsed every draw | And again by `_menu_for` while a menu was open. Both cached, invalidated on write |
+| `rigctld_client.mode()` returns a TUPLE | My hop-check compared it against a set of strings, so it could only ever report "could not read". Uses `mode()[0]` |
+| `_key` read PTT back instantly | The FTX-1 had not reported it yet, so the deck keyed, read "not keyed", unkeyed and refused -- a brief click then "the radio did not key". Polls up to 600 ms |
+| `tx next` plus the random choice transmitted twice running | The random choice is suppressed in any slot straight after a transmission. An explicit one-shot still fires: it was asked for |
+| The ToT ended the whole session | It is a transmitter timer. It now disarms transmit and leaves receive, decode and hopping running; re-arming restarts the clock |
+
+**Keys settled, and both were mine to get wrong:**
+
+* **`Ctrl-B` is transmit inhibit**, from any screen. It was `Ctrl-I`, which IS
+  byte 9, which IS `Tab` -- indistinguishable on any terminal and especially
+  the console, where `modifyOtherKeys` does not exist. So `Tab` armed and
+  inhibited the transmitter, including on a form where `Tab` means "next
+  field". Byte 9 now toggles nothing.
+* **`Ctrl-C` stops WSPR.** It already aborts an over on the conversation
+  screen -- `curses.raw()` disables ISIG so byte 3 reaches `getch` -- while
+  `Ctrl-X` means CLEAR everywhere on the deck. Using `Ctrl-X` for "stop" in
+  one application was the inconsistency.
+
+**Escape is a contract now, written into `docs/platform_design.md`:** one
+level per press, by the route the operator actually walked (a menu stack,
+not a fixed parent -- the WSPR band picker is reachable two ways and a fixed
+parent has to be wrong for one of them), and **no Escape past the top of a
+function may change state.** So mashing it always lands in the base state.
+
+**`src/grid.py`** computes distance and bearing from two Maidenhead
+locators, **validated against this station's own wsprnet rows**: inside
+0.5 km on every six-character path from 498 to 6855 km. Shown on the spot
+rows, never stored -- both are derivable from the two grids already in each
+record.
+
+**Layout, after two rounds of operator feedback:** only the counters row is
+spread across the width; the toggles, power and level rows read better
+packed. `HOP` is a toggle on the switch row, the interlock is `INH`/`INH off`
+in the header corner, and the slot row says `to next: TX` with only the mode
+highlighted -- `TX next` highlighted whole collided with the `TX NEXT`
+toggle, which means something different.
+
+### The ring-hop trap, in full
+
+**Six test files hard-coded one `^O` from the boot screen** to reach the
+digimodes or the conversation. WSPR made the ring four areas, so that hop
+lands on WSPR and every scenario below it reads the wrong screen — 31
+failures in `test_menu_arrows` alone, and the file that looked worst
+(`test_console_keys`) was a *second* site in a file whose constant had
+already been fixed. `test_area_ring.py` also asserts the ring's **size**
+three times, which cannot hide behind a name.
+
+A fifth area costs: one edit to the `TO_CHAT`/`TO_DIGI` constant in each of
+`test_cold_boot`, `test_decode_park`, `test_screen`, `test_screen_toggles`,
+`test_menu_nav`, `test_console_keys`, `test_state`, `test_menu_arrows`, plus
+the three size checks in `test_area_ring`. **Grep for `\x0f` before
+assuming the constants cover it.**
+
+**The `_leave_cleanly` fix was confirmed on the hardware by that deploy.**
+The journal now reads `Deactivated successfully` on a restart where every
+earlier one read `code=exited, status=1/FAILURE`. So the shutdown path runs:
+transmit aborted, decoder unparked, console palette restored. What is NOT tested there is starting WSPR for
+real, because that stops fldigi and opens the sound card — the start path's
+refusals are unit-tested instead.
+
+### Three bugs the pty test found that the pure tests could not
+
+All three were about key dispatch and screen transitions, which is the whole
+reason that file exists:
+
+* **The ring landed on WSPR without building the engines.** `_ring` set
+  `self.screen = WSPR` directly, so `self.wspr` stayed None and every toggle
+  reported `off` — including Decode, which defaults to on. It goes through
+  `_open_wspr()` now.
+* **`Esc` from the band picker went UP to the WSPR menu** when the operator
+  had pressed `F3` from the screen. Same inconsistency fixed once already on
+  the log screen: a picker reached from a screen returns to that screen.
+  `wspr_band` has no `MENU_PARENT` entry; `wspr_danger` keeps one, because
+  arriving there is deliberate.
+* **A band key ADDED to the rotation instead of going to that band.** So
+  pressing 20 m from a default of 40 m produced a two-band rotation. A
+  number now selects that band alone and `+` then a number adds one — the
+  same `c+n`/`d+n` shape the schema picker uses.
+
+### And a vacuous assertion, for the third time this session
+
+`check("the WSPR screen is drawn", "WSPR" in body)` **passed while the deck
+was refusing to start**, because the error it printed named
+`WSPR_LOG_PATH`. The underlying fault was mine: the WSPR settings were added
+with `cfg.setdefault` but never to `config.SCHEMA`, so a conf naming them was
+rejected outright. **A substring check against a screen that might be an
+error message is not an assertion.** It now checks the header's shape and
+that no `unknown setting` appears.
+
+### What still needs the deck
+
+* ~~`rigctld` while fldigi is stopped.~~ **VERIFIED 2026-10-17 and it
+  works.** With fldigi stopped the client returned `connected: True`,
+  `7038600.0`, `('PKTUSB', 3000)` and 0.5 W — identical to fldigi being up.
+  `cyberdeck-rigctld.service` keeps the serial port, so WSPR's radio control
+  is sound. That was the last structural assumption in the design.
+  (An earlier run reported "radio could not be read"; that was the tool's
+  own fault — `rigctld_client.py` had not been copied, the import failed,
+  and a bare `except` reported it as an absent radio.)
+* **A type 2 or type 3 decode off the air.** Both stations in the 2026-10-17
+  capture sent type 1, so compound and hashed calls are still covered only by
+  hand-written fixtures.
+* **Transmit, into the dummy load**, once there is a TX path.
+
+### Decisions not worth relitigating
+
+Transmit and receive in one increment; `wsprd` as a subprocess; exclusive
+while running with fldigi STOPPED (measured — the codec is exclusive);
+rig control through `rigctld_client` because stopping fldigi takes its rig
+control with it; upload armed by three operator conditions rather than
+automatic; one fixed schema, no pickers; the four independent toggles; the TX
+test tone is necessary and the RX calibration mode is not.
+
+## Where it stands## Where it stands
+
+**2379 checks across 32 files, all 32 green as of 2026-10-16** on branch
+`add-wspr` — a clean serial run with nothing edited while it was in flight.
+The WSPR modules account for 255 of those: `test_wspr.py` (the encoder, the
+parser and dedupe), `test_wsprsched.py` (slots, hopping, the time-out) and
+`test_wsprnet.py` (the uploader, with no network touched).
+
+`main` was at 2124 checks across 29 files when the logger work merged.
 
 The line this replaced claimed "1893 checks across 25 files, all passing as
 of 2026-10-15", and that was not true when it was written. Seven files were

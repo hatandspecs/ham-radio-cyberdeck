@@ -4,7 +4,7 @@ Kept free of curses so the behavior that matters can be tested without a
 terminal. The interface in cyberdeck.py renders what is here and does nothing
 else with it.
 
-The transmit model is the over-based one settled in docs/design_doc.md §5.4, which
+The transmit model is the over-based one settled in docs/digimodes_design.md §5.4, which
 is fldigi's norm and HF's norm and is not what intuition suggests:
 
     compose while receiving  ->  Ctrl-T starts the over  ->  Ctrl-Y hands back
@@ -250,7 +250,7 @@ class Session:
         self._tx_started = self._clock()
         # This is the over as intended. What fldigi actually puts on the air
         # is shown separately and transiently while sending — see the
-        # transmit-progress note in docs/design_doc.md §5.5.
+        # transmit-progress note in docs/digimodes_design.md §5.5.
         if text:
             self._append(self.callsign, text)
         return text

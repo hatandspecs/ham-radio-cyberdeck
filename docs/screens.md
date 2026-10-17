@@ -186,3 +186,214 @@
 │ Esc  back      PgUp/PgDn  more                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+## The WSPR screen — `^O` from the deck & rig screen
+
+The fourth area, and the only one that is exclusive: while it runs, the ring
+does not leave it and fldigi is stopped, because the USB codec takes one
+capture client.
+
+The header carries the session, the band, the dial frequency and the
+transmit interlock. The block below the spots is the state: the switches,
+the power the radio is actually making and the dBm that encodes to, where
+the clock is inside the two-minute slot, both audio levels with what the
+last window measured, and the counters.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ WSPR  general  20 m  14.095.600                    INH off  1748Z│
+│──────────────────────────────────────────────────────────────────│
+│ UTC     dB  CALL       GRID   dBm  BAND     KM   AZ              │
+│ 17:46  -19  KD1SQ      FN67    23  20 m   1139   45              │
+│ 17:46  -28  N9JNQ      EN34    23  20 m   1309  293              │
+│ 17:46  -13  N4DPH      EM64    23  20 m   1565  258              │
+│ 17:46  -17  W9LK       EM26    23  20 m   5648   47              │
+│ 17:46  -14  G4HSB      IO94    23  20 m   1139   45              │
+│ 17:44  -23  KD1SQ      FN67    23  20 m   1005  298              │
+│ 17:44  -15  W9RAG      EN54    23  20 m   1275  279              │
+│ 17:44  -29  K0PCG      JN49GR  23  20 m   6452   50              │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ WSPR   DECODE   TX   TX NEXT   HOP                               │
+│ max 100 W  5 W   37 dBm  snapped                                 │
+│ slot 0:05 [#.............] 1:54 to next: RX                      │
+│ TX audio 35%  RX gain 100%  level -37 dBFS                       │
+│ heard 455    sent 1    upload on    session 46:42 left   decoding│
+│ WSPR started on 20 m — ^O ^P are locked until it stops           │
+│ F1 menu F2 session F3 band ↑↓ spots ^B inhibit ^C stop           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+`KM` and `AZ` are computed from the two grid squares — see `src/grid.py`.
+Neither is stored in the spot log, because both are derivable from the grids
+that are.
+
+## The WSPR menu — F1 from the WSPR screen
+
+Grouped as the logging menu is, with each current value on its own line, so
+an operator who opens it to check what is on does not have to open anything
+else.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ WSPR                                                             │
+│                                                                  │
+│▸ w  WSPR                         on                              │
+│  d  Decode                       on                              │
+│  t  Transmit                     off                             │
+│  n  Transmit next slot           off                             │
+│  e  Session                      general                         │
+│  b  Band                         20 m                            │
+│  p  Transmit percent             20%                             │
+│  o  Session ToT                  60 min                          │
+│  u  Upload spots                 on                              │
+│  f  Spot log                     wspr.log                        │
+│  x  Export this session          455 heard, 1 sent               │
+│  a  Audio levels                 TX 35%  RX 100%                 │
+│  z  Danger zone — clear spots                                    │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ Esc back   ↑↓ move   Enter select   ^O ^P locked while running   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Thirteen items, and that is a constraint rather than a count.**
+`menus.render` goes to two columns above `height - 6` items — fourteen on
+this panel — and the second column has no room for the values, which is the
+one thing this menu exists to show.
+
+## The band picker — F3, or `b` from the WSPR menu
+
+A number or Enter selects that band alone and tunes the radio to its WSPR
+dial frequency. Space toggles the highlighted band in and out of the hop
+rotation; `[*]` marks the bands in it and `<` the one in use.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ WSPR BAND                                                        │
+│                                                                  │
+│  1  [ ] 80 m      3.568600 MHz                                   │
+│  2  [ ] 40 m      7.038600 MHz                                   │
+│  3  [ ] 30 m     10.138700 MHz                                   │
+│▸ 4  [*] 20 m     14.095600 MHz <                                 │
+│  5  [ ] 17 m     18.104600 MHz                                   │
+│  6  [ ] 15 m     21.094600 MHz                                   │
+│  7  [ ] 12 m     24.924600 MHz                                   │
+│  8  [ ] 10 m     28.124600 MHz                                   │
+│  9  [ ] 6 m      50.293000 MHz                                   │
+│  0  [ ] 2 m     144.489000 MHz                                   │
+│  a  [ ] 70 cm   432.300000 MHz                                   │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ Esc back  Enter use this one  Space hop on/off  [*] in rotation  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Selecting a band also reads the radio's mode and sets DATA-U if it is not
+already there, remembering what was found. The radio keeps a mode per band,
+so a rotation can be three bands in a data mode and one in LSB, and the only
+symptom is a slot that transmits nothing useful. Leaving a band puts its own
+mode back.
+
+## The audio menu — `a` from the WSPR menu
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ WSPR AUDIO                                                       │
+│                                                                  │
+│        TX audio 35%     RX gain 100%     -37 dBFS                │
+│                                                                  │
+│▸ c  Calibrate transmit        a tone, + and - to set             │
+│  m  Calibrate receive         a meter, + and - to set            │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ Esc back   ↑↓ move   Enter select   the levels are set in those  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+The levels are reported here and changed in the calibration screens, where
+there is a meter to watch. Both entries are refused while WSPR is off, with
+the reason given: they open the sound card, and fldigi holds it until WSPR
+takes it.
+
+## Calibrating transmit — `c` from the audio menu
+
+`+` and `-` step the level while the tone is playing; the audio is a rendered
+file, so changing the level re-sends it at the new one.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ WSPR CALIBRATE — TRANSMIT                                   20 m │
+│──────────────────────────────────────────────────────────────────│
+│                                                                  │
+│   TX audio level   35%                                           │
+│                                                                  │
+│ max 100 W  5 W   37 dBm  snapped                                 │
+│                                                                  │
+│   transmitting — watch the radio's power meter                   │
+│                                                                  │
+│   Set the radio's drive so its meter reads what                  │
+│   the deck reports; watch the dBm highlight.                     │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│ test tone transmitting                                           │
+│  + - level  Enter send a tone  ^B inhibit  ^C stop  Esc back     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+The instrument here is the radio's own power meter. The deck reports what it
+reads back over CAT, and the dBm is highlighted when the wattage lands
+exactly on a value WSPR can encode.
+
+## Calibrating receive — `m` from the audio menu
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ WSPR CALIBRATE — RECEIVE                                    20 m │
+│──────────────────────────────────────────────────────────────────│
+│                                                                  │
+│   RX capture gain   100%                                         │
+│                                                                  │
+│ [############::::::::::::......]  -37.0 dBFS  good               │
+│                                                                  │
+│   listening                                                      │
+│                                                                  │
+│   Aim for the marked stretch of the meter.                       │
+│   Too loud decodes worse than too quiet.                         │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│  + - level   ^B inhibit   Esc back                               │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+The marked stretch of the meter is roughly what `wsprd` wants. The gain is
+the capture mixer, which fldigi shares — safe to set only because WSPR owns
+the codec exclusively while it runs, and put back when the session ends.

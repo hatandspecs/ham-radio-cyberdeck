@@ -124,7 +124,11 @@ def show(title, screen):
 # off, so one `^O` wraps straight to the conversation. Every scenario below
 # is about the CONVERSATION screen, so each one hops there first; without it
 # they read the station fields and looked for a transcript.
-TO_CHAT = "\x0f"
+# **Two backwards hops, not one.** WSPR made the ring four areas --
+# settings | log | digimodes | WSPR -- so one `^O` back from the boot
+# screen now wraps onto WSPR and every scenario below read the wrong
+# screen. Named here so the next area costs one edit per file.
+TO_CHAT = "\x0f\x0f"
 
 if __name__ == "__main__":
     body = show("startup, 66x20", run(keys=[TO_CHAT]))

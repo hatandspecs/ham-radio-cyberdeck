@@ -920,17 +920,28 @@ _FIELD_ORDER = ("activity_start",
 _NEEDS_QUOTES = re.compile(r'[\s"]')
 
 
-def format_record(rec):
-    """One line of the log file: space-separated key=value, values quoted only
-    when they need it. Quoting everything would be simpler to write and harder
-    to read, and this file is meant to be read."""
+def format_line(rec, order):
+    """One line of a `key=value` log, in `order`, then anything else sorted.
+
+    The generic form. `format_record` is this with the QSO field order, and
+    `wsprlog` is this with its own -- one quoting implementation and one
+    place for the format, because two would drift and the file is meant to
+    be readable by hand over SSH.
+    """
     out = []
-    for key in _FIELD_ORDER:
+    for key in order:
         if key in rec:
             out.append(f"{key}={_quote(rec[key])}")
-    for key in sorted(k for k in rec if k not in _FIELD_ORDER):
+    for key in sorted(k for k in rec if k not in order):
         out.append(f"{key}={_quote(rec[key])}")
     return " ".join(out)
+
+
+def format_record(rec):
+    """One line of the contact log: space-separated key=value, values quoted
+    only when they need it. Quoting everything would be simpler to write and
+    harder to read, and this file is meant to be read."""
+    return format_line(rec, _FIELD_ORDER)
 
 
 def _quote(value):
@@ -1419,8 +1430,35 @@ def clear(path):
     return gone
 
 
+def read_lines(path, keep=None):
+    """Every record in a `key=value` log, oldest first.
+
+    `keep` decides what counts as a record; the default accepts anything
+    that parsed to at least one field. `read` passes a predicate requiring a
+    callsign, because a contact without one is a broken line rather than a
+    contact -- and `wsprlog` passes a different one, because a WSPR
+    transmission has no other station's call in it.
+
+    The generic form, so there is one parser and one place that decides a
+    comment is a comment.
+    """
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                rec = parse_record(raw)
+                if keep(rec) if keep else rec:
+                    out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
 def read(path):
-    """Every record in the file, oldest first.
+    """Every contact in the file, oldest first.
 
     A line that cannot be parsed is skipped rather than fatal. The file is
     documented as hand-editable over SSH — that is the recovery path for

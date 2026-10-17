@@ -1,4 +1,4 @@
-"""The five monochrome schemes (docs/design_doc.md §5.9).
+"""The five monochrome schemes (docs/digimodes_design.md §5.9).
 
 Each is one hue on black, with a dim variant for the timestamp and callsign
 columns. Monochrome means one hue, not one intensity — and in Ripley's case

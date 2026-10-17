@@ -138,7 +138,11 @@ from test_screen import run
 # TRANSCRIPT. `^O` wraps the ring backwards from the boot screen straight to
 # the conversation -- the log is not on the ring while logging is off, which
 # it is in this fixture.
-TO_CHAT = "\x0f"
+# **Two backwards hops, not one.** WSPR made the ring four areas --
+# settings | log | digimodes | WSPR -- so one `^O` back from the boot
+# screen now wraps onto WSPR and every scenario below read the wrong
+# screen. Named here so the next area costs one edit per file.
+TO_CHAT = "\x0f\x0f"
 
 _PROJECT = os.path.dirname(_HERE)
 
@@ -225,7 +229,7 @@ check("and that it comes back by itself",
 # Not the whole phrase: the transcript wraps at 66 columns and "transmit"
 # lands on the next line, so a longer substring would fail on the wrap rather
 # than on the behavior.
-check("while transmit needs Ctrl-I", "Ctrl-I to arm" in body, body[-700:])
+check("while transmit needs Ctrl-B", "Ctrl-B to arm" in body, body[-700:])
 check("the panel still shows the radio's mode, not NULL",
       "NULL" not in body, body[-600:])
 
@@ -359,4 +363,4 @@ for sig in (signal.SIGTERM, signal.SIGHUP):
           loaded[-1] == "BPSK31", str(loaded))
     equals(f"{name}: so fldigi is left on it", state.modem, "BPSK31")
 
-report()
+sys.exit(report())

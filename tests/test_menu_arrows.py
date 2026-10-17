@@ -31,10 +31,15 @@ DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
 # The deck's own settings are a screen of their own AND the screen the deck
 # opens on, so there is no hop to make: F1 from the boot screen is its menu.
 DECK = ["\x1bOP"]
-# And one ^O reaches the digimodes from there WHATEVER the logging state is:
-# the ring wraps, so the last stop is the conversation whether the log is on
-# it (settings | log | digimodes) or not (settings | digimodes).
-DIGI = CTRL_O
+# And TWO ^O reach the digimodes from there WHATEVER the logging state is:
+# the ring wraps, so the last stop is WSPR and the one before it the
+# conversation, whether the log is on the ring (settings | log | digimodes |
+# WSPR) or not (settings | digimodes | WSPR).
+#
+# **One hop was right until WSPR made the ring four areas.** It then landed
+# on WSPR, where none of the digimode menus exist, and 31 checks in this file
+# failed at once. The hop is named here so a fifth area is one edit.
+DIGI = CTRL_O + CTRL_O
 # Station is gone from this menu: the screen behind it edits those fields
 # directly, each with its substitution token beside it. F1 on the boot screen
 # opens Display and System.
@@ -252,22 +257,28 @@ check("and no longer ^K", "^K hand" not in body, body[-120:])
 
 
 print("\n-- system hotkeys work outside the menu, and are advertised in it --")
-CTRL_X, CTRL_I = "\x18", "\x09"
+CTRL_X, CTRL_B = "\x18", "\x02"
 body = show("F1 7 — system", run(keys=DECK + [DECK_SYSTEM], settle=1.6))
-check("the inhibit hotkey is shown", "Ctrl-I" in body, body[:400])
-check("the Tab collision is named", "also Tab" in body, body[:400])
+check("the inhibit hotkey is shown", "Ctrl-B" in body, body[:400])
+# **No Tab collision to name any more.** The interlock was on Ctrl-I, which
+# is byte 9, which is Tab -- so Tab armed and inhibited the transmitter,
+# including on a form where Tab means "next field". It moved to Ctrl-B,
+# which nothing else uses, and byte 9 no longer toggles anything.
+check("and it says it works on any screen", "any screen" in body, body[:400])
 check("the clear hotkey is shown", "Ctrl-X" in body, body[:400])
 check("quit too", "Ctrl-Q" in body, body[:400])
 
-# after=2.5, longer than the fldigi client's two-second timeout: Ctrl-X calls
-# text.clear_rx before it writes its note, so a slow fldigi delays the note
-# rather than preventing it.
+# after=4.0, comfortably past the fldigi client's two-second timeout: Ctrl-X
+# calls text.clear_rx before it writes its note, so a slow fldigi delays the
+# note rather than preventing it. **2.5 was not comfortably past it.** This
+# failed in a suite run and passed alone, which is the signature of a wait
+# measured against an idle machine.
 body = show("Ctrl-X clears",
-            run(keys=[DIGI, CTRL_X], settle=1.6, after=2.5))
+            run(keys=[DIGI, CTRL_X], settle=1.6, after=4.0))
 check("the transcript is emptied", "transcript cleared" in body, body[:300])
 check("and the startup notes are gone", "fldigi 4.2" not in body, body[:300])
 
-body = show("Ctrl-I arms transmit", run(keys=[DIGI, CTRL_I], settle=1.4))
+body = show("Ctrl-B arms transmit", run(keys=[DIGI, CTRL_B], settle=1.4))
 check("INH clears from the status line", " INH " not in body, body[:120])
 check("and it is recorded", "transmit enabled" in body, body[:400])
 

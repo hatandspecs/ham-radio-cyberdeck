@@ -50,6 +50,7 @@ Outputs shown in this document are the ones observed, not reconstructed.
   - [2. Is fldigi answering?](#2-is-fldigi-answering)
   - [3. Audio device](#3-audio-device)
 - [Phase 5 — on the air](#phase-5--on-the-air)
+- [Phase 5a — WSPR, if it is wanted](#phase-5a--wspr-if-it-is-wanted)
 - [Phase 6 — when something fails](#phase-6--when-something-fails)
   - [The build stopped partway](#the-build-stopped-partway)
   - [Blank panel, but SSH works](#blank-panel-but-ssh-works)
@@ -881,7 +882,7 @@ Before transmitting:
   afterwards.
 * **Set the drive so the ALC never moves.** See §7.2 of the design document for
   the procedure and for why the setting is so sharp-edged.
-* **`Ctrl-I` to arm.** Transmit starts inhibited at every power-on; the status
+* **`Ctrl-B` to arm.** Transmit starts inhibited at every power-on; the status
   line shows `INH` until you clear it.
 
 To work someone: type while receiving — it buffers, nothing goes out — then
@@ -896,11 +897,63 @@ before a contest rather than during one — `F1` → `5` edits them on the deck.
 RTTY signal on the air is uppercase. Every command key on the deck is
 case-folded and works either way.
 
-[`operating_tutorial.md`](operating_tutorial.md) is the long version, written for a first
+[`digimodes_operating_tutorial.md`](digimodes_operating_tutorial.md) is the long version, written for a first
 keyboard-to-keyboard contact: what to say, the abbreviations, and how a QSO is
 structured.
 
 ---
+
+## Phase 5a — WSPR, if it is wanted
+
+**A flashed card does not get WSPR working.** The image carries the deck's
+own modules, and those are enough for the screen to draw, but three things
+have to be added on the deck before a session can capture or transmit.
+`docs/wspr_deploy.md` is the runbook; this is what it covers and why each
+part is not optional.
+
+**1. `wsprd`, the decoder.** It is not packaged on its own. It comes out of
+the `wsjtx` package, and extracting just the binary costs about 1 MB against
+36 MB for the installed package:
+
+```bash
+apt-get download wsjtx
+dpkg-deb -x wsjtx_*.deb /tmp/wsjtx
+sudo install -m 755 /tmp/wsjtx/usr/bin/wsprd /usr/local/bin/wsprd
+sudo apt-get install -y libgfortran5
+wsprd 2>&1 | head -3
+```
+
+The last line prints a usage message. `libgfortran5` is required — `wsprd`
+is Fortran and will not start without it.
+
+**2. The polkit rule, which the feature cannot work without.** WSPR stops
+fldigi for the length of a session, because the USB codec takes one capture
+client and that is measured rather than assumed. `cyberdeck-ui` runs as
+`deck` and needs authorization to stop a unit.
+
+**sudo is not the route.** A `NOPASSWD` sudoers rule for the same command
+parses, works from a login shell, and still fails from inside the service —
+which has no tty, no PAM session, and a `CapabilityBoundingSet` narrowed to
+`CAP_SYS_TTY_CONFIG`. polkit is, and it is the same route the WiFi screen
+already uses for the same reason. See `docs/wspr_deploy.md` §4b for the
+rule and its verification.
+
+**3. The sound card addressed by NAME.** ALSA numbers cards in probe order,
+so the index moves: this codec was card 1 one morning and card 2 after a
+reboot, with HDMI taking 1. Nothing here should carry `plughw:1,0`. The
+defaults are `plughw:CARD=Device,DEV=0` and `amixer -c Device`, and
+`cat /proc/asound/cards` says what the id is on a given board.
+
+If `WSPR_DEVICE` or `WSPR_RX_CARD` appear in `cyberdeck.conf` with a number
+in them, delete those lines — a stale index points the capture at the wrong
+hardware, and the symptom is `arecord: audio open error: No such file or
+directory` rather than anything mentioning WSPR.
+
+**What the deck does itself:** it turns the codec's AGC off for the session
+and puts it back afterwards, and it sets the capture gain and restores that
+too. AGC ships on and must be off — it compresses a constant-envelope signal
+whose amplitude carries no information and corrupts the SNR that gets
+uploaded to wsprnet as a measurement.
 
 ## Phase 6 — when something fails
 
@@ -1018,7 +1071,7 @@ sudo systemctl start cyberdeck-rigctld
 ```
 
 If the dial moves, CAT is healthy and the fault is in hamlib. See
-design_doc.md §7.1.
+platform_design.md §7.1.
 
 ### The panel says DRAIN and the radio is still keyed
 
@@ -1333,7 +1386,7 @@ python3 src/cyberdeck.py
 
 It takes over the terminal it is started in. `Ctrl-Q` quits.
 
-Transmit starts **inhibited** — the status line reads `INH` — and `Ctrl-I`
+Transmit starts **inhibited** — the status line reads `INH` — and `Ctrl-B`
 arms it. That is deliberate and it is not a laptop-only inconvenience: a
 program that can key a radio should not be able to do so the instant it starts.
 

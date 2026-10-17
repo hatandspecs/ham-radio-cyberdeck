@@ -1,0 +1,50 @@
+// Let the terminal stop and start fldigi.
+//
+// WSPR needs the USB codec and the codec is exclusive: `arecord -l` reports
+// `Subdevices: 0/1` while fldigi holds it and every capture fails with
+// "audio open error: Device or resource busy". There is no `dmix`/`dsnoop`
+// to share through on this board. So WSPR stops `cyberdeck-fldigi` for the
+// duration of a session and starts it again afterwards.
+//
+// **Not through sudo.** A sudoers rule for the same two commands works from
+// a login shell and fails from inside `cyberdeck-ui.service`, which has no
+// tty and no PAM session and whose `CapabilityBoundingSet` is narrowed to
+// CAP_SYS_TTY_CONFIG — so the setuid helper cannot hold the capabilities it
+// expects after becoming root. Verified on the deck: `sudo -u deck sudo -n
+// systemctl stop cyberdeck-fldigi` succeeds at a prompt while the same call
+// from the service does not.
+//
+// This is the same failure the WiFi screen hit, for the same reason, and the
+// comment in 10-cyberdeck-networkmanager.rules states it in full: a systemd
+// service has no seat and no session, polkit sees a subject that is neither
+// active nor inactive, and the call falls through to auth_admin with no
+// agent to ask.
+//
+// Scoped as narrowly as that one:
+//
+//   * one user, not a group. DECK_USER is substituted at build time.
+//   * one action id, `manage-units`, not the org.freedesktop.systemd1 prefix.
+//   * ONE UNIT. `action.lookup("unit")` is checked against
+//     cyberdeck-fldigi.service, so this grants nothing over any other unit
+//     on the board — notably not over cyberdeck-ui itself, which would let
+//     the terminal restart or stop the thing asking.
+//   * three verbs. Stop and start are what WSPR uses; restart is included
+//     because a failed restore is otherwise unrecoverable from the panel.
+//
+// Install: /etc/polkit-1/rules.d/10-cyberdeck-services.rules, root-owned,
+// mode 644. See docs/wspr_deploy.md section 4b.
+
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return;
+    }
+    if (subject.user !== "@DECK_USER@") {
+        return;
+    }
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    var verbs = ["stop", "start", "restart"];
+    if (unit === "cyberdeck-fldigi.service" && verbs.indexOf(verb) !== -1) {
+        return polkit.Result.YES;
+    }
+});

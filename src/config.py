@@ -62,6 +62,28 @@ SECRET_KEYS = ("QRZ_API_KEY", "QRZ_USER", "QRZ_PASSWORD",
 # is all it may cost.
 NOTES = []
 
+def watts(value):
+    """A wattage, keeping a fraction only when there is one.
+
+    **Sub-watt power has to be expressible.** `int` was the type here, so
+    `TX_POWER = 0.5` was either refused or truncated to 0 -- and the FTX-1 in
+    its field configuration transmits down to half a watt and below, which
+    WSPR encodes exactly: 0.5 W is 27 dBm, 0.1 W is 20, 50 mW is 17. A
+    station running QRPp could not say so.
+
+    5 comes back as 5 rather than 5.0, because "5.0 W" in a log and on a
+    panel is noise. The same rule `rigctld_client._watts` follows for a
+    reading off the radio, so a configured power and a read one are written
+    the same way.
+    """
+    number = float(value)
+    return int(number) if number == int(number) else number
+
+
+# A name for the error message, since the converter is reported by name.
+watts.__name__ = "wattage"
+
+
 # key -> (default, converter, description)
 SCHEMA = {
     "CALLSIGN":        ("", str, "this station's callsign"),
@@ -86,7 +108,7 @@ SCHEMA = {
                                 "reading. 0 means do not scale"),
     # Watts. The fallback for when the radio cannot be asked at all: `{power}`
     # and the log prefer a CAT reading and fall back to this.
-    "TX_POWER":        (0, int, "transmit power in watts when the radio "
+    "TX_POWER":        (0, watts, "transmit power in watts when the radio "
                                 "cannot be read, for memories: {power}, and "
                                 "logged as TX_PWR"),
     "RIG_BANDS":       ("", str, "bands this radio covers, comma separated, "
@@ -100,6 +122,62 @@ SCHEMA = {
     "LOGGING":         ("no", str, "yes | no — the contact log, off by default"),
     "LOG_PATH":        ("", str, "contact log file; blank means "
                                  "~/.local/share/cyberdeck/qso.log"),
+
+    # -- WSPR -------------------------------------------------------------
+    #
+    # A spot is not a QSO, so none of this touches the contact log: the spot
+    # log is its own file. See docs/wspr_design.md §5.
+    "WSPR_LOG_PATH":   ("", str, "WSPR spot log; blank means wspr.log "
+                                 "beside the contact log"),
+    "WSPR_BANDS":      ("", str, "bands to hop through, comma separated, "
+                                 "e.g. '40 m,30 m'; one means no hopping, "
+                                 "blank means 40 m"),
+    # WSJT-X's default, matched rather than invented for the same reason
+    # wsprd is the decoder. Beaconing in every slot hears nothing and
+    # crowds a shared 200 Hz window.
+    "WSPR_TX_PERCENT": (20, int, "fraction of slots that beacon rather "
+                                 "than listen; 0 never transmits"),
+    # The one function that runs with nobody watching. The failure it
+    # prevents is a deck left beaconing on a park bench for an afternoon.
+    "WSPR_TIMEOUT_MIN": (60, int, "stop WSPR after this many minutes; "
+                                  "0 means no limit"),
+    # Armed, not automatic: this plus WSPR running plus a network are three
+    # conditions and all three are the operator's.
+    "WSPR_UPLOAD":     ("yes", str, "report spots to wsprnet while WSPR "
+                                    "runs and there is a network"),
+    # By NAME. The card INDEX moves between reboots -- the codec was card 1
+    # and became card 2 when HDMI probed first -- and an index that moves
+    # points the capture at the wrong hardware entirely.
+    "WSPR_DEVICE":     ("plughw:CARD=Device,DEV=0", str,
+                        "ALSA device for WSPR capture and playback; address "
+                        "the card by name, since indexes move"),
+    # Transmit amplitude, WSPR's own. Not the playback mixer, which fldigi
+    # shares: a level set there turns the digimodes down with it.
+    "WSPR_TX_LEVEL":   (50, int, "WSPR transmit audio level, percent of "
+                                 "full scale; lower it if the ALC engages"),
+    # And the capture side, which IS the shared mixer -- WSPR owns the codec
+    # exclusively while it runs, so it sets this on start and puts it back
+    # on stop rather than changing the station's level.
+    "WSPR_RX_GAIN":    (70, int, "WSPR capture gain, percent; restored when "
+                                 "WSPR stops"),
+    # A NAME, and a string: `amixer -c` takes either an index or a card id,
+    # and the id is the one that survives a reboot.
+    "WSPR_RX_CARD":    ("Device", str, "ALSA card for the capture mixer, by "
+                                       "name from /proc/asound/cards"),
+    # Auto Gain Control ships ON on this codec and has to be off. It
+    # compresses a constant-envelope signal whose amplitude carries no
+    # information, and it corrupts the SNR figures `wsprd` reports and
+    # uploads to wsprnet. Turned off while WSPR owns the codec and put back
+    # afterwards, like the gain.
+    "WSPR_RX_AGC":     ("Auto Gain Control", str,
+                        "the codec's AGC switch, turned off while WSPR runs; "
+                        "blank to leave it alone"),
+    "WSPR_RX_CONTROL": ("Mic", str, "the capture control amixer names on "
+                                    "that card"),
+    "WSPR_SESSION":    ("", str, "the WSPR session being logged; blank is "
+                                 "no session"),
+    "WSPR_SESSION_START": ("", str, "when that session began, pinned at "
+                                    "its start"),
     # How tall one contact is in the list. One line is the contact; two adds
     # where they are; three adds this station's side and the notes. A contact
     # always takes exactly this many rows, blank ones included, because the
