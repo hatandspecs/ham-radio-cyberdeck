@@ -1,4 +1,4 @@
-"""Layout at every grid the panel can produce (docs/design_doc.md §3.3)."""
+"""Layout at every grid the panel can produce (docs/platform_design.md §3.3)."""
 import os
 import sys
 

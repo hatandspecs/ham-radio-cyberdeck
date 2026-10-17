@@ -13,10 +13,13 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 | Read | For |
 |---|---|
 | `README.md` | What it is, what each file does, the test table |
-| `docs/design_doc.md` | Numbered FR/NFR with honest status |
+| `docs/platform_design.md` | Numbered FR/NFR with honest status |
 | `docs/` | Runbook and operating tutorial |
 | `docs/screens/` | Rendered screenshots of every screen |
-| `docs/logging_tutorial.md` | Operating the contact log, with screenshots |
+| `docs/logging_tutorial.md` | Operating the contact log, with screenshots (its images predate the entry form and are stale) |
+| `docs/qso_log_design.md` | The logger's design and every decision in it — §7f one log and sessions, §7g the schema decides the columns, §7h danger zone, §7i what follows an activity |
+| `docs/wspr_deploy.md` | **Installing `wsprd` on the deck and benchmarking it.** Decode only; nothing in it transmits |
+| `docs/wspr_design.md` | **WSPR: design, with the pure layers built.** Branch `add-wspr`. Read §4 and §8 first — the audio device contention with fldigi and the five open questions are what the shape depends on |
 | `docs/logger_branch_deploy.md` | **Deploying this branch, and the recovery sequence back to `main`.** Read before touching the deck |
 | `slides/cyberdeck-talk.md` | The talk, as Marp markdown; `slides/diagrams/` holds the mermaid sources |
 
@@ -579,13 +582,86 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   `tests/test_log_panel.py` defaults to `linux`, so an xterm F1 is simply
   typed into the callsign field.
 
-## Where it stands
+## What is being worked on now
 
-**2124 checks across 29 files, all 29 green as of 2026-10-16** on the
-`function-ring` branch — a clean serial run with nothing edited while it was
-in flight. The two newest files are `test_decode_park.py` (60) and
-`test_activity_paths.py` (31), with `test_activity_follow.py` folded in as
-the pure half of the latter.
+**Branch `add-wspr`, uncommitted.** WSPR: transmit and receive, exclusive
+while running, band hopping, a session log, spot upload. The design is
+`docs/wspr_design.md` (845 lines) and the install runbook is
+`docs/wspr_deploy.md`.
+
+### Built, tested, and proven on real hardware
+
+| Piece | File | State |
+|---|---|---|
+| message encoder | `src/wspr.py` | **validated: the real `wsprd` decodes its output** |
+| `wsprd` output parser | `src/wspr.py` | **reads real off-air 2.7.0 output** |
+| spot dedupe | `src/wspr.py` | a window can decode one transmission twice |
+| power to dBm | `src/wspr.py` | with the exactness flag the display highlights |
+| audio level | `src/wspr.py` | pure Python, no `audioop` |
+| band table | `src/wsprbands.py` | all 11 dials confirmed three ways |
+| slot schedule, hopping, ToT | `src/wsprsched.py` | injected clock |
+| spot upload | `src/wsprnet.py` | protocol from WSJT-X's source, no network in tests |
+
+255 checks in `tests/test_wspr.py`, `test_wsprsched.py`, `test_wsprnet.py`.
+`tools/wspr_bench.py` benchmarks the decoder, `tools/wspr_rx.py` captures and
+decodes one real slot, `tools/wspr_level.py` reads a WAV's level.
+
+**The receive path is proven on the air** — 2026-10-17 0208 UTC, 40 m, two
+stations decoded, `-36.8 dBFS`, offsets 1453 and 1515 Hz above the dial. See
+`wspr_design.md` §12a for the seven things that established.
+
+### NOT built — this is what is left
+
+Nothing in `cyberdeck.py` imports any of it. The deck behaves exactly as it
+did, which is why the install needed no service restart.
+
+1. **The capture loop.** `arecord` into `YYMMDD_HHMM.wav` on the even
+   minute, `wsprd` as a non-blocking subprocess, spots through `dedupe` into
+   the log. `tools/wspr_rx.py` already does all of this once, by hand — it is
+   the closest thing to a specification for it.
+2. **The transmit path.** `wspr.samples` renders; what is missing is the
+   WAV write, `aplay`, and PTT. **`rigctld_client` has no PTT method** —
+   `T 1` / `T 0` is the addition.
+3. **The spot log.** `key=value` lines, `kind=tx`/`kind=rx`, sessions keyed
+   `(name, start)` reusing the logger's concepts with one fixed field set.
+   `wspr_design.md` §5 has the field table.
+4. **The screen, the menus, the four toggles, the danger zone.**
+5. **The exclusive lock** — `AREA_LOCKED` plus stopping fldigi.
+6. **The TX test tone** and its time bound.
+
+### What still needs the deck
+
+* ~~`rigctld` while fldigi is stopped.~~ **VERIFIED 2026-10-17 and it
+  works.** With fldigi stopped the client returned `connected: True`,
+  `7038600.0`, `('PKTUSB', 3000)` and 0.5 W — identical to fldigi being up.
+  `cyberdeck-rigctld.service` keeps the serial port, so WSPR's radio control
+  is sound. That was the last structural assumption in the design.
+  (An earlier run reported "radio could not be read"; that was the tool's
+  own fault — `rigctld_client.py` had not been copied, the import failed,
+  and a bare `except` reported it as an absent radio.)
+* **A type 2 or type 3 decode off the air.** Both stations in the 2026-10-17
+  capture sent type 1, so compound and hashed calls are still covered only by
+  hand-written fixtures.
+* **Transmit, into the dummy load**, once there is a TX path.
+
+### Decisions not worth relitigating
+
+Transmit and receive in one increment; `wsprd` as a subprocess; exclusive
+while running with fldigi STOPPED (measured — the codec is exclusive);
+rig control through `rigctld_client` because stopping fldigi takes its rig
+control with it; upload armed by three operator conditions rather than
+automatic; one fixed schema, no pickers; the four independent toggles; the TX
+test tone is necessary and the RX calibration mode is not.
+
+## Where it stands## Where it stands
+
+**2379 checks across 32 files, all 32 green as of 2026-10-16** on branch
+`add-wspr` — a clean serial run with nothing edited while it was in flight.
+The WSPR modules account for 255 of those: `test_wspr.py` (the encoder, the
+parser and dedupe), `test_wsprsched.py` (slots, hopping, the time-out) and
+`test_wsprnet.py` (the uploader, with no network touched).
+
+`main` was at 2124 checks across 29 files when the logger work merged.
 
 The line this replaced claimed "1893 checks across 25 files, all passing as
 of 2026-10-15", and that was not true when it was written. Seven files were

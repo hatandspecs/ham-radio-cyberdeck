@@ -1,7 +1,7 @@
 """Render the deck's screens to PNG, in each color scheme.
 
 The text comes from the same functions the application draws with, and the
-colors are the schemes' own hex values (docs/design_doc.md §5.9) rather than a
+colors are the schemes' own hex values (docs/digimodes_design.md §5.9) rather than a
 terminal emulator's approximation of them — so these show what the panel
 shows, including the true amber and the cyan-shifted Tron blue that the eight
 ANSI colors cannot express.

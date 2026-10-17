@@ -17,7 +17,7 @@ from the command line later — `StartDiscovery` in one `busctl` call and
 So everything here happens on ONE connection held open for the whole
 operation, and `tools/bt_agent_probe.py` measured that this works: an agent
 registered by the deck as its own user survived a thirty-second discovery
-(design_doc.md section 16).
+(platform_design.md section 16).
 
 Nothing in this module is imported until the operator asks to pair. `gi` is
 not present on every machine the terminal runs on — it is a Linux, BlueZ and

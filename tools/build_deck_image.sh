@@ -133,7 +133,7 @@ Description=fldigi, headless, for the cyberdeck terminal
 After=network.target sound.target cyberdeck-xvfb.service
 Requires=cyberdeck-xvfb.service
 # fldigi is an FLTK application with no headless mode, so it runs against a
-# virtual X server that is never displayed. See design_doc.md section 4.1.
+# virtual X server that is never displayed. See platform_design.md section 4.1.
 
 [Service]
 Type=simple

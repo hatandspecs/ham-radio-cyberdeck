@@ -230,8 +230,17 @@ class Rigctld:
         Anything unexpected at any step returns 0, and the caller falls back
         to a configured fixed wattage.
 
-        **Unverified against a radio.** Written from the rigctld protocol
-        documentation; nothing here has seen a real reply.
+        **Verified against the FTX-1, 2026-10-17.** Path 1: `max_watts=10`
+        returned 0.5 W from a radio set near the bottom of its range, and
+        `frequency()` and `mode()` returned 7038600.0 and `('PKTUSB', 3000)`
+        in the same run. Paths 2 and 3 are still unexercised. This docstring
+        said "nothing here has seen a real reply" until that run, which was
+        true when written and is the reason it is dated now.
+
+        **It answers with fldigi STOPPED**, which is the arrangement WSPR
+        runs in: `cyberdeck-rigctld.service` is a separate unit and keeps the
+        serial port when fldigi goes down. That is what makes WSPR's radio
+        control possible at all — see `docs/wspr_design.md` §3.
         """
         level = self._rf_power_level()
 

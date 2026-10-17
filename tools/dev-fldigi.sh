@@ -2,7 +2,7 @@
 # Start fldigi headless for development, and leave it running.
 #
 # fldigi has no headless mode: it is an FLTK application, so it runs against a
-# virtual X server that is never displayed (design_doc.md §4.1). It also
+# virtual X server that is never displayed (platform_design.md §4.1). It also
 # crashes on a genuinely empty configuration directory — an assertion failure
 # during first-run setup, reproduced twice — so a working config is seeded from
 # the developer's own install rather than generated (§14).

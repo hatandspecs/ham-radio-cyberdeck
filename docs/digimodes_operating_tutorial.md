@@ -1,7 +1,16 @@
-# Keyboard to Keyboard — an Operating Tutorial
+# Digimodes Operating Tutorial
 
-For an operator who knows radio but has never run a live digital conversation.
-Every key in this document was read out of the deck's source, not remembered.
+Keyboard-to-keyboard conversation in fldigi's digital modes: how to actually
+work somebody with the deck.
+
+For an operator who knows radio but has never run a live digital
+conversation. Every key in this document was read out of the deck's source,
+not remembered.
+
+The deck has three other applications, each with a document of its own —
+the contact log, the deck-and-rig settings, and WSPR. This tutorial is about
+the digital modes only. The design behind it is
+[`digimodes_design.md`](digimodes_design.md).
 
 ---
 

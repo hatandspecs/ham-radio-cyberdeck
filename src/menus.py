@@ -1,4 +1,4 @@
-"""Full-screen menus, selected by a single key (docs/design_doc.md §5.8).
+"""Full-screen menus, selected by a single key (docs/digimodes_design.md §5.8).
 
 No pointer, no cursor to move, no nesting deeper than two: a menu is a list of
 labeled keys and pressing one does the thing. That is the fastest interface

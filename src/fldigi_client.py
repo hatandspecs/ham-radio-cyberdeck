@@ -1,7 +1,7 @@
 """The XML-RPC boundary between the terminal and fldigi.
 
 fldigi does the modem work and is never seen: it runs against a virtual X
-server with no display attached (docs/design_doc.md §4.1). Everything the terminal
+server with no display attached (docs/platform_design.md §4.1). Everything the terminal
 needs of it passes through the twenty-odd methods below, out of the 176 fldigi
 exposes.
 

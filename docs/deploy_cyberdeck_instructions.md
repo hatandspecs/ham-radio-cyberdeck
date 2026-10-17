@@ -896,7 +896,7 @@ before a contest rather than during one — `F1` → `5` edits them on the deck.
 RTTY signal on the air is uppercase. Every command key on the deck is
 case-folded and works either way.
 
-[`operating_tutorial.md`](operating_tutorial.md) is the long version, written for a first
+[`digimodes_operating_tutorial.md`](digimodes_operating_tutorial.md) is the long version, written for a first
 keyboard-to-keyboard contact: what to say, the abbreviations, and how a QSO is
 structured.
 
@@ -1018,7 +1018,7 @@ sudo systemctl start cyberdeck-rigctld
 ```
 
 If the dial moves, CAT is healthy and the fault is in hamlib. See
-design_doc.md §7.1.
+platform_design.md §7.1.
 
 ### The panel says DRAIN and the radio is still keyed
 

@@ -3,7 +3,7 @@
 Kept free of curses so the layout can be tested at any width without a
 terminal, which matters because the grid is not fixed: the 800x480 panel gives
 66x20 at the proposed 12x24 console font, 80x24 at 10x20, and 50x15 at 16x32
-(docs/design_doc.md §3.3). Everything here adapts to the width it is given rather
+(docs/platform_design.md §3.3). Everything here adapts to the width it is given rather
 than assuming one.
 
 A rendered line is a list of (text, kind) segments. The kind names an

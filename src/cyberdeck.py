@@ -17,7 +17,7 @@
 
 The only thing on the screen: a status line, the conversation, and what is
 being typed. No window manager, no pointer, nothing to click. fldigi does the
-modem work invisibly behind an XML-RPC connection (docs/design_doc.md §4).
+modem work invisibly behind an XML-RPC connection (docs/platform_design.md §4).
 
 Run it over SSH for development; on the deck it runs on tty1 against the
 framebuffer, where the color schemes use the real palette.
@@ -514,7 +514,7 @@ class Deck:
             # Our own transmission, echoed back by fldigi as it goes out.
             # Held here rather than written to the transcript: it is drawn as
             # a transient TX line under the over while sending, and dropped
-            # when the over completes. See docs/design_doc.md §5.5 for why this is
+            # when the over completes. See docs/digimodes_design.md §5.5 for why this is
             # transient rather than permanent.
             self._tx_echo += text
             self.scroll = 0

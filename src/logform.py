@@ -240,7 +240,7 @@ class LogForm:
         The deck binds this as `(26, curses.KEY_SUSPEND)`: TERM=linux defines
         `kspd=^Z`, so ncurses eats byte 26 and returns KEY_SUSPEND instead,
         and matching only 26 ships dead on the panel. That has happened here
-        once already — see design_doc.md on the memory-insert undo.
+        once already — see platform_design.md on the memory-insert undo.
 
         Returns False when there is nothing to put back, so the caller can say
         so rather than leaving a key looking broken.
