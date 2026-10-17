@@ -144,5 +144,15 @@ if __name__ == "__main__":
     menu, *_ = menus.paged_menu("ALL MODES", names, 0, COLS, ROWS)
     made.append(draw(menus.render(menu, COLS, ROWS), "matrix", f"{OUT}/all-modes.png"))
 
+    # The WSPR area. Spots are real ones off the air -- other operators'
+    # callsigns and grids are already published on wsprnet, which is the
+    # whole point of the mode -- with this station's own grid as the
+    # reference for the distance and bearing columns.
+    import wsprgrid_fixture as _w          # defined below, kept out of the way
+    for name, lines in _w.screens(COLS, ROWS):
+        made.append(draw(lines, "matrix", f"{OUT}/{name}.png"))
+    for name, lines in _w.log_extras(COLS, ROWS):
+        made.append(draw(lines, "matrix", f"{OUT}/{name}.png"))
+
     for p in made:
         print(f"  {p}  {os.path.getsize(p) // 1024} KB")

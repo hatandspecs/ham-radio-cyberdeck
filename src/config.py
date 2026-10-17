@@ -262,7 +262,7 @@ SCHEMA = {
     "WIFI_ON_START":   ("yes", str, "switch the WiFi radio back on at every start"),
     "DEFAULT_MODE":    ("BPSK31", str, "modem selected at startup"),
     "DEFAULT_CARRIER": (1500, int, "audio carrier parked here, in Hz"),
-    "COLOR":          ("matrix", str, "matrix | deckard | hal | tron | ripley"),
+    "COLOR":          ("matrix", str, "hal | deckard | matrix | tron | ripley"),
     "FONT":            ("12x24", str, "console font; sets the character grid"),
 
     "FLDIGI_URL":      ("http://127.0.0.1:7362/", str, "fldigi's XML-RPC address"),
@@ -321,7 +321,7 @@ SCHEMA = {
     "MEMORY_12": ("", str, "F12"),
 }
 
-COLORS = ("matrix", "deckard", "hal", "tron", "ripley")
+COLORS = ("hal", "deckard", "matrix", "tron", "ripley")
 
 # Duplicated from qsolog rather than imported: config.py is loaded before
 # anything else and importing a feature module into it would make the

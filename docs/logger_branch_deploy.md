@@ -32,7 +32,7 @@ misbehaving deck usually needs.
 On the laptop:
 
 ```bash
-cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+cd ~/git_repos/ham_radio_cyberdeck
 rm -rf /tmp/mainsrc && mkdir -p /tmp/mainsrc
 git archive main src | tar -x -C /tmp/mainsrc
 rsync -av /tmp/mainsrc/src/ deck@cyberdeck.local:/tmp/deckrevert/
@@ -64,7 +64,7 @@ modules and the credentials move.
 On the laptop:
 
 ```bash
-cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+cd ~/git_repos/ham_radio_cyberdeck
 git checkout logger
 rsync -av src/*.py cyberdeck.secrets deck@cyberdeck.local:/tmp/deckupd/
 ```
@@ -180,7 +180,7 @@ On the laptop. The rsync copies the WORKING TREE, so uncommitted work deploys â€
 which is the point, since the deck is where it gets tested:
 
 ```bash
-cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+cd ~/git_repos/ham_radio_cyberdeck
 git rev-parse --abbrev-ref HEAD      # say out loud which branch this is
 rsync -av src/*.py cyberdeck.secrets deck@cyberdeck.local:/tmp/deckupd/
 ```
@@ -431,7 +431,7 @@ form the tabbed form replaced.
 ## 6. Tests
 
 ```bash
-cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+cd ~/git_repos/ham_radio_cyberdeck
 for t in tests/test_*.py; do python3 "$t" >/dev/null 2>&1 || echo "FAIL $t"; done
 ```
 

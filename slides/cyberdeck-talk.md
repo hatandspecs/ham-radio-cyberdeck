@@ -1,7 +1,7 @@
 ---
 marp: true
 paginate: true
-footer: "KD3CCO · github.com/hatandspecs/keyboard-to-keyboard-cyberdeck"
+footer: "KD3CCO · github.com/hatandspecs/ham_radio_cyberdeck"
 style: |
   /* Plain white, one clear typeface, nothing decorative.
      Assertion-evidence: the headline is a full sentence making a claim and the
@@ -63,11 +63,11 @@ style: |
 <!-- _paginate: false -->
 <!-- _footer: "" -->
 
-# A keyboard-to-keyboard cyberdeck
+# A ham radio cyberdeck
 
 **KD3CCO**
 
-A single-purpose HF text terminal for \$68
+An HF terminal for \$68 — conversation, logbook, and WSPR
 
 ---
 
@@ -253,6 +253,46 @@ All of fldigi's signal processing. None of its interface.
 <span class="caption">Also Germany, JO41XW — two operators in mountain villages, four thousand miles apart, typing at each other.</span>
 
 ---
+
+<!-- _class: evidence -->
+
+# It grew a logbook, and the logbook changed the shape of the program
+
+![](../docs/screens/log-pota.png)
+
+<span class="caption">A contest exchange is a serial and a section, and `599` is both a valid report and a valid serial — no positional parser can tell them apart. So the operator defines the field list per activity, and that list <em>is</em> the grammar.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# Three applications became peers on a ring, not a menu tree
+
+![width:900px](../docs/screens/log-menu.png)
+
+<span class="caption">`^O` and `^P` move between the digimodes, the log and the deck's own settings. It began as the digimodes alone with the rest hanging off its menu, which made the digimode screen the home by accident rather than by anyone's decision.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# A fourth joined them: WSPR, which has to own the radio
+
+![](../docs/screens/wspr.png)
+
+<span class="caption">The USB codec takes one capture client, measured rather than assumed — so WSPR stops fldigi, takes the card, and gives both back. It is the only area the ring refuses to leave while it runs.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# Five watts reached 43 receivers in one slot, and Belgium on the next band
+
+![](img/wspr-reach.jpg)
+
+<span class="caption">The encoder was validated by having the real `wsprd` decode the deck's own output on the bench. The decoder is a 55 KB binary extracted from a 36 MB package, and it decodes a two-minute slot in 14.5 seconds at 20 MiB on a Pi 3A+.</span>
+
+---
 <!-- _class: evidence -->
 
 # AI helps with faster code and better documentation practices
@@ -280,7 +320,7 @@ Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunda
 # Build something that annoys you into existence
 
 **Code, design document, runbook, operating tutorial**
-github.com/hatandspecs/keyboard-to-keyboard-cyberdeck
+github.com/hatandspecs/ham_radio_cyberdeck
 
 **Write-up, with photographs and the things that went wrong**
 hatandspecs.github.io/hamradio/articles/keyboard-to-keyboard-cyberdeck/

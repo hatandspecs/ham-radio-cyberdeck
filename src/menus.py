@@ -134,9 +134,9 @@ MENU_PARENT = {
 DISPLAY = {
     "title": "DISPLAY",
     "items": [
-        ("1", "Color: Matrix   green"),
+        ("1", "Color: Hal      red"),
         ("2", "Color: Deckard  amber"),
-        ("3", "Color: Hal      red"),
+        ("3", "Color: Matrix   green"),
         ("4", "Color: Tron     cyan"),
         ("5", "Color: Ripley   white"),
         ("t", "Timestamps on/off"),

@@ -747,7 +747,7 @@ it and `rigctld` fight over the same device and one of them loses.
 **3. Start fldigi headless and the terminal.**
 
 ```bash
-git clone <this repo> && cd keyboard-to-keyboard-cyberdeck
+git clone <this repo> && cd ham_radio_cyberdeck
 cp cyberdeck.conf.example cyberdeck.conf   # set CALLSIGN and the rest
 tools/dev-fldigi.sh                        # Xvfb + fldigi, seeded config
 python3 src/cyberdeck.py

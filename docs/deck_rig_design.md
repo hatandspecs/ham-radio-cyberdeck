@@ -134,7 +134,7 @@ was the same information twice.
 
 ### The color schemes are the kernel's palette
 
-Five monochrome schemes — Matrix green, Deckard amber, Hal red, Tron cyan,
+Five monochrome schemes — Hal red, Deckard amber, Matrix green, Tron cyan,
 Ripley white — switched with `F4` from any screen on the deck.
 
 They are not ANSI colors. The deck redefines entries in the **console

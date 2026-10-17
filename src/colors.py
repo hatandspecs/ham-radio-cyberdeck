@@ -33,7 +33,14 @@ SCHEMES = {
     # because the deck owns tty1 and restore() puts the table back on exit.
     "ripley":  {"name": "Ripley",  "bright": "FFFFFF", "dim": "A0A0A0", "ansi": curses.COLOR_WHITE},
 }
-ORDER = ("matrix", "deckard", "hal", "tron", "ripley")
+# **Darkest to brightest, as the eye reads them**: Hal's deep red, Deckard's
+# amber, the matrix green, Tron's cyan, then Ripley's white. F4 walks this
+# order, and the display menu lists it the same way, so cycling is a ramp
+# rather than a jump around the spectrum.
+#
+# This is perceived brightness, not luminance arithmetic -- red reads dimmer
+# than its numbers suggest and white reads brightest by a wide margin.
+ORDER = ("hal", "deckard", "matrix", "tron", "ripley")
 
 # Which palette entries to redefine on a Linux console.
 #
@@ -77,7 +84,11 @@ _SLOT_BAR = 5
 # Giving each scheme its own pair numbers makes the attribute change, which
 # makes every cell dirty, which forces the repaint.
 _PAIR_BASE = {name: 1 + i * 3 for i, name in enumerate(ORDER)}
-_active = ORDER[0]
+# The module's starting scheme, replaced by `apply()` with whatever the
+# config and state file say. Named rather than taken from `ORDER[0]`,
+# because the order is a brightness ramp and its first entry is the
+# DARKEST, not the default.
+_active = "matrix"
 
 
 def _pairs(scheme_key=None):

@@ -5364,7 +5364,8 @@ class Deck:
             return True
 
         if m == "display":
-            scheme = {"1": "matrix", "2": "deckard", "3": "hal",
+            # The same order the menu prints and F4 walks.
+            scheme = {"1": "hal", "2": "deckard", "3": "matrix",
                       "4": "tron", "5": "ripley"}.get(key)
             if scheme:
                 self._apply_scheme(scheme)

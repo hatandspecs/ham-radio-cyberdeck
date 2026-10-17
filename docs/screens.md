@@ -21,7 +21,7 @@
 │──────────────────────────────────────────────────────────────────│
 │ NOCALL de KD3CCO  all the fldigi keyboard modes — psk, olivia,   │
 │ mfsk, rtty                                               [RX 73] │
-│ F1 menu   F2 tune   F5+ memory   ^T over   ^Y hand   ^C abort    │
+│ F1 menu  F2 tune  ^T over  ^Y hand  ^C abort  ^O ^P screen       │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -56,15 +56,15 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ MENU                                                             │
+│ DIGIMODES                                                        │
 │                                                                  │
 │  1  Mode                                                         │
 │  2  Tune Settings                                                │
 │▸ 3  Band                                                         │
-│  4  Display                                                      │
-│  5  Memories                                                     │
-│  6  Station                                                      │
-│  7  System                                                       │
+│  4  Memories                                                     │
+│                                                                  │
+│                                                                  │
+│                                                                  │
 │                                                                  │
 │                                                                  │
 │                                                                  │
@@ -75,7 +75,7 @@
 │                                                                  │
 │                                                                  │
 │──────────────────────────────────────────────────────────────────│
-│ Esc back to the conversation   ↑↓ move   Enter select            │
+│ Esc back   ↑↓ move   Enter select   ^O ^P screen                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -186,18 +186,14 @@
 │ Esc  back      PgUp/PgDn  more                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
-
 ## The WSPR screen — `^O` from the deck & rig screen
 
 The fourth area, and the only one that is exclusive: while it runs, the ring
 does not leave it and fldigi is stopped, because the USB codec takes one
 capture client.
 
-The header carries the session, the band, the dial frequency and the
-transmit interlock. The block below the spots is the state: the switches,
-the power the radio is actually making and the dBm that encodes to, where
-the clock is inside the two-minute slot, both audio levels with what the
-last window measured, and the counters.
+`KM` and `AZ` are computed from the two grid squares. Neither is stored in
+the spot log, because both are derivable from the grids that are.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -207,11 +203,11 @@ last window measured, and the counters.
 │ 17:46  -19  KD1SQ      FN67    23  20 m   1139   45              │
 │ 17:46  -28  N9JNQ      EN34    23  20 m   1309  293              │
 │ 17:46  -13  N4DPH      EM64    23  20 m   1565  258              │
-│ 17:46  -17  W9LK       EM26    23  20 m   5648   47              │
-│ 17:46  -14  G4HSB      IO94    23  20 m   1139   45              │
-│ 17:44  -23  KD1SQ      FN67    23  20 m   1005  298              │
-│ 17:44  -15  W9RAG      EN54    23  20 m   1275  279              │
-│ 17:44  -29  K0PCG      JN49GR  23  20 m   6452   50              │
+│ 17:46  -17  W9LK       EM26    23  20 m   1203  272              │
+│ 17:46  -14  G4HSB      IO94    23  20 m   5648   47              │
+│ 17:44  -23  KD1SQ      FN67    23  20 m   1139   45              │
+│ 17:44  -15  W9RAG      EN54    23  20 m   1005  298              │
+│ 17:44  -29  K0PCG      JN49    23  20 m   6452   50              │
 │                                                                  │
 │──────────────────────────────────────────────────────────────────│
 │ WSPR   DECODE   TX   TX NEXT   HOP                               │
@@ -224,15 +220,11 @@ last window measured, and the counters.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-`KM` and `AZ` are computed from the two grid squares — see `src/grid.py`.
-Neither is stored in the spot log, because both are derivable from the grids
-that are.
-
 ## The WSPR menu — F1 from the WSPR screen
 
-Grouped as the logging menu is, with each current value on its own line, so
-an operator who opens it to check what is on does not have to open anything
-else.
+Thirteen items, and that is a constraint rather than a count: `menus.render`
+goes to two columns above `height - 6` items, and the second column has no
+room for the values this menu exists to show.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -259,16 +251,14 @@ else.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Thirteen items, and that is a constraint rather than a count.**
-`menus.render` goes to two columns above `height - 6` items — fourteen on
-this panel — and the second column has no room for the values, which is the
-one thing this menu exists to show.
-
 ## The band picker — F3, or `b` from the WSPR menu
 
-A number or Enter selects that band alone and tunes the radio to its WSPR
-dial frequency. Space toggles the highlighted band in and out of the hop
-rotation; `[*]` marks the bands in it and `<` the one in use.
+A number or Enter selects that band alone and tunes to its WSPR dial.
+Space toggles the highlighted band in and out of the hop rotation; `[*]`
+marks the bands in it and `<` the one in use.
+
+Selecting a band also reads the radio's mode and sets DATA-U if it is
+not, remembering what was found — the radio keeps a mode per band.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -295,13 +285,12 @@ rotation; `[*]` marks the bands in it and `<` the one in use.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Selecting a band also reads the radio's mode and sets DATA-U if it is not
-already there, remembering what was found. The radio keeps a mode per band,
-so a rotation can be three bands in a data mode and one in LSB, and the only
-symptom is a slot that transmits nothing useful. Leaving a band puts its own
-mode back.
-
 ## The audio menu — `a` from the WSPR menu
+
+The levels are reported here and changed in the calibration screens, where
+there is a meter to watch. Both are refused while WSPR is off, with the
+reason given: they open the sound card, and fldigi holds it until WSPR
+takes it.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -328,15 +317,11 @@ mode back.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The levels are reported here and changed in the calibration screens, where
-there is a meter to watch. Both entries are refused while WSPR is off, with
-the reason given: they open the sound card, and fldigi holds it until WSPR
-takes it.
-
 ## Calibrating transmit — `c` from the audio menu
 
-`+` and `-` step the level while the tone is playing; the audio is a rendered
-file, so changing the level re-sends it at the new one.
+`+` and `-` step the level while the tone is playing. The instrument is the
+radio's own power meter; the dBm is highlighted when the wattage lands
+exactly on a value WSPR can encode.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -363,11 +348,11 @@ file, so changing the level re-sends it at the new one.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The instrument here is the radio's own power meter. The deck reports what it
-reads back over CAT, and the dBm is highlighted when the wattage lands
-exactly on a value WSPR can encode.
-
 ## Calibrating receive — `m` from the audio menu
+
+The marked stretch of the meter is roughly what `wsprd` wants. The gain is
+the capture mixer, which fldigi shares — safe to set only because WSPR
+owns the codec while it runs, and put back when the session ends.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -394,6 +379,3 @@ exactly on a value WSPR can encode.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The marked stretch of the meter is roughly what `wsprd` wants. The gain is
-the capture mixer, which fldigi shares — safe to set only because WSPR owns
-the codec exclusively while it runs, and put back when the session ends.

@@ -763,6 +763,34 @@ grant that does not prompt could only have come from the rule.
 | **KM empty** | WSPR carries a grid and no distance. `src/grid.py` computes it, **validated against this station's own wsprnet rows**: inside 0.5 km on every six-character path from 498 to 6855 km. Not stored — both figures are derivable from the two grids already in each record |
 | **The screen was tight** | The spot row used 44 of 66 columns with no gaps. Respaced, with KM and AZ |
 
+### Building the slide deck: there is no `npx` on this machine
+
+`nodejs` and `npm` are not installed and nothing named `npx` is on the PATH,
+yet `slides/cyberdeck-talk.pdf` has been rebuilt many times. The route is the
+**VS Code Marp extension**, which bundles its own `marp-cli`, and VS Code's
+Electron run as a node interpreter:
+
+```bash
+cd ~/git_repos/ham_radio_cyberdeck/slides
+MARP=~/.vscode/extensions/marp-team.marp-vscode-*/node_modules/@marp-team/marp-cli/marp-cli.js
+ELECTRON_RUN_AS_NODE=1 CHROME_PATH=/usr/bin/google-chrome \
+  /usr/share/code/code $MARP cyberdeck-talk.md --pdf --allow-local-files
+```
+
+`--allow-local-files` is not optional: the slides pull images from
+`../docs/screens/` and `img/`, and without it they render blank while the
+build still reports success. `slides/README.md` carries this too.
+
+### The screens in the docs are GENERATED — do not hand-edit them
+
+`docs/screens.md` is the output of `tools/capture_screens.py`, and
+`docs/screens/*.png` is the output of `tools/capture_png.py`. Anything
+written into `screens.md` by hand is destroyed the next time either runs.
+New screens go in `tools/wsprgrid_fixture.py`, which both tools read.
+
+The PNG path is the one the blog articles use: a generated screen in the
+scheme's true colors beats ASCII art, and it cannot drift from the code.
+
 ### On-air, and what the second day of panel testing found — 2026-10-17
 
 **WSPR works, confirmed by wsprnet.** 5 W on 40 m reached 43 receivers in one

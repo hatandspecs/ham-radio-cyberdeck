@@ -134,7 +134,7 @@ The audio interface is a generic C-Media codec, so it is named **`USB Audio
 Device`** rather than anything mentioning Yaesu. That is the string to look for.
 
 ```bash
-cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+cd ~/git_repos/ham_radio_cyberdeck
 tools/dev-fldigi.sh                             # Xvfb + fldigi, seeded from ~/.fldigi
 python3 tools/configure_fldigi.py --show          # what is set now
 ```

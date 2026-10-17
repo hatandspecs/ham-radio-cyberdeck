@@ -515,7 +515,7 @@ flowchart LR
   M1 --> M1a["AUTO (RSID)<br/>PSK / RTTY / Olivia / MFSK<br/>Contestia / THOR / DominoEX<br/>Hell / CW · m for all"]
   M2 --> M2a["AFC, squelch and level,<br/>RSID, TXID, reverse,<br/>park carrier"]
   M3 --> M3a["80 m to 70 cm, low to high<br/>unreachable bands marked"]
-  M4 --> M4a["Color: Matrix / Deckard<br/>Hal / Tron · timestamps"]
+  M4 --> M4a["Color: Hal / Deckard / Matrix<br/>Tron / Ripley · timestamps"]
   M5 --> M5a["Eight memories,<br/>edited in place"]
   M6 --> M6a["Callsign, name, QTH,<br/>grid, rig — edited in place"]
   M7 --> M7a["Transmit inhibit<br/>Clear transcript · Quit"]
@@ -585,10 +585,10 @@ terminal emulator's approximation of them:
 
 | | |
 |---|---|
-| Matrix | Deckard |
-| ![Matrix](screens/conversation-matrix.png) | ![Deckard](screens/conversation-deckard.png) |
-| Hal | Tron |
-| ![Hal](screens/conversation-hal.png) | ![Tron](screens/conversation-tron.png) |
+| Hal | Deckard |
+| ![Hal](screens/conversation-hal.png) | ![Deckard](screens/conversation-deckard.png) |
+| Matrix | Tron |
+| ![Matrix](screens/conversation-matrix.png) | ![Tron](screens/conversation-tron.png) |
 
 Monochrome means one hue, not one intensity. Emphasis comes from the dim
 variant and from reverse video: the status line is reverse, own transmissions
@@ -673,7 +673,7 @@ dim.
   text is static.
 
   `clearok()` was tried first and was not reliable. The fix is to give **each
-  scheme its own pair numbers** — Matrix 1-3, Deckard 4-6, Hal 7-9, Tron 10-12
+  scheme its own pair numbers** — Hal 1-3, Deckard 4-6, Matrix 7-9, Tron 10-12
   — so that switching scheme changes every cell's attribute and ncurses has no
   choice but to rewrite the screen.
 
@@ -698,7 +698,9 @@ the ANSI approximations of yellow and green, and it is why switching schemes at
 runtime is a matter of emitting four escape sequences rather than repainting.
 Verification is pending; see section 14.
 
-`F4` cycles Matrix → Deckard → Hal → Tron. The Display menu selects directly, and
+`F4` cycles Hal → Deckard → Matrix → Tron → Ripley, which is darkest to
+brightest as the eye reads them rather than any arithmetic on the values.
+The Display menu lists the same order and selects directly, and
 `COLOR` in the configuration file sets the scheme at boot.
 
 ## 6. Modes

@@ -787,7 +787,7 @@ instead.
 | `1` | Mode | `a` AUTO (RSID) · the twelve modes above · `m` for all |
 | `2` | Tune Settings | `a` AFC · `s` squelch · `+`/`-` level · `r` RSID · `t` TXID · `v` reverse · `c` park carrier |
 | `3` | Band | `1`–`9`, `0`, `a` — eleven presets, 80 m up to 70 cm |
-| `4` | Display | `1` Matrix · `2` Deckard · `3` Hal · `4` Tron · `t` timestamps |
+| `4` | Display | `1` Hal · `2` Deckard · `3` Matrix · `4` Tron · `5` Ripley · `t` timestamps |
 | `5` | Memories | The eight message memories; `Enter` edits one in place |
 | `6` | Station | Callsign, name, QTH, grid, rig — `Enter` edits one in place |
 | `7` | System | `b` pair a keyboard · `w` WiFi · `i` inhibit · `c` clear transcript · `q` quit |

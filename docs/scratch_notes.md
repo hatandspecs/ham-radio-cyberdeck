@@ -14,7 +14,7 @@ ls /opt/cyberdeck-restore/*.py | wc -l
 On the laptop:
 
 ```bash
-cd ~/git_repos/keyboard-to-keyboard-cyberdeck
+cd ~/git_repos/ham_radio_cyberdeck
 rsync -av src/*.py deck@cyberdeck.local:/tmp/deckupd/
 ```
 
