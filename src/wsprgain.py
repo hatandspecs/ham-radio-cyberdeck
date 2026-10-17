@@ -25,9 +25,20 @@ Percent and not raw steps: codecs differ in range (this one is 0-16) and
 import re
 import subprocess
 
-DEFAULT_CARD = 1
+# **A card NAME, not an index.** `amixer -c` accepts either, and the index
+# moves: the C-Media codec was card 1 and became card 2 when HDMI probed
+# first, at which point every `amixer -c 1` went to the HDMI card and
+# answered "Unable to find simple control 'Mic'" -- so the capture gain
+# silently did nothing at all. The id in /proc/asound/cards does not move.
+DEFAULT_CARD = "Device"
 DEFAULT_CONTROL = "Mic"
 DEFAULT_GAIN = 70
+
+# The codec's AGC switch. Measured ON as shipped, and it has to be off:
+# WSPR is constant envelope, so compressing it discards nothing useful and
+# corrupts the SNR `wsprd` reports -- which is then uploaded to wsprnet as
+# though it were a measurement.
+DEFAULT_AGC = "Auto Gain Control"
 
 # `[62%]` in amixer's per-channel line. The dB figure beside it is not used:
 # it is the codec's own scale and is missing on controls that have none.
@@ -43,6 +54,27 @@ def set_command(pct, card=DEFAULT_CARD, control=DEFAULT_CONTROL):
     """What to run to set it, as a percentage."""
     return ["amixer", "-c", str(card), "sset", str(control),
             f"{int(pct)}%", "capture"]
+
+
+def switch_command(on, card=DEFAULT_CARD, control=DEFAULT_AGC):
+    """What to run to turn a boolean control on or off."""
+    return ["amixer", "-c", str(card), "sset", str(control),
+            "on" if on else "off"]
+
+
+def parse_switch(text):
+    """Whether a boolean control reads on, or None if it cannot be read.
+
+    None is not False, for the same reason it is not zero in `parse_level`:
+    a control that cannot be read is not one known to be off, and only the
+    difference says whether there is anything to put back.
+    """
+    body = str(text or "")
+    if "[on]" in body:
+        return True
+    if "[off]" in body:
+        return False
+    return None
 
 
 def parse_level(text):
@@ -85,12 +117,15 @@ class Gain:
     it takes a command list and returns `(returncode, stdout, stderr)`.
     """
 
-    def __init__(self, card=DEFAULT_CARD, control=DEFAULT_CONTROL, run=None):
+    def __init__(self, card=DEFAULT_CARD, control=DEFAULT_CONTROL, run=None,
+                 agc=DEFAULT_AGC):
         self.card = card
         self.control = control
+        self.agc = agc
         self._run = run or self._real_run
         self.previous = None       # what was there before the session
         self.applied = None        # what this object set
+        self.agc_previous = None   # whether the AGC was on before
         self.last_error = ""
 
     @staticmethod
@@ -134,6 +169,40 @@ class Gain:
             return self.last_error
         self.applied = int(pct)
         self.last_error = ""
+        return ""
+
+    def silence_agc(self):
+        """Turn the AGC off, remembering whether it was on. Returns why, or "".
+
+        Separate from `apply` because it is a different control and a codec
+        without one is normal: a blank name, or a control this card does not
+        have, is not an error worth refusing a session over.
+        """
+        if not self.agc:
+            return ""
+        code, out, err = self._run(
+            get_command(self.card, self.agc)[:-1])   # no "capture" suffix
+        if code == 0 and self.agc_previous is None:
+            self.agc_previous = parse_switch(out)
+        if self.agc_previous is False:
+            return ""                                # already off
+        code, out, err = self._run(
+            switch_command(False, self.card, self.agc))
+        if code != 0:
+            why = (err or out or "amixer failed").strip()
+            self.agc_previous = None                 # nothing to put back
+            return why
+        return ""
+
+    def restore_agc(self):
+        """Put the AGC back the way it was. Returns why, or ""."""
+        if not self.agc or self.agc_previous is not True:
+            return ""
+        code, out, err = self._run(
+            switch_command(True, self.card, self.agc))
+        self.agc_previous = None
+        if code != 0:
+            return (err or out or "amixer failed").strip()
         return ""
 
     def restore(self):

@@ -344,4 +344,4 @@ if __name__ == "__main__":
         check("Ctrl-R shows the passphrase", "secr3t" in body, body[:300])
         check("and the hint now offers to hide it", "hide" in body, body[:400])
 
-    report()
+    sys.exit(report())

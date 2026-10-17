@@ -156,7 +156,7 @@ on exit.
   mode, transmit is inhibited and **the decoder is stopped** — fldigi's DSP is
   the largest thing running on a Pi 3A+ and in SSB or FM everything it decodes
   is noise. Decoding comes back by itself when the radio does; arming
-  transmit stays a deliberate `Ctrl-I`.
+  transmit stays a deliberate `Ctrl-B`.
 
 It deliberately does **not** do Cabrillo, weak-signal modes, waterfall
 display, image modes, or packet. Contest exchanges, serials and duplicate
@@ -451,7 +451,7 @@ and `F2` / `F3` are that application's own two sub-views.
 | `Ctrl-T` | Start the over — send the buffer and key the rig |
 | `Ctrl-Y` | Hand back — drop to receive when the buffer drains |
 | `Ctrl-C` | Abort transmit immediately |
-| `Ctrl-I` | Toggle transmit inhibit — also `Tab`, same byte |
+| `Ctrl-B` | Toggle transmit inhibit, from any screen |
 | `Ctrl-X` | Clear the transcript |
 | `PgUp` / `PgDn` | Scroll the transcript — or drag it on the touchscreen |
 
@@ -474,7 +474,7 @@ and `F2` / `F3` are that application's own two sub-views.
 
 Menus take arrow keys as well as their single-key shortcuts: `↑` `↓` move a
 `▸` marker, `Enter` chooses. Transmit starts **inhibited** at every power-on;
-`Ctrl-I` arms it. Command keys are case-folded, so they work with Caps Lock on
+`Ctrl-B` arms it. Command keys are case-folded, so they work with Caps Lock on
 — which is how RTTY is operated, since Baudot has no lowercase.
 
 **Pairing a keyboard needs no SSH.** `^O` `^O` → `F1` → `2` → `b`, or just switch the
@@ -580,8 +580,9 @@ There is no Station line: the deck & rig **screen** is the station editor, and
 a menu offering a second list of the same settings was the same information
 twice.
 
-`Ctrl-I` and `Tab` are the same byte — ASCII 9 — so `Tab` also toggles the
-inhibit. Watch the status line if you hit it by accident.
+The inhibit is `Ctrl-B`, from any screen. It was `Ctrl-I`, which is the same
+byte as `Tab` — ASCII 9 — so `Tab` armed and inhibited the transmitter,
+including on a form where `Tab` means "next field". `Ctrl-B` was unbound.
 
 ## How it is put together
 
@@ -1034,7 +1035,7 @@ Working end to end:
   recalled; a second over queued behind it is split by a mark that is no
   longer visible. A new over is now refused while the previous one is still
   going out, and says to wait for `RX` or `Ctrl-C`.
-* **`Ctrl-I` mid-over looked like a stop and was not.** The inhibit blocks the
+* **`Ctrl-B` mid-over looked like a stop and was not.** The inhibit blocks the
   *next* over; it cannot end the one running. It now says so instead of
   leaving it to be inferred from a radio that stays keyed.
 * **A handed-back over could stay on the air with the screen showing `RX`.**

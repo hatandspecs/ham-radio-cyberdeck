@@ -191,4 +191,4 @@ if __name__ == "__main__":
             fake.stop()
         shutil.rmtree(tmp, ignore_errors=True)
 
-    report()
+    sys.exit(report())

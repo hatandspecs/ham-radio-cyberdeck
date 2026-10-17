@@ -164,4 +164,4 @@ body, left = deck(keys, "rename to nothing", settle=3.6)
 check("the contact keeps its name",
       any("Bald Eagle SP" in l for l in left), str(left))
 
-report()
+sys.exit(report())

@@ -463,7 +463,7 @@ SYSTEM = {
     "items": [
         ("b", "Pair a Bluetooth keyboard"),
         ("w", "WiFi — join a network, or switch the radio off"),
-        ("i", "Transmit inhibit on/off      Ctrl-I  (also Tab)"),
+        ("i", "Transmit inhibit on/off      Ctrl-B, any screen"),
         ("c", "Clear the transcript         Ctrl-X"),
         ("q", "Quit                         Ctrl-Q"),
     ],
@@ -695,21 +695,24 @@ def wspr_audio_menu(state=None):
     """
     st = dict(state or {})
     dbfs = st.get("dbfs")
-    heard = ("no capture yet" if dbfs is None else f"{float(dbfs):.0f} dBFS")
+    heard = ("no reading yet" if dbfs is None
+             else f"{float(dbfs):.0f} dBFS")
+    # **The levels are reported here and changed in the calibration
+    # screens.** Stepping them from this menu was a third way to do the same
+    # thing, with no meter in sight -- and a level set without watching
+    # something is a number changed, not a level set.
     return {
         "title": "WSPR AUDIO",
         "items": [
-            ("t", f"TX audio level               "
-                  f"{st.get('tx_level', 50)}%"),
-            (" ", "   WSPR's own amplitude — not the shared mixer"),
-            ("r", f"RX capture gain              "
-                  f"{st.get('rx_gain', 70)}%"),
-            (" ", f"   the shared mixer, put back on stop — {heard}"),
+            (" ", f"   TX audio {st.get('tx_level', 50)}%"
+                  f"     RX gain {st.get('rx_gain', 70)}%"
+                  f"     {heard}"),
+            (" ", ""),
             ("c", "Calibrate transmit        a tone, + and - to set"),
             ("m", "Calibrate receive         a meter, + and - to set"),
         ],
         "footer": "Esc back   ↑↓ move   Enter select   "
-                  "t and r step the levels here",
+                  "the levels are set in those screens",
     }
 
 
@@ -737,7 +740,7 @@ def wspr_danger_menu(session="", heard=0, sent=0, total_heard=0,
                   f"{total_heard} heard + {total_sent} sent"),
         ],
         "footer": ("Esc back   ↑↓ move   Enter select   "
-                   + (session[:24] if session else "no session")),
+                   + (session[:24] if session else "general")),
     }
 
 

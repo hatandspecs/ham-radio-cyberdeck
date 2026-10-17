@@ -1,6 +1,4 @@
-Unit tests are green (513 checks across the eight affected files). While the pty smoke finishes, here are the commands — the unit tier plus a compile check is the minimum you asked for, and I'll flag immediately if the pty run turns anything up.
-
-## Deploy
+Deploy and then, next time the first-toggle failure happens, one command will tell us the cause.
 
 ```bash
 cd ~/git_repos/keyboard-to-keyboard-cyberdeck
@@ -8,45 +6,41 @@ rsync -av src/*.py deck@cyberdeck.local:/tmp/deckupd/
 ```
 
 ```bash
-sudo mkdir -p /opt/cyberdeck-backup-3
-sudo cp /opt/cyberdeck/*.py /opt/cyberdeck-backup-3/
+sudo mkdir -p /opt/cyberdeck-backup-5
+sudo cp /opt/cyberdeck/*.py /opt/cyberdeck-backup-5/
 sudo cp /tmp/deckupd/*.py /opt/cyberdeck/
 sudo systemctl restart cyberdeck-ui
 sleep 5
 systemctl is-active cyberdeck-ui
 ```
 
-## Revert
+Revert:
 
 ```bash
-sudo cp /opt/cyberdeck-backup-3/*.py /opt/cyberdeck/
+sudo cp /opt/cyberdeck-backup-5/*.py /opt/cyberdeck/
 sudo systemctl restart cyberdeck-ui
 sleep 5
 systemctl is-active cyberdeck-ui
 ```
 
-## What changed
+**The diagnostic, run while the first toggle has just failed:**
 
-**The menu showing no on/off states was a regression I caused** — adding three rows took it to 16 items, and `menus.render` goes two-column above 14, where there's no room for the values. That's also why the TX level "didn't work": it *was* working, you just couldn't see the number change. The three audio rows are now one **Audio levels** submenu (`F1` then `a`), so the menu is back to 13 items with every value on its line.
+```bash
+systemctl is-active cyberdeck-fldigi; systemctl is-active cyberdeck-rigctld
+journalctl -u cyberdeck-fldigi -u cyberdeck-ui --since '-3 min' --no-pager | tail -30
+```
 
-**The test tone failure was a real bug.** `_key` set PTT and read it back immediately — the FTX-1 hadn't reported it yet, so the deck concluded "the radio did not key", unkeyed, and refused. That's exactly the brief click you saw. The readback now polls for up to 600 ms.
+That shows whether fldigi came back up after WSPR stopped it, and what systemd did in between. The journal will settle it.
 
-**Calibration is now a screen, not a one-shot**, reachable from the audio menu:
-- `c` — transmit: `+`/`-` step the level *while the tone is playing* (it re-sends at the new level, which is what adjusting under the tone means for rendered audio), `Enter` sends a 40-second tone, `Ctrl-X` stops it.
-- `m` — receive: a live dBFS meter updating about once a second, with `+`/`-` on the gain. The meter marks the stretch `wsprd` wants, so you can see which way to go. It takes the codec itself if WSPR isn't running, and gives both the gain and fldigi back on Esc.
+## On the first-toggle bug
 
-**Mode handling replaced as you asked.** The check is gone. Selecting a band now reads the mode, and if it isn't a data mode, remembers it and sets DATA-U. Leaving a band restores it while the radio is still there; stopping WSPR visits every band it changed, restores each, and returns you to the band you were on. Bands already in a data mode are never recorded, so WSPR won't "restore" something you set yourself.
+I did not find it, and I want to be clear about that rather than imply I did. What I ruled out: the toggle isn't swallowed (`wspr_running` and the schedule's own flag agree), and the scheduler is symmetric across toggles. One thing I did find that partly explains "nothing happens": **`tick` deliberately skips the slot you're already inside** — pressing `w` 30 seconds into a slot means the first capture starts at the next even minute, so up to two minutes of a screen that looks dead. That's correct behavior but indistinguishable from broken.
 
-I also found that `rigctld_client.mode()` returns a `(mode, width)` **tuple**, which my hop-check had been comparing against a set of strings — it could only ever have reported "could not read". That code is gone, and the new mode logic uses `mode()[0]`.
+What I changed is the audio takeover: it now waits for fldigi to actually be gone, checks it's *still* gone a second later, stops it once more if not, and refuses with a clear message rather than running a slot clock over a codec it doesn't have. That makes the deck check rather than assume — which was missing regardless of the cause.
 
-One caveat worth stating: `set_mode` is new and **unverified against your radio.** The DATA-U set-and-revert is the one thing in this deploy I can't test here — if `M PKTUSB 0` isn't what the FTX-1 wants, band selection will report "was USB — set to PKTUSB" and the radio won't have moved. That's the first thing to check.
+I also have to correct something I wrote a moment ago: I attributed fldigi coming back to `Restart=always`. That's wrong — systemd clears the restart on a deliberate stop. The mechanism that *can* bring it back is `cyberdeck-ui.service`'s own `Wants=cyberdeck-fldigi.service`, which systemd re-satisfies whenever the UI restarts — i.e. right after a deploy, which is exactly when you've been testing. The code comment now says that instead.
 
-
-
-
-
-
-
+Also in this deploy: sub-watt power no longer truncates to `0 W` (that was the real cause of "power unknown" from a radio answering fine), `PTT command failed` now names its cause, and the four hardware-address settings are out of remembered state so a stale state file can't override a corrected device again.
 
 # TO DO: The Discrete WSPR Power Levels up to 100 watts
 

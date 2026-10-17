@@ -62,6 +62,28 @@ SECRET_KEYS = ("QRZ_API_KEY", "QRZ_USER", "QRZ_PASSWORD",
 # is all it may cost.
 NOTES = []
 
+def watts(value):
+    """A wattage, keeping a fraction only when there is one.
+
+    **Sub-watt power has to be expressible.** `int` was the type here, so
+    `TX_POWER = 0.5` was either refused or truncated to 0 -- and the FTX-1 in
+    its field configuration transmits down to half a watt and below, which
+    WSPR encodes exactly: 0.5 W is 27 dBm, 0.1 W is 20, 50 mW is 17. A
+    station running QRPp could not say so.
+
+    5 comes back as 5 rather than 5.0, because "5.0 W" in a log and on a
+    panel is noise. The same rule `rigctld_client._watts` follows for a
+    reading off the radio, so a configured power and a read one are written
+    the same way.
+    """
+    number = float(value)
+    return int(number) if number == int(number) else number
+
+
+# A name for the error message, since the converter is reported by name.
+watts.__name__ = "wattage"
+
+
 # key -> (default, converter, description)
 SCHEMA = {
     "CALLSIGN":        ("", str, "this station's callsign"),
@@ -86,7 +108,7 @@ SCHEMA = {
                                 "reading. 0 means do not scale"),
     # Watts. The fallback for when the radio cannot be asked at all: `{power}`
     # and the log prefer a CAT reading and fall back to this.
-    "TX_POWER":        (0, int, "transmit power in watts when the radio "
+    "TX_POWER":        (0, watts, "transmit power in watts when the radio "
                                 "cannot be read, for memories: {power}, and "
                                 "logged as TX_PWR"),
     "RIG_BANDS":       ("", str, "bands this radio covers, comma separated, "
@@ -123,8 +145,12 @@ SCHEMA = {
     # conditions and all three are the operator's.
     "WSPR_UPLOAD":     ("yes", str, "report spots to wsprnet while WSPR "
                                     "runs and there is a network"),
-    "WSPR_DEVICE":     ("plughw:1,0", str, "ALSA device for WSPR capture "
-                                           "and playback"),
+    # By NAME. The card INDEX moves between reboots -- the codec was card 1
+    # and became card 2 when HDMI probed first -- and an index that moves
+    # points the capture at the wrong hardware entirely.
+    "WSPR_DEVICE":     ("plughw:CARD=Device,DEV=0", str,
+                        "ALSA device for WSPR capture and playback; address "
+                        "the card by name, since indexes move"),
     # Transmit amplitude, WSPR's own. Not the playback mixer, which fldigi
     # shares: a level set there turns the digimodes down with it.
     "WSPR_TX_LEVEL":   (50, int, "WSPR transmit audio level, percent of "
@@ -134,7 +160,18 @@ SCHEMA = {
     # on stop rather than changing the station's level.
     "WSPR_RX_GAIN":    (70, int, "WSPR capture gain, percent; restored when "
                                  "WSPR stops"),
-    "WSPR_RX_CARD":    (1, int, "ALSA card number for the capture mixer"),
+    # A NAME, and a string: `amixer -c` takes either an index or a card id,
+    # and the id is the one that survives a reboot.
+    "WSPR_RX_CARD":    ("Device", str, "ALSA card for the capture mixer, by "
+                                       "name from /proc/asound/cards"),
+    # Auto Gain Control ships ON on this codec and has to be off. It
+    # compresses a constant-envelope signal whose amplitude carries no
+    # information, and it corrupts the SNR figures `wsprd` reports and
+    # uploads to wsprnet. Turned off while WSPR owns the codec and put back
+    # afterwards, like the gain.
+    "WSPR_RX_AGC":     ("Auto Gain Control", str,
+                        "the codec's AGC switch, turned off while WSPR runs; "
+                        "blank to leave it alone"),
     "WSPR_RX_CONTROL": ("Mic", str, "the capture control amixer names on "
                                     "that card"),
     "WSPR_SESSION":    ("", str, "the WSPR session being logged; blank is "

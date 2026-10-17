@@ -295,4 +295,4 @@ check("both inside the 200 Hz WSPR window",
 # 30 dBm is 1 W exactly, which is the other end of the power table.
 equals("1 W is 30 dBm, exactly", wspr.dbm_for_watts(1), (30, True))
 
-report()
+sys.exit(report())

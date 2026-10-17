@@ -119,4 +119,4 @@ print("\nvalid() answers the same question as to_latlon()")
 check("a real grid", grid.valid("FN10cs"), "")
 check("and a corrupt one", not grid.valid("<...>"), "")
 
-report()
+sys.exit(report())

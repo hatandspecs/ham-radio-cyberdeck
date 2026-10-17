@@ -749,7 +749,7 @@ Matching the rest of the deck, which means the shape is already decided:
   digimode screen (tuner, modes) and the log screen (activities, schemas):
   **`F2` the session list, `F3` the band selection.** The parallel is exact —
   `F2` is "which session am I in" on both screens.
-* **`Ctrl-I`** toggles transmit inhibit, as everywhere else, and refuses to
+* **`Ctrl-B`** toggles transmit inhibit, as everywhere else, and refuses to
   arm outside a data mode.
 * **The menu is grouped** the way the logging menu is — state, then session,
   then the schedule, then the file — with the counts and current values on

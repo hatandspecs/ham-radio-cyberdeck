@@ -881,7 +881,7 @@ Before transmitting:
   afterwards.
 * **Set the drive so the ALC never moves.** See §7.2 of the design document for
   the procedure and for why the setting is so sharp-edged.
-* **`Ctrl-I` to arm.** Transmit starts inhibited at every power-on; the status
+* **`Ctrl-B` to arm.** Transmit starts inhibited at every power-on; the status
   line shows `INH` until you clear it.
 
 To work someone: type while receiving — it buffers, nothing goes out — then
@@ -1333,7 +1333,7 @@ python3 src/cyberdeck.py
 
 It takes over the terminal it is started in. `Ctrl-Q` quits.
 
-Transmit starts **inhibited** — the status line reads `INH` — and `Ctrl-I`
+Transmit starts **inhibited** — the status line reads `INH` — and `Ctrl-B`
 arms it. That is deliberate and it is not a laptop-only inconvenience: a
 program that can key a radio should not be able to do so the instant it starts.
 

@@ -236,16 +236,18 @@ check("stopped, it says so rather than showing a clock",
 print("\nthe hop check is offered, and refuses without rig control")
 # The mode check moved to the band picker; its case is below.
 
-print("\ncalibrate transmit audio never fails silently")
-# "calibrate transmit audio does nothing": all three refusals wrote to the
-# WSPR screen's message line, UNDERNEATH the menu that was still open.
-body = deck([TO_WSPR, F1["linux"], "a", "c"], "c with transmit inhibited",
+print("\ncalibrate transmit audio opens a screen, not a one-shot")
+# It was a menu item that fired a ten-second tone and reported refusals to
+# a message line UNDERNEATH the still-open menu -- so it read as doing
+# nothing. A level set against a power meter means adjusting while watching,
+# which is a screen.
+body = deck([TO_WSPR, F1["linux"], "a", "c"], "c opens transmit calibration",
             settle=3.6)
-check("the menu is gone, so the message can be read",
-      "Calibrate transmit audio" not in body, body)
-check("and it says what is in the way",
-      any(w in body for w in ("inhibited", "data mode", "TRANSMIT A TEST")),
-      body[-400:])
+check("the calibration screen is drawn", "WSPR CALIBRATE" in body, body[:140])
+check("it is the transmit one", "TRANSMIT" in body, body[:140])
+check("the level is on it", "TX audio level" in body, body)
+check("and the keys that change it are advertised",
+      "+" in body and "-" in body, body[-200:])
 
 print("\nthe arrows select and scroll the spot list")
 body = deck([TO_WSPR, "\x1b[B"], "down arrow on an empty list", settle=3.0)
@@ -308,4 +310,4 @@ check("it reports rather than doing nothing silently",
 check("and the menu is gone, so the sentence can be read",
       "WSPR BAND" not in body[:120], body[:120])
 
-report()
+sys.exit(report())

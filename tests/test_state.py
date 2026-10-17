@@ -103,7 +103,12 @@ if __name__ == "__main__":
         check("and it is where the tuning left it, not the default",
               saved.get("carrier") not in (None, 1500), repr(saved.get("carrier")))
 
-        second = run(keys=[TO_DIGI], state_path=path, settle=1.8,
+        # **Settle 3.0, not 1.8.** What is being waited for is a restored
+        # carrier reaching fldigi over XML-RPC, and under a loaded machine
+        # -- a full suite, several ptys -- 1.8 s was not enough. It failed
+        # in a suite run and passed alone, twice, which is the signature.
+        # The deck is right; the wait was short.
+        second = run(keys=[TO_DIGI], state_path=path, settle=3.0,
                      settle_s="0.2")
         check("the restarted deck comes back on that carrier",
               f"{saved.get('carrier')}Hz" in second.display[0],
@@ -188,5 +193,52 @@ if __name__ == "__main__":
            color_after([TO_LOG, F4]), moved)
     equals("and F4 inside the settings menu too",
            color_after([F1, F4]), moved)
+
+    print("\nevery WSPR setting outlives a power cycle")
+    # Reported as "tx and rx audio gain seem not to stick through power
+    # cycles". The levels were only the visible part: NOT ONE WSPR setting
+    # was in `_REMEMBERED`, so a power cycle also forgot the band rotation,
+    # the session name, the transmit percent, the time-out and the upload
+    # toggle. And the restore loop accepted `str` only, so the numeric ones
+    # could not have come back even once they were listed.
+    import cyberdeck as _deck
+    import config as _config
+
+    for key in sorted(k for k in _config.SCHEMA if k.startswith("WSPR_")):
+        check(f"{key} is remembered", key in _deck._REMEMBERED, key)
+
+    # The numeric ones specifically: JSON gives an int back as an int, which
+    # the old `isinstance(value, str)` test silently discarded.
+    numeric = [k for k in _deck._REMEMBERED
+               if _config.SCHEMA.get(k, (None, str, ""))[1] is not str]
+    check("there are numeric settings in the list", bool(numeric),
+          str(numeric))
+
+    # And a real round trip through two processes, which is the only thing
+    # that proves the write and the read agree.
+    TO_WSPR, ESC = "\x0f", "\x1b"
+    tmp = tempfile.mkdtemp(prefix="cyberdeck-wspr-state-")
+    path = os.path.join(tmp, "state", "cyberdeck.json")
+    try:
+        keys = [TO_WSPR, F1, "a", "c", "+", "+", ESC]
+        run(keys=keys, state_path=path, settle=3.0, settle_s="0.2")
+        saved = {}
+        if os.path.exists(path):
+            with open(path) as fh:
+                saved = json.load(fh)
+        check("the transmit level reached the state file",
+              isinstance(saved.get("WSPR_TX_LEVEL"), int),
+              repr(saved.get("WSPR_TX_LEVEL")))
+        check("and it moved off the configured default of 50",
+              saved.get("WSPR_TX_LEVEL") not in (None, 50),
+              repr(saved.get("WSPR_TX_LEVEL")))
+
+        second = run(keys=[TO_WSPR, F1, "a"], state_path=path, settle=3.0,
+                     settle_s="0.2")
+        body = "\n".join(second.display)
+        check("the restarted deck comes back on that transmit level",
+              f"TX audio {saved.get('WSPR_TX_LEVEL')}%" in body, body)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
     sys.exit(report())

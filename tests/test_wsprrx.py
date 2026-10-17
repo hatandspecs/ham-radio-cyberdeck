@@ -286,4 +286,4 @@ with tempfile.TemporaryDirectory() as tmp:
           "-d" in sp.cmds[0] and sp.cmds[0][sp.cmds[0].index("-d") + 1] == "1",
           str(sp.cmds[0]))
 
-report()
+sys.exit(report())

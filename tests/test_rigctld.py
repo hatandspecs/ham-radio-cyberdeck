@@ -171,4 +171,4 @@ for name, call in (("connected", lambda: c.connected),
         check(f"{name} returned rather than raising", False,
               f"{type(exc).__name__}: {exc}")
 
-report()
+sys.exit(report())

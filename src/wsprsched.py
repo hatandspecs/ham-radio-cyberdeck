@@ -120,6 +120,9 @@ class Schedule:
         # The slot the one-shot armed, so it can be cleared when that slot
         # has passed rather than when the next tick happens to arrive.
         self._tx_next_slot = None
+        # The slot a transmission last went out in, so the next one can be
+        # kept clear. None until something has been sent.
+        self._last_tx_slot = None
 
     # -- state ------------------------------------------------------------
 
@@ -145,6 +148,23 @@ class Schedule:
         self.started_at = None
         self._slot = None
         self._tx_next_slot = None
+        self._last_tx_slot = None
+
+    def set_transmit(self, on, now):
+        """Arm or disarm transmit. **Arming restarts the time-out.**
+
+        Through a method rather than by assigning `transmit`, because the
+        timer has to be restarted with it: an operator re-arming after a
+        time-out has just said "keep going", and that is what the clock is
+        measuring. Disarming also spends the one-shot, which would otherwise
+        fire on the next slot after transmit was switched off.
+        """
+        self.transmit = bool(on)
+        if self.transmit:
+            self.started_at = float(now)
+        else:
+            self.tx_next = False
+            self._tx_next_slot = None
 
     def arm_tx_next(self, now):
         """Beacon on the next slot, whatever the percentage says."""
@@ -180,8 +200,22 @@ class Schedule:
         """
         if not self.wspr or not self.transmit:
             return False
-        if self.tx_next and self._tx_next_slot == slot_index(now):
+        here = slot_index(now)
+        # **The one-shot wins over everything, including the guard below.**
+        # It is a deliberate act: an operator who asks for the next slot has
+        # asked for it.
+        if self.tx_next and self._tx_next_slot == here:
             return True
+        # **Never two slots in a row from the RANDOM choice.** Observed on
+        # the air: `tx next` fired, and the percentage independently chose
+        # the slot straight after it, so the deck beaconed twice running --
+        # two transmissions back to back, no listening between them, and a
+        # receiver hearing the same station twice for no gain.
+        #
+        # Only the random choice is suppressed, which is what makes this a
+        # guard rather than a cap: the one-shot above still fires.
+        if self._last_tx_slot is not None and here == self._last_tx_slot + 1:
+            return False
         return transmits_in_slot(now, self.tx_percent, self.seed)
 
     def tick(self, now):
@@ -199,8 +233,22 @@ class Schedule:
         if not self.wspr:
             return []
         if self.timed_out(now):
-            self.stop()
-            return [("stop", "time-out")]
+            # **The time-out disarms TRANSMIT. It does not end the session.**
+            # The timer exists for an unattended transmitter, and receiving
+            # carries no on-air risk -- so stopping everything gave up the
+            # part that was still doing something useful, and handed the
+            # codec back and restarted fldigi, which is a lot of machinery
+            # to fire because a clock ran out.
+            #
+            # `started_at` is cleared, so `timeout_remaining` answers None
+            # and this cannot fire twice. Arming transmit again restarts it,
+            # which makes the guarantee "no transmitting for longer than
+            # this without being told again".
+            self.transmit = False
+            self.tx_next = False
+            self._tx_next_slot = None
+            self.started_at = None
+            return [("tx_off", "time-out")]
 
         here = slot_index(now)
         if here == self._slot:
@@ -221,6 +269,10 @@ class Schedule:
             actions.append(("tune", band))
         if self.will_transmit(now):
             actions.append(("transmit", band))
+            # Recorded here, where the transmission is actually handed to
+            # the caller -- not in `will_transmit`, which the display calls
+            # every draw and which must stay free of side effects.
+            self._last_tx_slot = here
             # The one-shot is spent. Cleared on the slot it fired in rather
             # than on the next tick, so a tick that never comes does not
             # leave it armed for an hour.

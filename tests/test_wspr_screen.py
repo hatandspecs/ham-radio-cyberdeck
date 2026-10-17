@@ -54,13 +54,27 @@ head = plain(render.wspr_screen(SPOTS, 66, 20, state=STATE))[0]
 check("the session", "Saturday night" in head, head)
 check("the band", "40 m" in head, head)
 check("the dial, grouped as the radio reads it", "7.038.600" in head, head)
-check("that it is hopping", "hop" in head, head)
-check("what the next slot does", "next: RX" in head, head)
+# **Neither the hop word nor the next slot is in the header any more.**
+# Hopping is one of the toggles in the state block, where the other
+# switches are, and the slot row already says what the next slot does --
+# saying either twice left the header carrying an answer from below.
+check("no hop word, which the toggles now carry",
+      "hop" not in head.lower(), head)
+check("and no next-slot word, which the slot row carries",
+      "next:" not in head, head)
 check("and the clock", "0210Z" in head, head)
-tx_next = dict(STATE, next_tx=True)
-check("which says TX when the next slot transmits",
-      "next: TX" in plain(render.wspr_screen(SPOTS, 66, 20,
-                                             state=tx_next))[0], "")
+# The interlock instead, in the corner the digimode and settings screens
+# use. An operator armed transmit, was refused, and had no way to see why.
+check("the interlock is stated", "INH" in head, head)
+# The interlock reads both ways round, so its absence cannot be mistaken
+# for a deck that has no such thing.
+armed = plain(render.wspr_screen(SPOTS, 66, 20,
+                                 state=dict(STATE, inhibited=False)))[0]
+check("armed reads INH off", "INH off" in armed, armed)
+inhib = plain(render.wspr_screen(SPOTS, 66, 20,
+                                 state=dict(STATE, inhibited=True)))[0]
+check("inhibited reads INH", "INH" in inhib and "INH off" not in inhib,
+      inhib)
 
 print("\nthe spots are newest first, which is the opposite of the contact log")
 # A WSPR session accumulates hundreds and the question is always "what is
@@ -154,7 +168,10 @@ for w, h in GRIDS:
              if sum(len(t) for t, _a in r) != w]
     equals(f"{w}x{h}: all {w} wide", wrong, [])
 head = plain(render.wspr_screen([], 66, 20, state={}))[0]
-check("and says there is no session", "no session" in head, head)
+# **A run always has a name now.** `_wspr_ensure_session` gives an unnamed
+# one the default before any spot is written, so "no session" on the header
+# read as a thing not working rather than as a default.
+check("and names the default session", "general" in head, head)
 
 
 # -- the menus ----------------------------------------------------------
@@ -175,7 +192,13 @@ check("the band, and that it is hopping", "hopping 3 bands" in text, text)
 check("the transmit percent", "20%" in text, text)
 check("the time-out", "60 min" in text, text)
 check("the upload state", "Upload spots                 on" in text, text)
-check("the calibration tone is offered", "Calibrate" in text, text)
+# Calibration moved to its own submenu -- `a` -- because the transmit
+# level, the capture gain and the tone that sets them are one job, and three
+# rows took this menu past the 14 items where `menus.render` goes
+# two-column and drops every value.
+check("the audio levels are offered", "Audio levels" in text, text)
+check("and the levels are reported on the line",
+      "TX 50%" in text and "RX 70%" in text, text)
 equals("and the danger zone is last", keys[-1], "z")
 check("the footer says the ring is locked",
       "locked while running" in m["footer"], m["footer"])
@@ -208,8 +231,10 @@ for name in ("Saturday night", "A very long session name indeed", ""):
 check("the session is named in the footer, where there is room",
       "Saturday night" in menus.wspr_danger_menu("Saturday night")["footer"],
       menus.wspr_danger_menu("Saturday night")["footer"])
-check("and no session reads as none",
-      "no session" in menus.wspr_danger_menu("")["footer"],
+# An unnamed session gets the default name, so the danger zone names what
+# it would clear rather than saying there is nothing there.
+check("and an unnamed one reads as the default",
+      "general" in menus.wspr_danger_menu("")["footer"],
       menus.wspr_danger_menu("")["footer"])
 
 print("\nthe keys do not collide with the deck's reserved ones")
@@ -264,12 +289,17 @@ check("it is the session's", "session 4:00 left" in body, body)
 print("\nband hopping is named whether it is on or off")
 # Its absence had to be read as "off" rather than "this deck has no such
 # thing", which is not a distinction a header should leave to the reader.
+# On the TOGGLES row, beside the other switches -- not in the header, where
+# it duplicated what the row below already said.
 body = "\n".join(plain(render.wspr_screen(
     SPOTS, 66, 20, state={"band": "40 m", "hopping": True, "hop_count": 3})))
-check("on, with the count", "hop 3" in body, body)
-body = "\n".join(plain(render.wspr_screen(
-    SPOTS, 66, 20, state={"band": "40 m", "hopping": False, "hop_count": 1})))
-check("and off, in as many words", "no hop" in body, body)
+check("on, as a highlighted toggle", "HOP" in body, body)
+seg = render.wspr_toggles({"hopping": True})
+equals("highlighted when on",
+       [a for t, a in seg if t.strip() == "HOP"], ["reverse"])
+seg = render.wspr_toggles({"hopping": False})
+equals("and dim when off",
+       [a for t, a in seg if t.strip() == "HOP"], ["dim"])
 
 print("\nevery spot row says which band it came in on")
 # Band hopping makes two spots an hour apart answer different questions.
@@ -326,19 +356,29 @@ print("\nthe transmit inhibit is on the screen, as it is on every other")
 body = "\n".join(plain(render.wspr_screen(
     SPOTS, 66, 20, state={"band": "40 m", "inhibited": True,
                           "next_tx": True, "clock": "0512Z"})))
-check("the header says so", "TX INHIBITED" in body, body[:140])
-# It DISPLACES next:TX rather than crowding beside it, because at 66 columns
-# both do not fit and because "next: TX" under an inhibit is a false
-# statement -- that slot will not transmit.
+check("the header says so", "INH" in body[:140], body[:140])
+# What used to be here was "next: TX"/"next: RX", which the slot row already
+# says -- and which beside an inhibit is a false statement, because that
+# slot will not transmit.
 check("and does not also promise a transmission",
       "next: TX" not in body, body[:140])
-check("the toggles carry it too, where they are read",
-      "INHIBITED" in body, body)
+# Stated ONCE. Repeating it on the toggles row was the same duplication the
+# hop word was removed for.
+check("and not repeated on the toggles row",
+      "INHIBITED" not in body, body)
 body = "\n".join(plain(render.wspr_screen(
     SPOTS, 66, 20, state={"band": "40 m", "inhibited": False,
                           "next_tx": True, "clock": "0512Z"})))
-check("armed, the slot's intention is shown instead",
-      "next: TX" in body and "INHIBITED" not in body, body[:140])
+check("armed, the header says so in as many words",
+      "INH off" in body, body[:140])
+# And the slot's intention is in the state block, where the slot clock is
+# -- which only exists while WSPR is running, so that is the state to ask.
+running = "\n".join(plain(render.wspr_screen(
+    SPOTS, 66, 20, state={"band": "40 m", "inhibited": False,
+                          "next_tx": True, "clock": "0512Z", "wspr": True,
+                          "slot_in": 37, "slot_to_next": 83})))
+check("while the next slot's intention is on the slot row",
+      "TX next" in running, running)
 
 print("\nboth audio levels are on the screen, with what was measured")
 seg = render.wspr_levels(25, 70, -26.0)
@@ -378,4 +418,55 @@ for w, h in GRIDS:
     equals(f"{w}x{h}: every row is exactly {w} wide",
            sorted({len(l) for l in lines}), [w])
 
-report()
+print("\nband hopping is one of the toggles, not only a header word")
+# The row that answers "what is switched on" did not answer it for hopping,
+# which is a mode the deck is in exactly as decoding and transmitting are.
+seg = render.wspr_toggles({"wspr": True, "hopping": True})
+flat = "".join(t for t, _a in seg)
+check("HOP is on the row", "HOP" in flat, flat)
+equals("and highlighted when on",
+       [a for t, a in seg if t.strip() == "HOP"], ["reverse"])
+seg = render.wspr_toggles({"wspr": True, "hopping": False})
+equals("dim when off",
+       [a for t, a in seg if t.strip() == "HOP"], ["dim"])
+
+print("\nthe state rows use the width instead of bunching to the left")
+# Reported as crowded: every row packed left and left a third of the panel
+# empty. `_spread` distributes the gaps.
+st = {"session": "general", "band": "20 m", "dial_hz": 14095600,
+      "hopping": True, "hop_count": 3, "wspr": True, "decode": True,
+      "transmit": True, "slot_in": 37, "slot_to_next": 83,
+      "in_capture": True, "next_tx": False, "tx_level": 25, "rx_gain": 100,
+      "dbfs": -36.0, "watts": "5", "dbm": 37, "dbm_exact": True,
+      "ceiling": 10, "heard": 17, "sent": 6, "upload": "on",
+      "timeout_left": 2400}
+rows = plain(render.wspr_screen([], 66, 20, state=st, message="",
+                                footer=" F1"))
+toggles = next(r for r in rows if "DECODE" in r)
+check("the toggles reach the right-hand side",
+      len(toggles.rstrip()) > 60, repr(toggles))
+counts = next(r for r in rows if "heard 17" in r)
+check("so do the counters", len(counts.rstrip()) > 60, repr(counts))
+levels = next(r for r in rows if "TX audio" in r)
+check("and the levels", len(levels.rstrip()) > 60, repr(levels))
+
+# **Spreading must not eat the spaces INSIDE a group.** Grouping by
+# stripping produced `max 10 W5 W` and `37 dBmsnapped`.
+power = next(r for r in rows if "max 10" in r)
+check("the ceiling keeps its unit", "max 10 W" in power, repr(power))
+check("the dBm keeps its gap", "37 dBm  snapped" in power or
+      "37 dBm snapped" in power, repr(power))
+check("and nothing is run together",
+      "W5 W" not in power and "dBmsnapped" not in power, repr(power))
+check("the levels keep theirs",
+      "RX gain 100%" in levels and "level -36 dBFS" in levels,
+      repr(levels))
+
+print("\nspreading degrades rather than breaking at narrow widths")
+for w, h in GRIDS:
+    lines = plain(render.wspr_screen([], w, h, state=st, message="x",
+                                     footer=" F1"))
+    equals(f"{w}x{h}: every row is exactly {w} wide",
+           sorted({len(l) for l in lines}), [w])
+
+sys.exit(report())

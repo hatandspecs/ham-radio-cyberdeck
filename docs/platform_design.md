@@ -603,8 +603,23 @@ unmistakable and its stop path to be immediate.
   produced a truncated over in use: hand back, then immediately start another
   to add a line before the buffer emptied.
 
+* **Escape, pressed enough times, always lands in the function's base
+  state.** This is a contract, not an accident, and it has two halves.
+  Escape backs out exactly ONE level per press -- through the menus an
+  operator actually walked, not to a fixed parent -- and at every level it
+  either releases something picked up or does nothing at all. **No Escape
+  past the top of a function may change state.** So an operator who wants
+  the plain screen can hit the key repeatedly without reading anything and
+  know where they will end up.
+
+  The releases are deliberate and are the only state Escape changes: the
+  WSPR spot selection (back to following the newest spot), the log contact
+  selection, and a message line. Each is idempotent once released. The one
+  place Escape discards work is a text editor, where discarding is its
+  stated job.
+
 * **Transmit inhibit is an interlock against starting, not a stop button.**
-  `Ctrl-I` during an over cannot end it — `main.rx_only` is set but is not
+  `Ctrl-B` during an over cannot end it — `main.rx_only` is set but is not
   relied on, having been observed not to inhibit `main.tune` — so the over
   runs to completion. The control now says so rather than leaving it to be
   inferred from a radio that stays keyed after what looks like a stop. `Ctrl-C`
@@ -642,7 +657,7 @@ unmistakable and its stop path to be immediate.
 
   The two resume differently, deliberately. Decoding comes back by itself the
   moment the radio is in a data mode, because a running decoder puts nothing
-  on the air. Arming transmit stays the operator's act — `Ctrl-I` — because
+  on the air. Arming transmit stays the operator's act — `Ctrl-B` — because
   it is the one that does.
 
 * **A stop signal unwinds rather than killing the process** (2026-10-16).

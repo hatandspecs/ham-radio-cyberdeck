@@ -353,7 +353,7 @@ data mode nobody asked for, and a deliberate mode choice was reverted by a
 band change.
 
 Now: the deck reports the rig's mode and never writes it. Its side of the
-bargain is the transmit interlock — `Ctrl-I` refuses to arm transmit while the
+bargain is the transmit interlock — `Ctrl-B` refuses to arm transmit while the
 radio is positively reading a mode digital work cannot use, and says which
 mode it is and that the radio is where to change it.
 

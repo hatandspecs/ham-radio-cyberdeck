@@ -173,4 +173,4 @@ with tempfile.TemporaryDirectory() as tmp:
     check("and the default is named for what it holds",
           wsprlog.DEFAULT_NAME == "wspr.log", wsprlog.DEFAULT_NAME)
 
-report()
+sys.exit(report())

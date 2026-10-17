@@ -229,7 +229,7 @@ check("and that it comes back by itself",
 # Not the whole phrase: the transcript wraps at 66 columns and "transmit"
 # lands on the next line, so a longer substring would fail on the wrap rather
 # than on the behavior.
-check("while transmit needs Ctrl-I", "Ctrl-I to arm" in body, body[-700:])
+check("while transmit needs Ctrl-B", "Ctrl-B to arm" in body, body[-700:])
 check("the panel still shows the radio's mode, not NULL",
       "NULL" not in body, body[-600:])
 
@@ -363,4 +363,4 @@ for sig in (signal.SIGTERM, signal.SIGHUP):
           loaded[-1] == "BPSK31", str(loaded))
     equals(f"{name}: so fldigi is left on it", state.modem, "BPSK31")
 
-report()
+sys.exit(report())

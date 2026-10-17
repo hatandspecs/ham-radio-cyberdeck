@@ -177,7 +177,7 @@ where they are documented beside their values — see
 The full treatment is `platform_design.md` §9. The three properties that shape
 this application:
 
-* **Inhibit is an interlock against starting, not a stop button.** `Ctrl-I`
+* **Inhibit is an interlock against starting, not a stop button.** `Ctrl-B`
   during an over cannot end it; `Ctrl-C` is the stop. The control says so
   rather than leaving it to be inferred from a radio that stays keyed.
 * **Enforced locally.** `start_over` returns without calling fldigi while
@@ -188,7 +188,7 @@ this application:
   inhibits transmit and **stops the decoder** by parking fldigi on its
   `NULL` modem — on a Pi 3A+ that DSP is the largest thing running, and in
   SSB everything it decodes is noise. Decoding resumes by itself; arming
-  transmit stays `Ctrl-I`, because a running decoder puts nothing on the air
+  transmit stays `Ctrl-B`, because a running decoder puts nothing on the air
   and an armed transmitter does.
 
 **A dropped CAT read is not a mode change.** `rig.mode()` returns `""` on a
@@ -442,7 +442,7 @@ therefore cannot be undone. `undo()` refuses rather than pretending.
 | `Ctrl-Z` | Undo the last memory insert |
 | `Ctrl-A` `Ctrl-D` | Carrier −10 / +10 Hz |
 | `Ctrl-W` `Ctrl-S` | Search for the next signal, up / down |
-| `Ctrl-I` | Transmit inhibit — **also `Tab`**, the same byte |
+| `Ctrl-B` | Transmit inhibit, from any screen |
 | `Ctrl-X` | Clear the transcript |
 | `←` `→` `Home` `End` | Move within the composed line |
 | `↑` `↓` | Recall previously sent overs |

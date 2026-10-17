@@ -157,19 +157,28 @@ s5.start(T0)
 s5.arm_tx_next(T0)
 check("still no transmission", not s5.will_transmit(T0 + 120), "")
 
-print("\nthe time-out stops the session by itself")
+print("\nthe time-out disarms transmit by itself")
+# **It used to stop the session.** The timer is for an unattended
+# transmitter, and receiving carries no on-air risk, so ending the whole
+# session gave up the part still doing something useful -- and handed the
+# codec back and restarted fldigi because a clock ran out.
 s6 = sched.Schedule(bands=["20 m"], tx_percent=0, timeout_minutes=60, seed=7)
 s6.start(T0)
+s6.set_transmit(True, T0)
 equals("sixty minutes at the start",
        round(s6.timeout_remaining(T0) / 60), 60)
 equals("fifty-nine a minute in",
        round(s6.timeout_remaining(T0 + 60) / 60), 59)
 check("not timed out before it expires", not s6.timed_out(T0 + 3599), "")
 check("timed out at the instant it does", s6.timed_out(T0 + 3600), "")
-equals("and the tick stops it, saying why", s6.tick(T0 + 3600),
-       [("stop", "time-out")])
-equals("which leaves it idle", s6.state, sched.IDLE)
-equals("a stopped session ticks to nothing", s6.tick(T0 + 3720), [])
+equals("and the tick disarms transmit, saying why", s6.tick(T0 + 3600),
+       [("tx_off", "time-out")])
+equals("transmit is off", s6.transmit, False)
+# The session itself is untouched: still on, still decoding, still hopping.
+equals("the session is still running", s6.wspr, True)
+equals("and still decoding", s6.decode, True)
+equals("so the next slot still tunes and captures",
+       [a for a, _w in s6.tick(T0 + 3720)], ["tune", "capture"])
 
 print("\nthe default time-out is sixty minutes, and zero means no limit")
 equals("the default", sched.Schedule().timeout_minutes, 60)
@@ -187,4 +196,117 @@ s8.start(T0)
 check("five minutes is not up at four", not s8.timed_out(T0 + 240), "")
 check("and is up at five", s8.timed_out(T0 + 300), "")
 
-report()
+print("\ntwo transmissions never go out back to back")
+# Observed on the air 2026-10-17: `tx next` fired, and the percentage
+# independently chose the slot straight after it, so the deck beaconed twice
+# running -- no listening between them, and a receiver hearing the same
+# station twice for no gain.
+s2 = sched.Schedule(bands=["40 m"], tx_percent=100, timeout_minutes=0)
+s2.start(0.0)
+s2.transmit = True
+
+# Percent 100, so every slot would transmit if nothing stopped it.
+first = [a for a, _w in s2.tick(0.0)]
+equals("the first slot transmits", "transmit" in first, True)
+second = [a for a, _w in s2.tick(sched.SLOT_SECONDS)]
+equals("the one straight after it does NOT", "transmit" in second, False)
+equals("it listens instead", "capture" in second, True)
+third = [a for a, _w in s2.tick(2 * sched.SLOT_SECONDS)]
+equals("and the one after that may transmit again",
+       "transmit" in third, True)
+
+print("\nthe one-shot still wins, because it was asked for")
+# An operator who presses "transmit next slot" has asked for that slot.
+s2 = sched.Schedule(bands=["40 m"], tx_percent=100, timeout_minutes=0)
+s2.start(0.0)
+s2.transmit = True
+equals("the first slot transmits",
+       "transmit" in [a for a, _w in s2.tick(0.0)], True)
+s2.arm_tx_next(sched.SLOT_SECONDS * 0.5)   # arms the NEXT slot
+after = [a for a, _w in s2.tick(sched.SLOT_SECONDS)]
+equals("and the slot after it transmits when explicitly armed",
+       "transmit" in after, True)
+
+print("\nthe guard does not survive a stop")
+# A new session is not the continuation of the old one.
+s2 = sched.Schedule(bands=["40 m"], tx_percent=100, timeout_minutes=0)
+s2.start(0.0)
+s2.transmit = True
+s2.tick(0.0)
+s2.stop()
+s2.start(sched.SLOT_SECONDS)
+s2.transmit = True
+equals("the first slot of a new session may transmit",
+       "transmit" in [a for a, _w in s2.tick(sched.SLOT_SECONDS)], True)
+
+print("\nwill_transmit has no side effects, because the screen calls it")
+# It is asked every draw to show "next: TX". If it recorded anything, the
+# display would change what the schedule does.
+s2 = sched.Schedule(bands=["40 m"], tx_percent=100, timeout_minutes=0)
+s2.start(0.0)
+s2.transmit = True
+before = s2.will_transmit(0.0)
+for _ in range(20):
+    s2.will_transmit(0.0)
+equals("asking twenty times gives the same answer",
+       s2.will_transmit(0.0), before)
+equals("and the first slot still transmits",
+       "transmit" in [a for a, _w in s2.tick(0.0)], True)
+
+print("\nthe time-out disarms transmit and leaves the session receiving")
+# It used to end the session: receiver stopped, band modes restored, capture
+# gain put back, fldigi restarted. The timer is about an unattended
+# TRANSMITTER, and receiving carries no on-air risk -- so a clock running
+# out gave up the part still doing something useful.
+s3 = sched.Schedule(bands=["40 m"], tx_percent=100, timeout_minutes=1)
+s3.start(0.0)
+s3.set_transmit(True, 0.0)
+acts = [a for a, _w in s3.tick(0.0)]
+equals("it transmits before the time-out", "transmit" in acts, True)
+
+acts = s3.tick(61.0)
+equals("the time-out reports transmit off",
+       [a for a, _w in acts], ["tx_off"])
+equals("transmit is disarmed", s3.transmit, False)
+equals("and so is the one-shot", s3.tx_next, False)
+equals("but the session is still running", s3.wspr, True)
+equals("and still decoding", s3.decode, True)
+
+# The next slot must still capture, which is the whole point.
+acts = [a for a, _w in s3.tick(120.0)]
+equals("the next slot captures", "capture" in acts, True)
+equals("and does not transmit", "transmit" in acts, False)
+
+print("\nand it cannot fire twice")
+# `started_at` is cleared, so there is nothing left to time.
+equals("no remaining time is reported", s3.timeout_remaining(200.0), None)
+equals("it does not report timed out again", s3.timed_out(200.0), False)
+equals("so a later tick is an ordinary one",
+       [a for a, _w in s3.tick(240.0)], ["tune", "capture"])
+
+print("\narming transmit again restarts the time-out")
+# The guarantee is "no transmitting for longer than this without being told
+# again", so re-arming is being told again.
+# A longer limit for this part: with the one-minute ToT re-armed at 300,
+# the next slot top is 360, which is EXACTLY the expiry -- so the tick timed
+# out again instead of transmitting, and the first version of this check
+# read that as "re-arming does not work".
+s3.timeout_minutes = 10
+s3.set_transmit(True, 300.0)
+equals("the clock is running once more",
+       round(s3.timeout_remaining(300.0)), 600)
+equals("and it is not already expired", s3.timed_out(300.0), False)
+equals("it transmits again", "transmit" in
+       [a for a, _w in s3.tick(360.0)], True)
+
+print("\ndisarming transmit spends the one-shot with it")
+# Otherwise `tx next` fires on the slot after transmit was switched off.
+s4 = sched.Schedule(bands=["40 m"], tx_percent=0, timeout_minutes=0)
+s4.start(0.0)
+s4.set_transmit(True, 0.0)
+s4.arm_tx_next(0.0)
+equals("the one-shot is armed", s4.tx_next, True)
+s4.set_transmit(False, 10.0)
+equals("and is gone with transmit", s4.tx_next, False)
+
+sys.exit(report())

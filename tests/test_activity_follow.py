@@ -143,4 +143,4 @@ equals("it renames", qsolog.rename_session(path, "Old Park", "", "New Park"),
 equals("and the contact carries the new name",
        qsolog.read(path)[0].get("activity"), "New Park")
 
-report()
+sys.exit(report())

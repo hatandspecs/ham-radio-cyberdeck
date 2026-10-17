@@ -1644,6 +1644,71 @@ def _pad(segments, width):
     return out
 
 
+def _groups(segments):
+    """Split a flat segment list into groups on its blank separators.
+
+    A group is a run of segments with something in it; a segment that is
+    only whitespace ends the group. **Text inside a group is not stripped**
+    -- an earlier version did, which removed the single spaces that were
+    separating `max 10 W` from `5 W` and produced `max 10 W5 W`. Only the
+    outer edges of a group are trimmed, so `_spread`'s gaps are the only
+    spacing between groups.
+    """
+    out, current = [], []
+    for text, attr in segments:
+        if text.strip():
+            current.append((text, attr))
+        elif current:
+            out.append(_trim(current))
+            current = []
+    if current:
+        out.append(_trim(current))
+    return out
+
+
+def _trim(group):
+    """Drop padding at a group's outer edges, keeping what is inside."""
+    if not group:
+        return group
+    first, last = group[0], group[-1]
+    group = list(group)
+    group[0] = (first[0].lstrip(), first[1])
+    group[-1] = (group[-1][0].rstrip(), group[-1][1])
+    return [(t, a) for t, a in group if t]
+
+
+def _spread(groups, width):
+    """Lay out groups of segments across `width` with even gaps between them.
+
+    The state block packed everything to the left and left a third of the
+    panel empty on every row, which reads as crowded even though it is not
+    full. Spreading uses the space that is already there.
+
+    A row that cannot fit falls back to single spaces and is clipped by the
+    caller, so a narrow terminal degrades rather than breaking.
+    """
+    groups = [g for g in groups if g]
+    if not groups:
+        return [(" " * width, "")]
+    text_len = sum(len(t) for g in groups for t, _a in g)
+    gaps = len(groups) - 1
+    room = width - text_len - 1          # one column of left margin
+    if gaps <= 0 or room < gaps:
+        out = [(" ", "")]
+        for i, g in enumerate(groups):
+            if i:
+                out.append(("  ", ""))
+            out.extend(g)
+        return _pad(out, width)
+    each, extra = divmod(room, gaps)
+    out = [(" ", "")]
+    for i, g in enumerate(groups):
+        if i:
+            out.append((" " * (each + (1 if i <= extra else 0)), ""))
+        out.extend(g)
+    return _pad(out, width)
+
+
 def wspr_toggles(state):
     """The four toggles as one line of `(text, attr)`.
 
@@ -1656,16 +1721,19 @@ def wspr_toggles(state):
     from reading four words.
     """
     out = []
+    # **HOP is one of them.** Band hopping is a mode the deck is in, like
+    # decoding or transmitting, and it was readable only off the header --
+    # so the row that answers "what is switched on" did not answer it.
     for label, on in (("WSPR", state.get("wspr")),
                       ("DECODE", state.get("decode")),
                       ("TX", state.get("transmit")),
-                      ("TX NEXT", state.get("tx_next"))):
+                      ("TX NEXT", state.get("tx_next")),
+                      ("HOP", state.get("hopping"))):
         out.append((f" {label} ", "reverse" if on else "dim"))
         out.append((" ", ""))
-    # Transmit armed while the deck is inhibited is the one combination that
-    # reads as ready and is not, so the toggles say so where they are read.
-    if state.get("inhibited"):
-        out.append((" INHIBITED ", "bright"))
+    # **Not the inhibit.** The header carries it permanently now, in the
+    # corner the digimode and settings screens use, so repeating it here
+    # would be the same duplication the hop word was removed for.
     return out
 
 
@@ -1686,6 +1754,9 @@ def wspr_power(watts, dbm, exact, ceiling=0, fallback=False):
     out = []
     if ceiling:
         out.append((f" max {ceiling} W ", "dim"))
+        # A separator, so the ceiling, the reading and the dBm are three
+        # groups the row can spread between rather than two.
+        out.append(("  ", ""))
     if watts in (None, "", 0):
         out.append((" power unknown ", "dim"))
         return out
@@ -1748,18 +1819,26 @@ def wspr_levels(tx_level=None, rx_gain=None, dbfs=None):
     `dbfs` is the WSJT-X analog: roughly -30 to -20 is healthy, and the
     reading is marked when it falls outside that.
     """
+    # Separated by blank segments rather than by padding inside the text,
+    # so `_groups` can see where the row may be stretched.
     out = []
     if tx_level is not None:
         out.append((f" TX audio {int(tx_level)}%", ""))
     if rx_gain is not None:
-        out.append((f"  RX gain {int(rx_gain)}%", ""))
+        out.append(("  ", ""))
+        out.append((f"RX gain {int(rx_gain)}%", ""))
+    out.append(("  ", ""))
     if dbfs is None:
-        out.append(("  level —", "dim"))
+        out.append(("level —", "dim"))
         return out
-    ok = -32.0 <= float(dbfs) <= -18.0
-    out.append((f"  level {float(dbfs):.0f} dBFS", "" if ok else "reverse"))
+    # **The same thresholds the meter draws, not a second copy.** These
+    # were written out again here as -32 and -18, so widening the meter's
+    # good range left this row still calling a healthy level "quiet".
+    ok = METER_GOOD_LO <= float(dbfs) <= METER_GOOD_HI
+    out.append((f"level {float(dbfs):.0f} dBFS", "" if ok else "reverse"))
     out.append(("" if ok else
-                (" quiet" if float(dbfs) < -32.0 else " hot"), "dim"))
+                (" quiet" if float(dbfs) < METER_GOOD_LO else " hot"),
+                "dim"))
     return out
 
 
@@ -1771,8 +1850,17 @@ WSPR_METER_CELLS = 30
 # the current value is wrong.
 METER_FLOOR_DB = -60.0
 METER_CEIL_DB = 0.0
-METER_GOOD_LO = -32.0
-METER_GOOD_HI = -18.0
+# **Measured on this station's own path, 2026-10-17.** At 100% capture gain
+# the codec reads -37 to -35 dBFS with 40 m open, and that level decodes --
+# 43 receivers heard the deck in one slot. The -32 floor flagged a perfectly
+# healthy level as "low", which is a meter telling the operator to chase
+# gain that does not exist.
+METER_GOOD_LO = -40.0
+# The TOP is left well above the operator's -35, deliberately. A band that
+# opens up puts a much louder signal in, and -35 as a ceiling would flag a
+# strong afternoon on 20 m as "high" when `wsprd` is entirely happy there.
+# What the ceiling is for is catching a level near clipping.
+METER_GOOD_HI = -12.0
 
 
 def wspr_meter(dbfs, cells=WSPR_METER_CELLS):
@@ -1888,7 +1976,10 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     out = []
 
     # Header: the session, the band, and what the slot is about to do.
-    session = str(st.get("session") or "no session")
+    # A run always has a name: `_wspr_ensure_session` gives an unnamed one
+    # the default before any spot is written. "no session" here meant the
+    # deck looked broken rather than defaulted.
+    session = str(st.get("session") or "general")
     band = str(st.get("band") or "")
     dial = st.get("dial_hz") or 0
     left = f" WSPR  {session}"
@@ -1896,25 +1987,18 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
         left += f"  {band}"
         if dial:
             left += f"  {frequency(dial)}"
-    # Band hopping is named whether it is on or off. "hop" appearing only
-    # when it was on meant its absence had to be read as "off" rather than
-    # "this deck has no such thing", which is not a distinction a header
-    # should leave to the reader.
-    hop_count = int(st.get("hop_count") or 0)
-    if band:
-        left += f"  hop {hop_count}" if st.get("hopping") else "  no hop"
-    # **TX INHIBITED displaces "next: TX".** The digimode and settings
-    # screens carry this in the same corner and WSPR had nothing: an
-    # operator armed transmit, was refused, and had no way to see why.
+    # **No hop word here.** Band hopping is one of the toggles in the state
+    # block now, where the other switches are, and saying it twice left the
+    # header carrying something the row below already answered.
+    # **The interlock, always, in the corner the rest of the deck uses.**
+    # The digimode and settings screens carry it there and WSPR had nothing:
+    # an operator armed transmit, was refused, and had no way to see why.
     #
-    # It displaces rather than crowds because at 66 columns both do not fit,
-    # and because "next: TX" beside an inhibit is a false statement -- that
-    # slot will not transmit.
-    right = ""
-    if st.get("inhibited"):
-        right = "TX INHIBITED  "
-    elif st.get("next_tx") is not None:
-        right = "next: TX  " if st.get("next_tx") else "next: RX  "
+    # What used to be here was "next: TX"/"next: RX", which the slot row in
+    # the state block already says -- and which beside an inhibit is a false
+    # statement, because that slot will not transmit. The interlock is the
+    # thing worth a corner.
+    right = "INH  " if st.get("inhibited") else "INH off  "
     clock = str(st.get("clock") or "")
     right += clock
     pad = max(1, width - len(left) - len(right))
@@ -1966,10 +2050,13 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     out.append(rule(width))
 
     # The state block: toggles, power, then the counters and the timer.
-    out.append(_pad(wspr_toggles(st), width))
-    out.append(_pad(wspr_power(st.get("watts"), st.get("dbm"),
-                               st.get("dbm_exact"), st.get("ceiling", 0),
-                               st.get("power_fallback")), width))
+    # Each switch is its own group, so they spread evenly rather than
+    # bunching in the left third of the panel.
+    out.append(_spread([[seg] for seg in wspr_toggles(st)
+                        if seg[0].strip()], width))
+    out.append(_spread(_groups(wspr_power(
+        st.get("watts"), st.get("dbm"), st.get("dbm_exact"),
+        st.get("ceiling", 0), st.get("power_fallback"))), width))
     if st.get("slot_in") is not None:
         out.append(_pad(wspr_slot(st.get("slot_in"),
                                   capture=bool(st.get("in_capture", True)),
@@ -1978,20 +2065,22 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     else:
         out.append([(" slot  —  not running".ljust(width)[:width], "dim")])
 
-    out.append(_pad(wspr_levels(st.get("tx_level"), st.get("rx_gain"),
-                                st.get("dbfs")), width))
+    out.append(_spread(_groups(wspr_levels(
+        st.get("tx_level"), st.get("rx_gain"), st.get("dbfs"))), width))
 
-    counts = (f" heard {st.get('heard', 0)}  sent {st.get('sent', 0)}"
-              f"  upload {st.get('upload') or 'off'}")
+    groups = [[(f"heard {st.get('heard', 0)}", "dim")],
+              [(f"sent {st.get('sent', 0)}", "dim")],
+              [(f"upload {st.get('upload') or 'off'}", "dim")]]
     tot = st.get("timeout_left")
     if tot is not None:
         # Named as the SESSION's timer. "left" on its own was read as the
         # time left in something else -- the slot, most plausibly, since a
         # slot clock sits directly above it now.
-        counts += f"   session {int(tot) // 60}:{int(tot) % 60:02d} left"
+        groups.append([(f"session {int(tot) // 60}:{int(tot) % 60:02d} left",
+                        "dim")])
     if st.get("decoding"):
-        counts += "   decoding"
-    out.append([(counts[:width].ljust(width), "dim")])
+        groups.append([("decoding", "dim")])
+    out.append(_spread(groups, width))
 
     out.append([((" " + message)[:width].ljust(width),
                  "bright" if message else "")])

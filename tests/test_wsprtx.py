@@ -271,9 +271,15 @@ check("but is longer than the signal",
       f"{wsprtx.TX_TIMEOUT_S} vs {wsprtx.TX_SECONDS}")
 
 print("\nthe player command is the one that matches the capture device")
+# The card is named, not numbered: the index moved between reboots and
+# `plughw:1,0` became the HDMI card. See `wsprrx.DEFAULT_DEVICE`.
 equals("aplay, quiet, on the same codec",
        wsprtx.aplay_command("/tmp/b.wav"),
-       ["aplay", "-D", "plughw:1,0", "-q", "/tmp/b.wav"])
+       ["aplay", "-D", wsprtx.DEFAULT_DEVICE, "-q", "/tmp/b.wav"])
+check("and the device is addressed by name",
+      "CARD=" in wsprtx.DEFAULT_DEVICE, wsprtx.DEFAULT_DEVICE)
+equals("the same device the receiver captures on",
+       wsprtx.DEFAULT_DEVICE, __import__("wsprrx").DEFAULT_DEVICE)
 
 print("\nthe transmit level scales the audio, and only WSPR's audio")
 # The deck measured close to 10 W with the radio set to 5 W and the ALC
@@ -336,4 +342,4 @@ with tempfile.TemporaryDirectory() as tmp:
           abs(tone - beacon) / float(beacon) < 0.25,
           f"tone={tone} beacon={beacon}")
 
-report()
+sys.exit(report())

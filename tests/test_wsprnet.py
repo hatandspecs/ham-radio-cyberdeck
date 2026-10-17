@@ -47,8 +47,17 @@ equals("the drift", p["drift"], "0")
 equals("the slot date", p["date"], "260616")
 equals("and time", p["time"], "1400")
 equals("WSPR-2 is mode 2", p["mode"], "2")
-check("and it names itself, not WSJT-X",
-      "cyberdeck" in p["version"].lower(), p["version"])
+# It names ITSELF, not WSJT-X: claiming to be software this is not would
+# make every bug reported against it somebody else's. Asserted against the
+# constant rather than a spelling, so renaming the deck does not need an
+# edit here -- and separately that it is not a WSJT-X version.
+equals("and it names itself", p["version"], wsprnet.VERSION)
+check("which is not a WSJT-X version string",
+      not p["version"][0].isdigit(), p["version"])
+# **Ten characters, measured:** a reporter calling itself `EasySpotter`
+# appears in this station's wsprnet records as `EasySpotte`.
+check("and fits the ten the field carries",
+      len(p["version"]) <= wsprnet.VERSION_MAX, p["version"])
 
 print("\nmegahertz on the wire, hertz everywhere inside")
 # The deck keeps hertz throughout (`HERTZ_FIELDS`) and converts at the edge.
@@ -168,4 +177,4 @@ equals("no network wins over not running",
 print("\nthe spacing matches WSJT-X's, which is not an accident")
 equals("200 ms", wsprnet.SPACING_S, 0.2)
 
-report()
+sys.exit(report())

@@ -27,7 +27,14 @@ import wspr
 #: `wsprd` wants 12 kHz mono 16-bit, and `plughw` converts from whatever the
 #: codec runs natively -- measured on the deck, so there is no resampling
 #: here. See `docs/wspr_design.md` §2b.
-DEFAULT_DEVICE = "plughw:1,0"
+# **Addressed by NAME, not by index.** ALSA numbers cards in probe order, so
+# the index is not stable: the C-Media codec was card 1 on 2026-10-17 and card
+# 2 after the next reboot, with HDMI taking 1. `plughw:1,0` then pointed at
+# the HDMI card, and `arecord` failed "No such file or directory" -- a
+# different failure from the codec being busy, and one that no amount of
+# stopping fldigi fixes. `CARD=Device` is the id in /proc/asound/cards, which
+# does not move.
+DEFAULT_DEVICE = "plughw:CARD=Device,DEV=0"
 
 CAPTURE_SECONDS = 114
 

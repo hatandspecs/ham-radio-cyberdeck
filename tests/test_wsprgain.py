@@ -50,11 +50,24 @@ class Mixer:
         return 0, REAL.replace("[62%]", f"[{self.level}%]"), ""
 
 
-print("the commands name the card, the control and the capture direction")
-equals("reading", wsprgain.get_command(1, "Mic"),
-       ["amixer", "-c", "1", "sget", "Mic", "capture"])
-equals("writing, as a percentage", wsprgain.set_command(40, 1, "Mic"),
-       ["amixer", "-c", "1", "sset", "Mic", "40%", "capture"])
+print("the card is addressed by NAME, because the index moves")
+# Measured on the deck: the C-Media codec was card 1 on 2026-10-17 and card
+# 2 after the next reboot, with HDMI taking 1. Every `amixer -c 1` then went
+# to the HDMI card and answered "Unable to find simple control 'Mic'", so
+# the capture gain silently did nothing -- while the deck reported a
+# percentage it had never managed to set. `arecord -D plughw:1,0` failed
+# "No such file or directory" at the same time, which is a different fault
+# from the codec being busy and is not fixed by stopping fldigi.
+equals("the default is the card id, not a number",
+       wsprgain.DEFAULT_CARD, "Device")
+check("which is what /proc/asound/cards calls it",
+      isinstance(wsprgain.DEFAULT_CARD, str), repr(wsprgain.DEFAULT_CARD))
+
+print("\nthe commands name the card, the control and the capture direction")
+equals("reading", wsprgain.get_command("Device", "Mic"),
+       ["amixer", "-c", "Device", "sget", "Mic", "capture"])
+equals("writing, as a percentage", wsprgain.set_command(40, "Device", "Mic"),
+       ["amixer", "-c", "Device", "sset", "Mic", "40%", "capture"])
 # Percent and not raw steps: this codec's range is 0-16 and another's is not.
 check("percent, so the codec's own range does not matter",
       "40%" in wsprgain.set_command(40), str(wsprgain.set_command(40)))
@@ -108,11 +121,11 @@ print("\na control this codec does not have is named, not echoed")
 # amixer says "Unable to find simple control", which does not say which
 # setting to change. The deck's message names it.
 m = Mixer(fail_on=("sset", "sget"))
-g = wsprgain.Gain(control="Mic", card=1, run=m)
+g = wsprgain.Gain(control="Mic", card="Device", run=m)
 why = g.apply(30)
 check("the failure is reported", bool(why), why)
 check("it names the control", "'Mic'" in why or "Mic" in why, why)
-check("and the card", "1" in why, why)
+check("and the card", "Device" in why, why)
 equals("nothing is recorded as applied", g.applied, None)
 equals("reading it gives None rather than a number", g.read(), None)
 
@@ -157,4 +170,64 @@ with tempfile.TemporaryDirectory() as tmp:
     equals("and a file in the wrong format gives None",
            wsprgain.level_of(stereo), None)
 
-report()
+print("\nthe AGC is turned off for a session and put back after")
+# Measured ON as shipped. WSPR is constant envelope, so compressing it
+# discards nothing useful and corrupts the SNR `wsprd` reports -- which is
+# then uploaded to wsprnet as though it were a measurement.
+class Switch:
+    """A stand-in amixer with a boolean control as well as a level."""
+
+    def __init__(self, agc=True):
+        self.agc = agc
+        self.seen = []
+
+    def __call__(self, cmd):
+        self.seen.append(list(cmd))
+        name = cmd[4] if len(cmd) > 4 else ""
+        state = "[on]" if self.agc else "[off]"
+        if cmd[3] == "sget":
+            if name == "Auto Gain Control":
+                return 0, f"Simple mixer control 'Auto Gain Control',0\n" \
+                          f"  Mono: Capture {state}\n", ""
+            return 0, REAL, ""
+        if name == "Auto Gain Control":
+            self.agc = cmd[5] == "on"
+            return 0, "", ""
+        return 0, REAL, ""
+
+
+m = Switch(agc=True)
+g = wsprgain.Gain(run=m)
+equals("silencing it reports no trouble", g.silence_agc(), "")
+equals("the AGC is off", m.agc, False)
+equals("and that it was on is remembered", g.agc_previous, True)
+equals("restoring reports no trouble", g.restore_agc(), "")
+equals("the AGC is back on", m.agc, True)
+equals("and nothing is left remembered", g.agc_previous, None)
+
+print("\nan AGC that was already off is left off afterwards")
+# Putting it back "the way it was" has to mean off, not on.
+m = Switch(agc=False)
+g = wsprgain.Gain(run=m)
+equals("silencing an off AGC is not an error", g.silence_agc(), "")
+equals("it is still off", m.agc, False)
+equals("restoring leaves it off", g.restore_agc(), "")
+equals("still off", m.agc, False)
+
+print("\na codec with no AGC control is not an error")
+# A blank name, or a control this card does not have, is normal.
+m = Switch()
+g = wsprgain.Gain(run=m, agc="")
+equals("nothing is attempted", g.silence_agc(), "")
+equals("and nothing was run", m.seen, [])
+equals("restoring is a no-op too", g.restore_agc(), "")
+
+print("\na switch state is read as on, off, or unknown")
+equals("on", wsprgain.parse_switch("  Mono: Capture [on]"), True)
+equals("off", wsprgain.parse_switch("  Mono: Capture [off]"), False)
+# None is not False: a control that cannot be read is not one known to be
+# off, and only the difference says whether there is anything to put back.
+equals("unreadable is None", wsprgain.parse_switch("nonsense"), None)
+equals("and so is nothing", wsprgain.parse_switch(""), None)
+
+sys.exit(report())

@@ -54,6 +54,13 @@ _REQUIRED = ("kind", "when")
 
 DEFAULT_NAME = "wspr.log"
 
+# **Spots always belong to a named session.** An unnamed session wrote
+# records with no `activity`, which the danger zone could not single out and
+# an export could not scope -- and the screen read "no session", which looks
+# like a thing not working rather than a default. A beacon run that the
+# operator did not name is still a run.
+DEFAULT_SESSION = "general"
+
 
 def log_path(configured=""):
     """Where the spot log lives. Beside the contact log, not inside it."""

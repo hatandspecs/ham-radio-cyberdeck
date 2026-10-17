@@ -65,7 +65,14 @@ MIN_LEVEL = 1
 
 TEST_TONE_S = 10.0
 
-DEFAULT_DEVICE = "plughw:1,0"
+# **Addressed by NAME, not by index.** ALSA numbers cards in probe order, so
+# the index is not stable: the C-Media codec was card 1 on 2026-10-17 and card
+# 2 after the next reboot, with HDMI taking 1. `plughw:1,0` then pointed at
+# the HDMI card, and `arecord` failed "No such file or directory" -- a
+# different failure from the codec being busy, and one that no amount of
+# stopping fldigi fixes. `CARD=Device` is the id in /proc/asound/cards, which
+# does not move.
+DEFAULT_DEVICE = "plughw:CARD=Device,DEV=0"
 
 IDLE = "idle"
 SENDING = "sending"
@@ -229,7 +236,12 @@ class Transmitter:
         if self.rig is None:
             return "no rig"
         if not self.rig.set_ptt(True):
-            return "PTT command failed"
+            # **With the reason.** "PTT command failed" named the symptom
+            # and discarded the cause, which the client had already
+            # captured: a refused connection means rigctld is not listening,
+            # which is a different fix from a radio that is switched off.
+            why = getattr(self.rig, "last_error", "") or ""
+            return f"PTT failed: {why}" if why else "PTT command failed"
         # **The readback is given time to become true.** Asked immediately,
         # the FTX-1 has not reported PTT yet and answers False -- so the
         # deck keyed the radio, read "not keyed", unkeyed it and reported

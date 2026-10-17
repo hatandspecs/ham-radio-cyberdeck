@@ -64,10 +64,24 @@ TIMEOUT_S = 5.0
 
 MODE_WSPR2 = "2"
 
-# What the deck calls itself to wsprnet. Its own name and version, not a
-# WSJT-X version string: claiming to be software this is not would make every
-# bug reported against it somebody else's.
+# What the deck calls itself to wsprnet. Its own name, not a WSJT-X version
+# string: claiming to be software this is not would make every bug reported
+# against it somebody else's.
+#
+# **Ten characters, and that is measured rather than assumed.** In this
+# station's own wsprnet records a reporter calling itself `EasySpotter`
+# appears as `EasySpotte` -- cut at exactly ten -- and across 160 rows
+# nothing is longer: `WD_3.4.6-2` and `CWSL_DIGI` are 10 and 9. So "ham
+# radio cyberdeck" and "wsprd ham cyberdeck" cannot be carried at 19.
+#
+# Left as the deck's bare name. "ham radio cyberdeck" and "wsprd ham
+# cyberdeck" are both 19 and cannot be carried; of the ten-character forms
+# that fit, none read better than this.
 VERSION = "cyberdeck"
+
+# Clamped here rather than left to the server, so the deck chooses where the
+# cut lands instead of discovering it in somebody else's database.
+VERSION_MAX = 10
 
 
 def _http_post(url, body, timeout=TIMEOUT_S):
@@ -109,7 +123,7 @@ def spot_params(spot, my_call, my_grid, dial_hz, date, time_hhmm,
         "tqrg": f"{int(spot.get('freq', 0)) / 1_000_000:.6f}",
         "tcall": str(spot.get("call", "")).upper(),
         "dbm": str(spot.get("dbm", "")),
-        "version": str(version),
+        "version": str(version)[:VERSION_MAX],
         "mode": str(mode),
     }
     if spot.get("grid"):
@@ -133,7 +147,7 @@ def stat_params(my_call, my_grid, dial_hz, tx_percent=0, dbm=0,
         "tpct": str(int(tx_percent or 0)),
         "tqrg": f"{int(dial_hz) / 1_000_000:.6f}",
         "dbm": str(dbm or 0),
-        "version": str(version),
+        "version": str(version)[:VERSION_MAX],
         "mode": str(mode),
     }
 
