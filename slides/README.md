@@ -43,7 +43,7 @@ Code's Electron runs as a node interpreter, so the deck can be built from a
 terminal without opening the editor:
 
 ```bash
-cd ~/git_repos/ham_radio_cyberdeck/slides
+cd ~/git_repos/ham-radio-cyberdeck/slides
 MARP=~/.vscode/extensions/marp-team.marp-vscode-*/node_modules/@marp-team/marp-cli/marp-cli.js
 ELECTRON_RUN_AS_NODE=1 CHROME_PATH=/usr/bin/google-chrome \
   /usr/share/code/code $MARP cyberdeck-talk.md --pdf --allow-local-files

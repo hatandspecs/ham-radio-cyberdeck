@@ -1,7 +1,7 @@
 ---
 marp: true
 paginate: true
-footer: "KD3CCO · github.com/hatandspecs/ham_radio_cyberdeck"
+footer: "KD3CCO · github.com/hatandspecs/ham-radio-cyberdeck"
 style: |
   /* Plain white, one clear typeface, nothing decorative.
      Assertion-evidence: the headline is a full sentence making a claim and the
@@ -320,7 +320,7 @@ Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunda
 # Build something that annoys you into existence
 
 **Code, design document, runbook, operating tutorial**
-github.com/hatandspecs/ham_radio_cyberdeck
+github.com/hatandspecs/ham-radio-cyberdeck
 
 **Write-up, with photographs and the things that went wrong**
 hatandspecs.github.io/hamradio/articles/keyboard-to-keyboard-cyberdeck/

@@ -44,7 +44,7 @@ are what goes on.
 ## 1. On the laptop — everything it has to do, once
 
 ```bash
-cd ~/git_repos/ham_radio_cyberdeck
+cd ~/git_repos/ham-radio-cyberdeck
 git rev-parse --abbrev-ref HEAD
 rsync -av src/wspr.py src/wsprsched.py src/wsprnet.py tools/wspr_bench.py \
   deck@cyberdeck.local:/tmp/deckupd/
@@ -242,7 +242,7 @@ the terminal stop the thing asking.
 On the laptop:
 
 ```bash
-cd ~/git_repos/ham_radio_cyberdeck
+cd ~/git_repos/ham-radio-cyberdeck
 rsync -av polkit/10-cyberdeck-services.rules deck@cyberdeck.local:/tmp/
 ```
 
