@@ -1093,18 +1093,11 @@ Working end to end:
 **GPLv3** — see [LICENSE](LICENSE). Use it, change it, no warranty. If you
 distribute it, or anything built from it, ship the source under the same terms.
 
-It was MIT until 2026-10-15. Two reasons for the change, and one honest
-limitation.
+The license matches the company this program keeps. It drives fldigi (GPLv3)
+and reads hamlib (LGPL); the WSPR area runs `wsprd` out of WSJT-X (GPLv3).
+Calling another program as a separate process imposes nothing either way, but
+a permissive license here would be the odd one out in a stack that is GPL
+from top to bottom.
 
-The first reason is the company this program keeps. It drives fldigi (GPLv3)
-and reads hamlib (LGPL); the WSPR area runs `wsprd` out of WSJT-X (GPLv3). Calling another program as a separate process imposes nothing either
-way, but bundling one does, and a permissive license here was the odd one out
-in a stack that is GPL from top to bottom.
-
-The second is that the thing worth discouraging is enclosure, not money. GPLv3
-does not stop anyone selling this — it stops anyone selling it *closed*. Sell
-decks with it on the card if you like; ship the source with them.
-
-The limitation: the MIT grant already made cannot be withdrawn. Every commit up
-to 2026-10-15 remains MIT for anyone who already has it, so this governs what
-comes after rather than what came before.
+What GPLv3 is here to discourage is enclosure: anything built on this stays
+open for the next person who wants to read it and change it.
