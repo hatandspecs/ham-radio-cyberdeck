@@ -90,7 +90,8 @@ for term in ("xterm", "linux"):
                 settle=3.0)
     check(f"{term}: the menu opens", "WSPR" in body, body[:120])
     for want in ("Decode", "Transmit", "Transmit next slot", "Session",
-                 "Band", "Transmit percent", "Time-out", "Upload spots",
+                 "Band", "Transmit percent", "Session ToT",
+                 "Upload spots",
                  "Spot log", "Danger zone"):
         check(f"{term}: it offers {want}", want in body, body[:600])
     check(f"{term}: and says the ring locks while running",
@@ -110,23 +111,39 @@ check("the picker opens", "WSPR BAND" in body, body[:120])
 check("40 m at its WSPR dial", "7.038600" in body, body)
 check("20 m too", "14.095600" in body, body)
 check("and 70 cm, the top of the list", "432.300000" in body, body)
-check("and says how to add to the rotation",
-      "add to rotation" in body, body[-200:])
+check("and says how to put a band in the rotation",
+      "Space hop on/off" in body, body[-200:])
 
 print("\nselecting a band takes effect on the screen behind")
 body = deck([TO_WSPR, F3["linux"], "4", ESC], "pick 20 m", settle=3.4)
 check("the header names the band", "20 m" in body, body[:140])
-check("at its dial frequency", "14.095600" in body, body[:140])
+# GROUPED, as `render.frequency` writes it and as the deck writes every
+# frequency: 14.095.600 and not 14.095600. The band PICKER lists plain
+# megahertz because it is a table of figures to compare; the header shows
+# what the radio's own display shows.
+check("at its dial frequency, grouped as the radio reads it",
+      "14.095.600" in body, body[:140])
 
 print("\na number selects that band alone — it does not build a rotation")
 body = deck([TO_WSPR, F3["linux"], "4", ESC], "4 selects 20 m only",
             settle=3.4)
-check("no rotation from one keypress", "hop" not in body[:140], body[:140])
+# **Not `"hop" not in body`.** The header now names hopping either way, so
+# "no hop" contains "hop" and that assertion inverted itself the moment the
+# header started telling the truth about the off state.
+check("no rotation from one keypress", "no hop" in body[:140], body[:140])
 
-print("\n+ then a number adds one to the rotation")
-body = deck([TO_WSPR, F3["linux"], "4", "+", "2", ESC], "20 m plus 40 m",
+print("\nSpace builds a rotation; the header counts it")
+# **Not `"hop" in body`** -- the header says "no hop" when hopping is off,
+# so that assertion passed on the off state. It also drove `4 + 2`, the
+# removed prefix idiom, which under the Space rules selects 40 m alone and
+# so asserted hopping against a screen that showed none.
+#
+# 40 m is configured; Space on row 0 adds 80 m beside it.
+body = deck([TO_WSPR, F3["linux"], " ", ESC], "80 m beside 40 m",
             settle=3.8)
-check("the header marks it as hopping", "hop" in body[:140], body[:140])
+check("the header counts the rotation", "hop 2" in body[:140], body[:140])
+check("and + is gone rather than silently meaning something else",
+      "+n" not in body, body[-200:])
 
 print("\nF2 names a session")
 body = deck([TO_WSPR, F2["linux"]] + list("Saturday") + [ENTER],
@@ -144,7 +161,9 @@ print("\nthe transmit percent and the time-out cycle rather than prompt")
 body = deck([TO_WSPR, F1["linux"], "p"], "p cycles the percent", settle=3.2)
 check("it moved off 20", "30%" in body or "Transmit percent" in body, body)
 body = deck([TO_WSPR, F1["linux"], "o"], "o cycles the time-out", settle=3.2)
-check("the time-out moved", "Time-out" in body, body)
+# Named as the SESSION's: the slot, the decode and the session all have
+# clocks, and "Time-out" alone said which of them not at all.
+check("the time-out moved", "Session ToT" in body, body)
 
 print("\nthe upload toggle says what arming it means")
 body = deck([TO_WSPR, F1["linux"], "u"], "u toggles upload", settle=3.2)
@@ -167,5 +186,77 @@ body = deck([TO_WSPR, F1["linux"]], "the menu names the spot log",
             settle=3.0)
 check("it names wspr.log", "wspr.log" in body, body)
 check("and not qso.log", "qso.log" not in body, body)
+
+print("\nthe band picker is a checkbox, not a two-key prefix")
+# `+n` was the first idiom and was reported undiscoverable in those words.
+body = deck([TO_WSPR, F3["linux"]], "F3 opens the band picker", settle=3.0)
+check("it opens", "WSPR BAND" in body, body[:120])
+check("the footer teaches Space", "Space hop on/off" in body, body[-200:])
+check("and Enter for a single band", "Enter use this one" in body,
+      body[-200:])
+check("+n is gone from it", "+n" not in body, body[-200:])
+check("membership is drawn as a checkbox", "[*]" in body or "[ ]" in body,
+      body)
+
+print("\na band number selects that band and tunes to it")
+# It set the band and waited for the scheduler, so with WSPR stopped the
+# label moved and the radio did not.
+body = deck([TO_WSPR, F3["linux"], "4", ESC], "4 picks 20 m", settle=3.2)
+check("the deck reports the band it went to", "20 m" in body, body)
+check("and the dial frequency it tuned to",
+      "14.095.600" in body or "14.095600" in body, body)
+
+print("\nSpace adds a band to the rotation")
+body = deck([TO_WSPR, F3["linux"], " ", ESC],
+            "Space on 80 m adds it beside 40 m", settle=3.4)
+check("the deck reports a rotation rather than a single band",
+      "hop" in body.lower(), body[-300:])
+
+print("\nthe only selected band cannot be unselected")
+# Something has to be selected; an empty rotation has nothing to tune to.
+# The cursor opens on 80 m, row 0, while the only selected band is the
+# configured 40 m -- so this walks to 40 m first. Space on 80 m would ADD
+# it, which is the first version of this case and tested nothing.
+body = deck([TO_WSPR, F3["linux"], "\x1b[B", " ", ESC],
+            "Space on 40 m, the only selected band", settle=3.4)
+check("it says why it refused", "only band" in body, body[-300:])
+
+print("\nthe screen names band hopping either way")
+body = deck([TO_WSPR], "one band, no hopping", settle=3.0)
+check("off, in as many words", "no hop" in body[:200], body[:200])
+body = deck([TO_WSPR], "three bands", settle=3.0,
+            extra="WSPR_BANDS = 40 m,30 m,20 m\n")
+check("and on, with the count", "hop 3" in body[:200], body[:200])
+
+print("\nthe slot clock is on the screen")
+body = deck([TO_WSPR], "stopped: no stale clock", settle=3.0)
+check("stopped, it says so rather than showing a clock",
+      "not running" in body, body)
+
+print("\nthe hop check is offered, and refuses without rig control")
+body = deck([TO_WSPR, F1["linux"], "k"], "k checks the hop bands",
+            settle=3.4)
+check("it reports rather than doing nothing silently",
+      "hop check" in body or "rig control" in body, body[-300:])
+
+print("\ncalibrate transmit audio never fails silently")
+# "calibrate transmit audio does nothing": all three refusals wrote to the
+# WSPR screen's message line, UNDERNEATH the menu that was still open.
+body = deck([TO_WSPR, F1["linux"], "c"], "c with transmit inhibited",
+            settle=3.4)
+check("the menu is gone, so the message can be read",
+      "Calibrate transmit audio" not in body, body)
+check("and it says what is in the way",
+      any(w in body for w in ("inhibited", "data mode", "TRANSMIT A TEST")),
+      body[-400:])
+
+print("\nthe arrows select and scroll the spot list")
+body = deck([TO_WSPR, "\x1b[B"], "down arrow on an empty list", settle=3.0)
+check("an empty list does not crash or mark a row",
+      "WSPR" in body[:120] and "Traceback" not in body, body[:200])
+
+print("\nthe spot heading has a band column")
+body = deck([TO_WSPR], "the heading", settle=3.0)
+check("BAND is a column", "BAND" in body, body)
 
 report()

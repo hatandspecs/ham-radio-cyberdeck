@@ -174,12 +174,15 @@ device on the board. **`plughw:1,0` at 12000 Hz mono 16-bit works
 directly** — ALSA converts from the codec's native rate, so there is no
 resampling to write.
 
-**The capture gain is not yet measured.** A five-second capture read
-**-59.7 dBFS**, which looks far below the -30 to -20 dBFS `wsprd` wants —
-but the radio was on a **dummy load** for that test, so there was no signal
-to measure. A terminated antenna port produces exactly this. What the
-reading does establish is that the audio path carries something at all
-(RMS 34, not zero). **Judging the level needs an antenna on a live band.**
+**The capture gain is correct as shipped.** On 7.038600 MHz with an antenna,
+ATT off, IPO, DATA-U, a capture reads **-36.8 dBFS** and `wsprd` decodes:
+`WW0WWV DN70 30` at -25 dB and `KC0MVF EN13 30` at -26 dB, 1453 and 1515 Hz
+above the dial. No gain change is needed.
+
+An earlier reading of **-59.7 dBFS** off the same path was taken with the
+radio on a **dummy load** — a terminated antenna port with no signal in it,
+which is what that figure measures. A level judged against a dummy load is
+not a level.
 
 **AUTO GAIN CONTROL ships ON and must be turned off**, and that conclusion
 does not depend on there being a signal. AGC compresses a constant-envelope
@@ -210,6 +213,47 @@ is here. **This is one-time station setup, not something the deck does per
 session** — but it has to be right before the receive path can be judged,
 because a capture that decodes nothing because of a mixer setting looks
 exactly like a capture path that does not work.
+
+## 4b. On the deck — the sudoers rule WSPR cannot work without
+
+**WSPR stops fldigi to take the codec, and `cyberdeck-ui` runs as `deck`.**
+A plain `sudo systemctl stop cyberdeck-fldigi` from inside the service asks
+for a password, has no tty to ask on, and exits non-zero. fldigi keeps the
+codec, every `arecord` fails `audio open error: Device or resource busy`,
+and a session runs its slot clock for an hour decoding nothing.
+
+The deck refuses to start WSPR in that state rather than pretending to run,
+and reports the systemctl failure — but the rule is what makes the feature
+work:
+
+```bash
+sudo tee /etc/sudoers.d/cyberdeck-wspr >/dev/null <<'EOF'
+deck ALL=(root) NOPASSWD: /usr/bin/systemctl stop cyberdeck-fldigi, \
+    /usr/bin/systemctl start cyberdeck-fldigi, \
+    /usr/bin/systemctl restart cyberdeck-fldigi
+EOF
+sudo chmod 440 /etc/sudoers.d/cyberdeck-wspr
+sudo visudo -c -f /etc/sudoers.d/cyberdeck-wspr
+```
+
+`visudo -c` prints `parsed OK`. **Two commands only, each named in full.** A
+blanket `NOPASSWD: ALL` would hand the whole board to anything that reaches
+the UI process, and `systemctl` without an argument list is the same thing
+with extra steps.
+
+To verify as the service user, which is the only account the answer matters
+for:
+
+```bash
+sudo -u deck sudo -n systemctl stop cyberdeck-fldigi
+systemctl is-active cyberdeck-fldigi
+sudo -u deck sudo -n systemctl start cyberdeck-fldigi
+```
+
+The first prints nothing, the second `inactive`, the third nothing. A
+`sudo: a password is required` from either means the rule is not in effect —
+check the path `which systemctl` reports against the one in the rule, since
+the rule matches on the absolute path.
 
 ## 5. If the package is not in the archive
 

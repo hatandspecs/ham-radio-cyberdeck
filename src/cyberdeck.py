@@ -215,6 +215,7 @@ class Deck:
         self.wspr_tx = None           # wsprtx.Transmitter
         self.wspr_up = None           # wsprnet.Uploader
         self.wspr_spots = []          # newest first, for the screen
+        self.wspr_sel = None          # None follows the newest spot
         self.wspr_message = ""
         self.wspr_band = ""
         self.wspr_fldigi_stopped = False
@@ -232,7 +233,6 @@ class Deck:
         # of asking whether to -- see `_save_activity`.
         self._editing_type = ""
         self._pending_type_edit = False
-        self._pending_band_add = False
         # Rows the ACTIVITIES screen last drew, where the cursor is, and the
         # pending question: {"title", "lines", "action", "back"}.
         self.acts_sel = 0
@@ -2161,8 +2161,17 @@ class Deck:
             self._wspr_note("set a locator — WSPR sends the grid")
             return
         self.wspr_fldigi_stopped = self._service("stop", "cyberdeck-fldigi")
+        if not self.wspr_fldigi_stopped and self._fldigi_holds_audio():
+            # Starting anyway produced a session that looked live and
+            # decoded nothing: the slot clock ran, `arecord` failed every
+            # two minutes, and the only sign was a truncated error. WSPR
+            # without the codec is not a degraded WSPR, it is none.
+            self._wspr_note("fldigi still holds the audio — WSPR cannot "
+                            "capture (see docs/wspr_deploy.md, sudoers)")
+            return
         self.wspr.start(time.time())
         self.wspr_spots = []
+        self.wspr_sel = None
         self._wspr_note(f"WSPR started on {self.wspr_band} — "
                         f"^O ^P are locked until it stops")
 
@@ -2194,11 +2203,91 @@ class Deck:
         import subprocess
         try:
             r = subprocess.run(["sudo", "systemctl", action, unit],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, timeout=60,
+                               stdin=subprocess.DEVNULL)
+            if r.returncode != 0:
+                # A silent False here cost a session of dead captures: with
+                # no sudoers rule, `sudo` wants a password, there is no tty
+                # to ask on, systemctl exits non-zero, fldigi keeps the
+                # codec and every `arecord` fails "Device or resource busy".
+                # The reason the deck already had is now reported.
+                why = (r.stderr or r.stdout or "").strip().splitlines()
+                self._wspr_note(f"systemctl {action} {unit} failed: "
+                                + (why[-1][:60] if why else
+                                   f"exit {r.returncode}"))
             return r.returncode == 0
         except Exception as exc:
             self._wspr_note(f"systemctl {action} {unit}: {exc}")
             return False
+
+    def _fldigi_holds_audio(self):
+        """Whether the fldigi service is still up, and so still holding the
+        USB codec.
+
+        Asked of systemd rather than of the audio device: opening the device
+        to find out would itself have to be released again, and `is-active`
+        needs no privilege -- which matters precisely in the case this
+        exists for, where `stop` failed for want of one.
+        """
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "cyberdeck-fldigi"],
+                timeout=10, stdin=subprocess.DEVNULL,
+                capture_output=True)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def _wspr_check_modes(self):
+        """Visit each band in the rotation and report the mode found there.
+
+        The radio holds one mode at a time, but it REMEMBERS a mode per band
+        -- so a rotation can be three bands in DATA-U and one in LSB, and
+        the only sign is a slot that transmits nothing useful. This tunes
+        each band in turn, reads the mode back, and names the ones that are
+        not set, which is the manual fix the operator asked to be pointed
+        at. The starting band is restored.
+        """
+        import wsprbands
+        if self.wspr_running:
+            self._wspr_note("stop WSPR first — this retunes the radio")
+            return
+        rig = self._log_rig()
+        if rig is None:
+            self._wspr_note("no rig control — cannot read the modes")
+            return
+        bands = self._wspr_bands()
+        was = self.wspr_band
+        ok, bad, unread = [], [], []
+        for band in bands:
+            hz = wsprbands.dial_hz(band)
+            if not hz:
+                continue
+            try:
+                rig.set_frequency(hz)
+                time.sleep(0.25)        # the radio needs a moment to settle
+                mode = (rig.mode() or "").upper()
+            except Exception:
+                mode = ""
+            if not mode:
+                unread.append(band)
+            elif mode in qsolog.RIG_DATA_MODES:
+                ok.append(band)
+            else:
+                bad.append(f"{band} is {mode}")
+        if was:
+            self._wspr_tune(was)
+        parts = []
+        if bad:
+            parts.append("set to DATA-U: " + ", ".join(bad))
+        if unread:
+            parts.append("could not read " + ", ".join(unread))
+        if ok and not bad and not unread:
+            parts.append(f"all {len(ok)} in a data mode")
+        elif ok:
+            parts.append(f"{len(ok)} ok")
+        self._wspr_note("hop check — " + ("; ".join(parts) or "no bands"))
 
     def _wspr_poll(self):
         """One tick of WSPR. Called from `poll`, so it never blocks."""
@@ -2252,7 +2341,13 @@ class Deck:
         radio that left its data mode.
         """
         if not self._rig_mode_ok():
-            self._wspr_note("rig is not in a data mode — not transmitting")
+            # **Named band.** The radio remembers a mode per band, so on a
+            # hopping session this fires for one band out of four and "the
+            # rig is not in a data mode" does not say which to go and set.
+            # `Check hop bands for DATA-U` on the menu answers it for the
+            # whole rotation without waiting for the slot to come round.
+            self._wspr_note(f"{band or self.wspr_band} is not in a data "
+                            f"mode — not transmitting on it")
             return
         if self.session.inhibited:
             self._wspr_note("transmit is inhibited — Ctrl-I to arm")
@@ -2348,7 +2443,7 @@ class Deck:
             self._wspr_note(f"could not write the spot log: {exc}")
         # Newest first, which is the order the screen wants.
         for spot in spots:
-            self.wspr_spots.insert(0, dict(spot, when=when))
+            self.wspr_spots.insert(0, dict(spot, when=when, band=band))
         del self.wspr_spots[200:]
         # Three conditions, all the operator's: running, the toggle on, and
         # a network. None of them is decided here.
@@ -2379,14 +2474,25 @@ class Deck:
         transmitter left keyed.
         """
         import wsprtx
+        # **The menu closes before any refusal is reported.** All three of
+        # these wrote to `wspr_message`, which is drawn on the WSPR screen --
+        # underneath the menu that was still open. From the operator's side
+        # the key did nothing at all: "calibrate transmit audio does
+        # nothing". The commonest case is the third, since the inhibit
+        # starts on and cannot be lifted until the rig reads DATA-U.
         if self.wspr_running:
+            self._close_menu()
             self._wspr_note("stop WSPR first — it owns the audio")
             return
         if not self._rig_mode_ok():
-            self._wspr_note("rig is not in a data mode — no test tone")
+            self._close_menu()
+            self._wspr_note("rig is not in a data mode — set DATA-U, "
+                            "then calibrate")
             return
         if self.session.inhibited:
-            self._wspr_note("transmit is inhibited — Ctrl-I to arm")
+            self._close_menu()
+            self._wspr_note("transmit is inhibited — Ctrl-I on the WSPR "
+                            "screen arms it, once the rig reads DATA-U")
             return
         self._wspr_build()
         secs = int(wsprtx.TEST_TONE_S)
@@ -2470,6 +2576,7 @@ class Deck:
             self._wspr_note(f"could not write the spot log: {exc}")
             return
         self.wspr_spots = []
+        self.wspr_sel = None
         self._wspr_note(f"{gone} record{'' if gone == 1 else 's'} deleted "
                         f"from {name}")
 
@@ -2505,6 +2612,7 @@ class Deck:
             self._wspr_note(f"could not write the spot log: {exc}")
             return
         self.wspr_spots = []
+        self.wspr_sel = None
         if self.cfg.get("WSPR_FORGOTTEN"):
             self.cfg["WSPR_FORGOTTEN"] = []
             self._save_state()
@@ -2896,6 +3004,7 @@ class Deck:
         import wsprbands
         import wsprlog
         import wsprnet
+        import wsprsched
         now = time.time()
         watts, dbm, exact = self._wspr_power()
         sched = self.wspr
@@ -2913,7 +3022,16 @@ class Deck:
             "band": self.wspr_band,
             "dial_hz": wsprbands.dial_hz(self.wspr_band),
             "hopping": len(self._wspr_bands()) > 1,
+            "hop_count": len(self._wspr_bands()),
             "clock": time.strftime("%H%MZ", time.gmtime()),
+            # The slot clock runs off the same arithmetic the scheduler acts
+            # on, not a second copy of it: what the operator watches and what
+            # fires the capture cannot then disagree.
+            "slot_in": (now - wsprsched.slot_start(now)
+                        if sched and sched.wspr else None),
+            "in_capture": wsprsched.in_capture(now),
+            "slot_to_next": wsprsched.seconds_to_next_slot(now),
+            "selected": self.wspr_sel,
             "wspr": bool(sched and sched.wspr),
             "decode": bool(sched and sched.decode),
             "transmit": bool(sched and sched.transmit),
@@ -2930,9 +3048,12 @@ class Deck:
                              if sched else None),
             "decoding": bool(self.wspr_rx and self.wspr_rx.busy_decoding),
         }
-        footer = (" F1 menu  F2 session  F3 band  ^X stop"
+        # The arrows are advertised: a key that scrolls a list nobody knows
+        # scrolls is a key that does not exist. Both forms fit 66 columns,
+        # which is the panel.
+        footer = (" F1 menu F2 session F3 band ↑↓ spots ^X stop"
                   if self.wspr_running else
-                  " F1 menu  F2 session  F3 band  ^O ^P screen")
+                  " F1 menu F2 session F3 band ↑↓ spots ^O ^P screen")
         for i, line in enumerate(render.wspr_screen(
                 self.wspr_spots, w, h, state=state,
                 message=self.wspr_message, footer=footer)):
@@ -2941,6 +3062,16 @@ class Deck:
             curses.curs_set(0)
         except curses.error:
             pass
+
+    def _wspr_move(self, by):
+        """Move the spot selection. The list is newest first, so down is
+        older -- the same direction the eye reads it."""
+        total = len(self.wspr_spots)
+        if not total:
+            self.wspr_sel = None
+            return
+        at = 0 if self.wspr_sel is None else self.wspr_sel + by
+        self.wspr_sel = max(0, min(total - 1, at))
 
     def _handle_wspr(self, ch):
         if ch == curses.KEY_F1:
@@ -2961,9 +3092,20 @@ class Deck:
                 self._wspr_note("WSPR is not running")
         elif ch == 9:                                   # Ctrl-I, and Tab
             self._toggle_inhibit()
+        elif ch in (curses.KEY_UP, curses.KEY_DOWN):
+            self._wspr_move(-1 if ch == curses.KEY_UP else 1)
+        elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            self._wspr_move(-8 if ch == curses.KEY_PPAGE else 8)
+        elif ch == curses.KEY_HOME:
+            self.wspr_sel = 0 if self.wspr_spots else None
+        elif ch == curses.KEY_END:
+            self.wspr_sel = (len(self.wspr_spots) - 1
+                             if self.wspr_spots else None)
         elif ch == 27:                                  # Esc
             if self.wspr_running:
                 self._wspr_note("WSPR is running — ^X stops it")
+            elif self.wspr_sel is not None:
+                self.wspr_sel = None       # back to following the newest
             else:
                 self.screen = WSPR
         return True
@@ -4508,7 +4650,6 @@ class Deck:
         self._pending_type_delete = False
         self._pending_type_copy = False
         self._pending_type_edit = False
-        self._pending_band_add = False
         self.menu = which
         self.menu_page = 0
         self.menu_sel = self._first_selectable(which)
@@ -4524,7 +4665,6 @@ class Deck:
         self._pending_type_delete = False
         self._pending_type_copy = False
         self._pending_type_edit = False
-        self._pending_band_add = False
         self.menu = None
         try:
             curses.curs_set(1)
@@ -4783,47 +4923,91 @@ class Deck:
                 self._open_editor("WSPR_LOG_PATH", "Spot log")
             elif key == "c":
                 self._wspr_test_tone()
+            elif key == "k":
+                # Closed first: this retunes the radio band by band and the
+                # result is a sentence naming the bands that need setting,
+                # which belongs on the screen and not under a menu.
+                self._close_menu()
+                self._wspr_check_modes()
             elif key == "z":
                 self._open_menu("wspr_danger")
             return True
 
         if m == "wspr_band":
             import wsprbands
-            # `+` then a number ADDS a band to the rotation; a number on its
-            # own SELECTS that band and only that band. Two keys for the
-            # less common thing, one for the common one -- the same shape as
-            # the schema picker's `c+n` and `d+n`.
+            # **Space toggles the highlighted band in and out of the hop
+            # rotation; a number or Enter selects that band alone.** The
+            # first idiom for this was `+` then a number, which an operator
+            # reported as undiscoverable -- "I don't get what +n means" --
+            # and they were right: a two-key prefix with no visible state
+            # between the keys teaches nobody. Space on the row the arrows
+            # are already on is a checkbox, and the menu shows `[*]` for a
+            # band that is in.
             #
-            # It toggled membership at first, so pressing 20 m from a default
-            # of 40 m gave a two-band rotation rather than 20 m. An operator
-            # pressing a band key means "go there", which is what the
-            # digimode band menu does.
-            if key == "+":
-                self._pending_band_add = True
-                self._wspr_note("press a band number to add it to the "
-                                "rotation")
-                return True
-            label = next((l for k, l, _h in wsprbands.BANDS if k == key), "")
-            if label:
+            # `+` is NOT kept as a synonym. Its meaning would have changed
+            # silently -- it took the band from the NEXT key and would now
+            # toggle whichever row the cursor is on -- and a learned key
+            # that still works while meaning something else is worse than
+            # one that is gone.
+            if key == " ":
+                opts = menus.selectable(self._menu_for(
+                    m, *reversed(self.scr.getmaxyx())))
+                at = self.menu_sel if self.menu_sel in opts else (
+                    opts[0] if opts else 0)
+                label = wsprbands.BANDS[at][1] if at < len(
+                    wsprbands.BANDS) else ""
+                if not label:
+                    return True
                 bands = self._wspr_bands()
-                if getattr(self, "_pending_band_add", False):
-                    self._pending_band_add = False
-                    if label in bands and len(bands) > 1:
-                        bands.remove(label)
-                    elif label not in bands:
-                        bands.append(label)
+                if label in bands:
+                    if len(bands) == 1:
+                        self._wspr_note(f"{label} is the only band — "
+                                        "something has to be selected")
+                        return True
+                    bands.remove(label)
                 else:
-                    bands = [label]
+                    bands.append(label)
+                picked_set = True
+            else:
+                label = next((l for k, l, _h in wsprbands.BANDS
+                              if k == key), "")
+                if not label:
+                    return True
+                bands = [label]
+                picked_set = False
+            if label:
                 # Kept in band order, not the order they were pressed, so
                 # the rotation is predictable from the picker.
                 order = [l for _k, l, _h in wsprbands.BANDS]
                 bands.sort(key=order.index)
+                was = self.wspr_band
                 self.cfg["WSPR_BANDS"] = ",".join(bands)
                 if self.wspr is not None:
                     self.wspr.bands = bands
                 if self.wspr_band not in bands:
                     self.wspr_band = bands[0]
                 self._save_state()
+                # **Tune, here, on the selection.** It only set the band and
+                # waited for the scheduler to tune on the next slot, so
+                # picking a band with WSPR stopped moved a label and left
+                # the radio where it was -- and the spec asks for the
+                # opposite: selecting a band tunes to its WSPR dial.
+                #
+                # Unselecting the band in use tunes too: it changes which
+                # band the deck is on, and a deck that says 40 m while the
+                # radio sits on 20 m is the same fault in a second place.
+                if not picked_set or self.wspr_band != was:
+                    dial = wsprbands.dial_hz(self.wspr_band)
+                    self._wspr_tune(self.wspr_band)
+                    where = f"{self.wspr_band} — {render.frequency(dial)}"
+                else:
+                    where = ""
+                if picked_set:
+                    rot = (f"hop: {', '.join(bands)}" if len(bands) > 1
+                           else f"hop off — {bands[0]} only")
+                    self._wspr_note(f"{rot}{'   ' + where if where else ''}")
+                else:
+                    self._wspr_note(where)
             return True
 
         if m == "wspr_danger":

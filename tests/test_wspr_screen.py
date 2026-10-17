@@ -111,7 +111,16 @@ seg = render.wspr_power("3", 33, False, ceiling=10)
 flat = "".join(t for t, _a in seg)
 check("an inexact dBm is not highlighted",
       "reverse" not in [a for t, a in seg if "dBm" in t], str(seg))
-check("and is marked as snapped", "snapped" in flat, flat)
+# **"snapped" in flat also matches "not snapped".** The assertion read that
+# way and so passed while the screen said the opposite of the truth: an
+# operator read "snapped" off an inexact reading as "this one is on a snap
+# point". Both states are now asserted against each other.
+check("an inexact dBm is marked NOT snapped", "not snapped" in flat, flat)
+
+seg = render.wspr_power("5", 37, True, ceiling=10)
+flat = "".join(t for t, _a in seg)
+check("and an exact one is marked snapped",
+      "snapped" in flat and "not snapped" not in flat, flat)
 
 print("\na power that had to fall back says so")
 # A beacon announcing a wattage the radio is not making is worse than one
@@ -209,5 +218,105 @@ print("\nthe keys do not collide with the deck's reserved ones")
 equals("every menu key is unique", len(keys), len(set(keys)))
 equals("and the danger zone's too",
        len([k for k, _l in menus.wspr_danger_menu()["items"]]), 3)
+
+print("\nthe slot clock says where the two-minute slot is")
+# WSPR is a schedule before it is a mode. Without this an operator cannot
+# tell a dead band from a deck that is simply between slots -- which is why
+# WSJT-X shows it and why the deck was asked for the same.
+seg = render.wspr_slot(37, capture=True, to_next=83, next_tx=False)
+flat = "".join(t for t, _a in seg)
+check("the position in the slot, as m:ss", "0:37" in flat, flat)
+check("and the time to the next one", "1:23 to next" in flat, flat)
+check("the bar is filled proportionally",
+      flat.count("#") == round(render.WSPR_SLOT_CELLS * 37 / 120.0), flat)
+check("and the rest is not", "." in flat, flat)
+check("RX next when the next slot does not transmit", "RX next" in flat, flat)
+seg = render.wspr_slot(0, to_next=120, next_tx=True)
+flat = "".join(t for t, _a in seg)
+check("TX next when it does", "TX next" in flat, flat)
+check("an empty bar at the top of the slot", "#" not in flat, flat)
+seg = render.wspr_slot(120, to_next=0)
+check("and a full one at the end",
+      "".join(t for t, _a in seg).count(".") == 0,
+      "".join(t for t, _a in seg))
+# The bar cannot run past its cells however stale the clock is.
+seg = render.wspr_slot(400, to_next=0)
+check("a clock past the slot end does not overrun the bar",
+      "".join(t for t, _a in seg).count("#") == render.WSPR_SLOT_CELLS,
+      "".join(t for t, _a in seg))
+
+print("\nthe slot clock is on the screen only while WSPR runs")
+st = {"session": "night", "band": "40 m", "wspr": True, "slot_in": 37,
+      "slot_to_next": 83, "in_capture": True, "next_tx": False}
+body = "\n".join(plain(render.wspr_screen(SPOTS, 66, 20, state=st)))
+check("running: the slot is shown", "0:37" in body, body)
+body = "\n".join(plain(render.wspr_screen(SPOTS, 66, 20, state={})))
+check("stopped: it says so rather than showing a stale clock",
+      "not running" in body, body)
+
+print("\nthe session time-out is named as the session's")
+# Three clocks exist on this screen now -- the slot, the decode and the
+# session -- so "4:00 left" on its own named none of them.
+body = "\n".join(plain(render.wspr_screen(
+    SPOTS, 66, 20, state={"timeout_left": 240})))
+check("it is the session's", "session 4:00 left" in body, body)
+
+print("\nband hopping is named whether it is on or off")
+# Its absence had to be read as "off" rather than "this deck has no such
+# thing", which is not a distinction a header should leave to the reader.
+body = "\n".join(plain(render.wspr_screen(
+    SPOTS, 66, 20, state={"band": "40 m", "hopping": True, "hop_count": 3})))
+check("on, with the count", "hop 3" in body, body)
+body = "\n".join(plain(render.wspr_screen(
+    SPOTS, 66, 20, state={"band": "40 m", "hopping": False, "hop_count": 1})))
+check("and off, in as many words", "no hop" in body, body)
+
+print("\nevery spot row says which band it came in on")
+# Band hopping makes two spots an hour apart answer different questions.
+rows = plain(render.wspr_screen(
+    [dict(SPOTS[0], band="20 m"), dict(SPOTS[1], band="40 m")],
+    66, 20, state={}))
+body = "\n".join(rows)
+check("the heading has the column", "BAND" in body, body)
+check("the first spot's band", "20 m" in body, body)
+check("and the second's", "40 m" in body, body)
+
+print("\nthe arrows select and scroll the spots")
+# A session gathers hundreds and the screen holds ten, so without this the
+# older ones were logged and unreachable.
+many = [dict(SPOTS[0], call=f"K{i}AAA") for i in range(40)]
+body = "\n".join(plain(render.wspr_screen(many, 66, 20, state={})))
+check("unselected, the newest is on screen", "K0AAA" in body, body)
+check("and the oldest is not", "K39AAA" not in body, body)
+body = "\n".join(plain(render.wspr_screen(
+    many, 66, 20, state={"selected": 39})))
+check("selecting the oldest scrolls it into view", "K39AAA" in body, body)
+check("and the newest off it", "K0AAA" not in body, body)
+marked = [l for l in plain(render.wspr_screen(
+    many, 66, 20, state={"selected": 39})) if "\u25b8" in l]
+equals("exactly one row is marked", len(marked), 1)
+check("and it is the selected one", "K39AAA" in marked[0], marked[0])
+# A selection past the end is clamped, not an index error: the danger zone
+# can empty the list underneath it.
+body = "\n".join(plain(render.wspr_screen(
+    SPOTS, 66, 20, state={"selected": 900})))
+check("a selection past the end is clamped", "WW0WWV" in body, body)
+equals("and an empty list with a selection draws nothing selected",
+       [l for l in plain(render.wspr_screen([], 66, 20,
+                                            state={"selected": 3}))
+        if "\u25b8" in l], [])
+
+print("\nthe new rows obey the two width properties")
+for w, h in GRIDS:
+    st = {"session": "night", "band": "40 m", "hopping": True,
+          "hop_count": 3, "wspr": True, "slot_in": 61, "slot_to_next": 59,
+          "in_capture": True, "next_tx": True, "selected": 5,
+          "timeout_left": 240, "watts": "5", "dbm": 37, "dbm_exact": True}
+    lines = plain(render.wspr_screen(many, w, h, state=st,
+                                     message="hop check", footer=" F1 menu"))
+    equals(f"{w}x{h}: every row is exactly {w} wide",
+           sorted({len(l) for l in lines}), [w])
+    equals(f"{w}x{h}: and no more rows than the screen has",
+           len(lines) <= h, True)
 
 report()

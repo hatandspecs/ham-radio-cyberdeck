@@ -695,8 +695,43 @@ did, which is why the install needed no service restart.
 6. ~~The TX test tone.~~ **DONE** — behind the menu and a confirmation that
    states the current reading, time-bounded by construction.
 
-**All of it is wired.** `tests/test_wspr_panel.py` drives it through a real
-pty under both terminals. What is NOT tested there is starting WSPR for
+**All of it is wired, deployed and passing**: `tests/test_wspr_panel.py` is
+62 checks through a real pty under both terminals, and the whole feature is
+604 checks across nine files. Deployed to the deck 2026-10-17 — the
+preflight printed four ring areas and no config notes.
+
+### Eleven things the first session on the panel found — 2026-10-17
+
+Driving the real UI turned up what no test had: one dead feature, one
+undiscoverable idiom, two labels that said the opposite of the truth, and
+seven gaps. All are fixed and tested.
+
+| What | Why it happened |
+|---|---|
+| **`arecord: Device or resource busy`, every slot** | **No sudoers rule exists.** `cyberdeck-ui` runs as `deck`; `sudo systemctl stop cyberdeck-fldigi` from inside it has no tty for a password prompt, exits non-zero, and fldigi keeps the exclusive codec. `docs/wspr_deploy.md` §4b is the rule — **a dependency of the feature, not hardening.** `_service` now reports the non-zero exit and `_wspr_start` refuses rather than running a slot clock over a codec it does not have |
+| Selecting a band did not tune the radio | `_wspr_tune` was called only from the scheduler, so with WSPR stopped the picker moved a label and left the radio where it was |
+| `+n` to add a hop band was undiscoverable | A two-key prefix with nothing visible between the keys. **Space toggles the highlighted row and `[*]` is the checkbox.** `+` was NOT kept as a synonym: its meaning would have changed silently |
+| No slot clock | WSPR is a schedule before it is a mode. `render.wspr_slot` reads the scheduler's own arithmetic, so the clock and the capture cannot disagree |
+| `Time-out` named neither what nor whose | Three clocks exist on that screen. It is **`Session ToT`** on the menu and `session m:ss left` on the screen |
+| "Calibrate transmit audio does nothing" | It was refusing correctly — transmit is inhibited until the rig reads DATA-U — and writing the reason to the message line **underneath the still-open menu.** Every refusal reached from a menu now closes it first |
+| `snapped` on a power that was not | The word appeared only when the value had been snapped *down*, which reads as the opposite. **Both states are named.** The test said `"snapped" in flat`, which matches `"not snapped"` — a vacuous pass of the kind this project keeps finding |
+| Hopping invisible when off | Its absence had to be read as "off" rather than "no such feature". The header says `hop 3` or `no hop` |
+| No band on a spot row | Two spots an hour apart on a hopping session answer different questions. The log file always had it; the screen did not |
+| Older spots unreachable | A session gathers hundreds, the screen holds ten. **The arrows select and scroll**, PgUp/PgDn by eight, Home/End to the ends, Esc back to following the newest |
+| A hop band in the wrong mode is silent | The radio holds one mode but **remembers one per band**. `Check hop bands for DATA-U` on the menu visits each, reads the mode back, and names the ones to go and set |
+
+**The five "pre-existing red" test files were the fourth ring area.** Six
+files hard-coded one `^O` from the boot screen to reach the digimodes or the
+conversation; with WSPR on the ring that hop lands on WSPR, so every
+scenario below it read the wrong screen. `test_area_ring.py` also asserted
+the ring's *size* three times. A fifth area costs one edit per file plus
+those three checks — the constants are named `TO_CHAT`/`TO_DIGI` at the top
+of each file for exactly that reason.
+
+**The `_leave_cleanly` fix was confirmed on the hardware by that deploy.**
+The journal now reads `Deactivated successfully` on a restart where every
+earlier one read `code=exited, status=1/FAILURE`. So the shutdown path runs:
+transmit aborted, decoder unparked, console palette restored. What is NOT tested there is starting WSPR for
 real, because that stops fldigi and opens the sound card — the start path's
 refusals are unit-tested instead.
 

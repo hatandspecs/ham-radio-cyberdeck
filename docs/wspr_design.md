@@ -74,6 +74,20 @@ before — the operator can see the radio, and silently retuning a transceiver
 out from under somebody is worse than leaving it where the last thing that
 ran put it.
 
+### Stopping fldigi needs a sudoers rule
+
+`cyberdeck-ui` runs as `deck`. `sudo systemctl stop cyberdeck-fldigi` from
+inside it asks for a password, has no tty to ask on, and exits non-zero —
+fldigi keeps the codec and every capture fails `Device or resource busy`.
+**The rule in `docs/wspr_deploy.md` §4b is a dependency of the feature, not
+a hardening step.**
+
+Two defenses in the deck itself, because the failure was silent for a whole
+session: `_service` reports a non-zero exit with systemctl's own last line
+rather than only catching exceptions, and **`_wspr_start` refuses to start
+when fldigi is still active** instead of running a slot clock over a codec
+it does not have. WSPR without the codec is not a degraded WSPR; it is none.
+
 ## 2a. Getting `wsprd` onto the deck
 
 **It is not installed**, confirmed on the deck 2026-10-16. That is a
@@ -572,6 +586,44 @@ still be running — so the retune cannot wait on the decoder, and the decoder
 cannot be assumed to know what band its audio came from. **The band is
 recorded with the capture, not read back at decode time.**
 
+**The band is on every spot row and in every spot record.** Two spots an
+hour apart on a hopping session answer different questions, and a session
+log without the band is a list of callsigns.
+
+### Selecting one band, and selecting a rotation
+
+Two things are chosen in one picker, so each gets its own key:
+
+* **A band number, or Enter on the highlighted row, selects that band alone
+  and tunes the radio to its WSPR dial** — immediately, not at the next
+  slot. Selecting a band is the operator saying "go there"; a picker that
+  moved a label and left the radio where it was reads as a picker that does
+  not work.
+* **Space toggles the highlighted band in and out of the rotation**, and
+  `[*]` marks the ones in it.
+
+Two earlier idioms are recorded because each failed in a way worth not
+repeating. Membership-toggling on a bare number meant pressing 20 m from a
+default of 40 m produced a two-band rotation rather than 20 m. Replacing it
+with `+` then a number fixed that and was undiscoverable — a two-key prefix
+with nothing visible between the keys teaches nobody, and it was reported in
+those words. Space acts on the row the arrows are already on and the
+checkbox is in the menu, so the idiom is on screen rather than remembered.
+
+**The rotation can never be empty.** Unselecting the last band is refused
+and says why: the schedule has to have something to tune to.
+
+### The per-band mode check
+
+The radio holds one mode at a time but **remembers a mode per band**, so a
+four-band rotation can be three bands in DATA-U and one in LSB. The only
+symptom is a slot that transmits nothing useful an hour into a session.
+
+`Check hop bands for DATA-U` on the menu tunes each band in the rotation in
+turn, reads the mode back, and names the bands that are not in a data mode,
+which is the manual fix the operator then makes on the radio. The starting
+band is restored. It refuses while WSPR is running, because it retunes.
+
 ## 9. Uploading spots
 
 **Three conditions, all of them the operator's, and all three required:**
@@ -681,7 +733,61 @@ intends, which is NFR-20 and is the existing rule: the band, the dial
 frequency, the power actually read, whether the next slot transmits or
 listens, the remaining ToT, and the upload state.
 
+### The slot clock
+
+**WSPR is a schedule before it is a mode**, so the screen shows the position
+inside the two-minute slot: the elapsed figure, a bar that fills over the
+slot, the time to the next one, and whether that next slot transmits or
+receives. WSJT-X shows the same thing for the same reason — without it a
+dead band and a deck between slots look identical.
+
+It reads from the same arithmetic the scheduler acts on rather than a second
+copy, so what the operator watches and what fires the capture cannot
+disagree. While WSPR is stopped the row says so rather than showing a clock
+that is not driving anything.
+
+### Three clocks, each named
+
+The slot, the decode and the session all have clocks, so none of them is
+labeled with a bare duration. The session time-out is **`Session ToT`** on
+the menu and `session m:ss left` on the screen. `Time-out` on its own named
+neither what times out nor what happens.
+
+### The spot list scrolls
+
+A session gathers hundreds of spots and the screen holds ten. **The arrows
+select and scroll**, PgUp/PgDn move by eight, Home and End reach the newest
+and oldest, and Esc drops the selection so the list follows the newest spot
+again. Without this the older spots of a session were logged and unreachable
+without leaving the deck for the file.
+
+### A refusal is reported where it can be read
+
+Every refusal reached from the menu closes the menu first. The messages go to
+the WSPR screen's message line, which is *underneath* an open menu — so
+`Calibrate transmit audio` appeared to do nothing at all when it was in fact
+refusing, correctly, because transmit was inhibited. A refusal that cannot be
+read is indistinguishable from a dead key.
+
+### Power reads "snapped" or "not snapped", never just one
+
+Both states are named. The word alone was shown only when the value had been
+snapped *down*, which reads as "this one is on a snap point" — the opposite
+of what it meant. See §5 of the power discussion: the highlight is the
+confirmation, and the word has to agree with it.
+
 ## 10a. What is built
+
+**All of it, as of 2026-10-17.** WSPR is a fourth ring area, wired into
+`cyberdeck.py`, deployed to the deck and reachable from the panel. The
+`_leave_cleanly` handler was confirmed on the hardware in the same deploy:
+the journal reads `Deactivated successfully` where every earlier restart
+read `code=exited, status=1/FAILURE`, which means the shutdown path — abort
+transmit, unpark the decoder, restore the console palette — now actually
+runs on a restart.
+
+Nine test files, 604 checks. Only one of them needs a terminal.
+
 
 | Piece | State |
 |---|---|

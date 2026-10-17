@@ -29,7 +29,11 @@ F1, F2, F3, F4 = "\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS"
 # screen. The scenarios that want the digimodes sent nothing and read the
 # station fields.
 TO_SET = []
-TO_DIGI = ["\x0f"]
+# **Two backwards hops, not one.** WSPR made the ring four areas --
+# settings | log | digimodes | WSPR -- so one `^O` back from the boot
+# screen now wraps onto WSPR and every scenario below read the wrong
+# screen. Named here so the next area costs one edit per file.
+TO_DIGI = ["\x0f", "\x0f"]
 
 f = Fldigi()
 f.set_modem("BPSK31")

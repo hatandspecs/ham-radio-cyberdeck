@@ -35,7 +35,11 @@ TO_LOG = "\x10"         # ^P: one stop along the ring, the log
 # MODEM, a CARRIER or the digimode status line has to hop there first --
 # otherwise `display[0]` is the station fields' own header and the mode keys
 # land on a screen that has no modem.
-TO_DIGI = "\x0f"
+# **Two backwards hops, not one.** WSPR made the ring four areas --
+# settings | log | digimodes | WSPR -- so one `^O` back from the boot
+# screen now wraps onto WSPR and every scenario below read the wrong
+# screen. Named here so the next area costs one edit per file.
+TO_DIGI = "\x0f\x0f"
 
 
 if __name__ == "__main__":

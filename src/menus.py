@@ -647,7 +647,9 @@ def wspr_menu(state=None):
 
         # -- the schedule --------------------------------------------------
         ("p", f"Transmit percent             {st.get('tx_percent', 0)}%"),
-        ("o", f"Time-out                     "
+        # "Time-out" alone did not say time out of WHAT -- the slot, the
+        # decode and the session all have clocks. It is the session's.
+        ("o", f"Session ToT                  "
               + (f"{tot} min" if tot else "off")),
         ("u", f"Upload spots                 {st.get('upload') or 'off'}"),
 
@@ -660,6 +662,11 @@ def wspr_menu(state=None):
     # Only with a radio that can be tested into. Keyed and time-bounded, so
     # it sits behind a menu rather than under a key that can be brushed.
     items.append(("c", "Calibrate transmit audio     a steady tone"))
+    # Only worth a row when there is a rotation to check, but harmless with
+    # one band and clearer than a key that appears and disappears.
+    items.append(("k", f"Check hop bands for DATA-U   "
+                       f"{st.get('hop_count', 1)} band"
+                       f"{'' if st.get('hop_count', 1) == 1 else 's'}"))
     # Last, and named so nobody arrives in it by accident.
     items.append(("z", "Danger zone — clear spots"))
     return {
@@ -709,21 +716,29 @@ def wspr_band_menu(chosen=(), current=""):
     A band already in the rotation is marked `*` and the one in use is marked
     `<`.
 
-    **A number SELECTS that band alone; `+` then a number ADDS one to the
-    rotation.** One key for the common thing and two for the rarer one, the
-    same shape as the schema picker's `c+n` and `d+n`. It toggled membership
-    at first, which meant pressing 20 m from a default of 40 m produced a
-    two-band rotation rather than 20 m -- and an operator pressing a band
-    key means "go there".
+    **A number or Enter selects that band alone and tunes to it; Space
+    toggles the highlighted band in and out of the hop rotation.** `[*]`
+    marks a band in the rotation and `<` the one in use.
+
+    Two idioms came before this one. Membership-toggling on a bare number
+    meant pressing 20 m from a default of 40 m gave a two-band rotation
+    rather than 20 m, when an operator pressing a band key means "go
+    there". Replacing it with `+` then a number fixed that and introduced a
+    worse problem: a two-key prefix with no visible state between the keys,
+    reported as undiscoverable in exactly those terms. Space acts on the row
+    the arrows are already on, and the `[*]` is the checkbox it implies.
     """
     import wsprbands
     picked = set(chosen or ())
     items = []
     for key, label, dial in wsprbands.BANDS:
-        mark = "*" if label in picked else " "
+        mark = "[*]" if label in picked else "[ ]"
         here = " <" if label == current else ""
         items.append((key, f"{mark} {label:<6} "
                            f"{dial / 1_000_000:>11.6f} MHz{here}"))
-    return {"title": "WSPR BAND", "items": items,
-            "footer": "Esc back  Enter select  +n add to rotation  "
-                      "* in it"}
+    title = "WSPR BAND"
+    if len(picked) > 1:
+        title += f" — hopping {len(picked)}"
+    return {"title": title, "items": items,
+            "footer": "Esc back  Enter use this one  "
+                      "Space hop on/off  [*] in rotation"}

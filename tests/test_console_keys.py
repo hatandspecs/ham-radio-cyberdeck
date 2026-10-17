@@ -75,11 +75,20 @@ if __name__ == "__main__":
     # And the behavior, driven through the real program under TERM=linux.
     # ^O first: the deck opens on DECK & RIG and the memories are a digimode
     # key, inserted into the line being composed on the conversation screen.
-    inserted = run(keys=["\x0f", f5], term="linux")
+    # TO_CHAT, not a bare "\x0f": the ring has four areas since WSPR, so one
+    # hop back from the boot screen lands on WSPR and F5 goes nowhere.
+    inserted = run(keys=[TO_CHAT, f5], term="linux")
     check("F5 inserts a memory on the console",
           CQ in compose_of(inserted), compose_of(inserted))
 
-    undone = run(keys=[f5, b"\x1a"], term="linux")
+    # **These three reach the conversation first too.** Without the hop F5
+    # never inserts anything, so "the memory is gone" is true before Ctrl-Z
+    # is pressed and the case passes whether undo works or not. It is only
+    # an undo test if the thing being undone was there to start with, which
+    # the first check below establishes.
+    undone = run(keys=[TO_CHAT, f5, b"\x1a"], term="linux")
+    check("the memory was there to undo", CQ in compose_of(inserted),
+          compose_of(inserted))
     check("Ctrl-Z undoes it on the console",
           CQ not in compose_of(undone), compose_of(undone))
 
@@ -92,7 +101,10 @@ if __name__ == "__main__":
     # The same two steps under xterm, so a fix that works only on the console
     # is caught as well. Both terminals have to reach the same handler.
     x_f5 = cap("kf5", "xterm")
-    x_undone = run(keys=[x_f5, b"\x1a"], term="xterm")
+    x_inserted = run(keys=[TO_CHAT, x_f5], term="xterm")
+    check("F5 inserts a memory under xterm too",
+          CQ in compose_of(x_inserted), compose_of(x_inserted))
+    x_undone = run(keys=[TO_CHAT, x_f5, b"\x1a"], term="xterm")
     check("Ctrl-Z still undoes it under xterm",
           CQ not in compose_of(x_undone), compose_of(x_undone))
 

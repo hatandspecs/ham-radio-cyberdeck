@@ -1618,7 +1618,8 @@ def no_keyboard_screen(bonded, width, height, tick=0, can_pair=True):
 #: How many spots fit before the footer and the state block. Derived in
 #: `wspr_screen` from the height, named here so a test can reason about it.
 WSPR_HEADER_ROWS = 2
-WSPR_STATE_ROWS = 4
+WSPR_STATE_ROWS = 5
+WSPR_SLOT_CELLS = 14
 
 
 def _pad(segments, width):
@@ -1692,8 +1693,43 @@ def wspr_power(watts, dbm, exact, ceiling=0, fallback=False):
         out.append((" no dBm ", "dim"))
         return out
     out.append((f" {dbm} dBm ", "reverse" if exact else ""))
-    if not exact:
-        out.append((" snapped", "dim"))
+    # The word says which STATE the reading is in, not what happened to it.
+    # It read "snapped" only when the value had been snapped DOWN, which an
+    # operator reasonably read as "this one is on a snap point" -- the exact
+    # opposite of what it meant. Both states are now named.
+    out.append((" snapped" if exact else " not snapped", "dim"))
+    return out
+
+
+def wspr_slot(seconds_in, capture=True, to_next=None, next_tx=None,
+              slot_seconds=120.0, cells=WSPR_SLOT_CELLS):
+    """Where the clock is inside the two-minute slot.
+
+    WSPR is a schedule before it is a mode: a transmission starts one second
+    after an even minute and a capture runs 114 of the 120, so an operator
+    who cannot see the slot cannot tell a dead band from a deck that is
+    simply between slots. WSJT-X puts this on screen and the deck was asked
+    for the same.
+
+    The bar fills over the slot and the figures are the position and the
+    time to the next one, both as m:ss. `capture` shades the part of the
+    slot where the receiver is actually listening.
+    """
+    pos = max(0.0, min(float(slot_seconds), float(seconds_in)))
+    filled = int(round(cells * pos / float(slot_seconds))) if slot_seconds else 0
+    filled = max(0, min(cells, filled))
+    out = [(" slot ", "dim"),
+           (f"{int(pos) // 60}:{int(pos) % 60:02d}", "")]
+    out.append((" [", "dim"))
+    out.append(("#" * filled, "bright" if capture else ""))
+    out.append(("." * (cells - filled), "dim"))
+    out.append(("]", "dim"))
+    if to_next is not None:
+        out.append((f" {int(to_next) // 60}:{int(to_next) % 60:02d} to next",
+                    "dim"))
+    if next_tx is not None:
+        out.append(("  TX next" if next_tx else "  RX next",
+                    "reverse" if next_tx else "dim"))
     return out
 
 
@@ -1720,8 +1756,13 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
         left += f"  {band}"
         if dial:
             left += f"  {frequency(dial)}"
-        if st.get("hopping"):
-            left += "  hop"
+    # Band hopping is named whether it is on or off. "hop" appearing only
+    # when it was on meant its absence had to be read as "off" rather than
+    # "this deck has no such thing", which is not a distinction a header
+    # should leave to the reader.
+    hop_count = int(st.get("hop_count") or 0)
+    if band:
+        left += f"  hop {hop_count}" if st.get("hopping") else "  no hop"
     right = ""
     if st.get("next_tx") is not None:
         right = "next: TX  " if st.get("next_tx") else "next: RX  "
@@ -1735,18 +1776,35 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     # two header rows, the column heading, the rule above the state block,
     # four state rows, and the footer.
     body = max(1, height - WSPR_HEADER_ROWS - 1 - 1 - WSPR_STATE_ROWS - 1)
-    heading = f" {'UTC':<5} {'dB':>4} {'CALL':<10}{'GRID':<7}{'dBm':>4}  KM"
+    heading = (f" {'UTC':<4} {'dB':>4} {'CALL':<10}{'GRID':<7}"
+               f"{'dBm':>4} {'BAND':<6}{'KM':>5}")
     out.append([(heading[:width].ljust(width), "dim")])
-    shown = list(spots)[:body]
-    for spot in shown:
+    # The arrows select and scroll. A session gathers hundreds of spots and
+    # the screen holds ten, so without this the older ones were logged and
+    # unreachable. `selected` is an index into `spots` as given -- newest
+    # first -- and the window follows it rather than the other way round.
+    allspots = list(spots)
+    sel = st.get("selected")
+    if sel is not None and allspots:
+        sel = max(0, min(len(allspots) - 1, int(sel)))
+        top = max(0, sel - body + 1) if sel >= body else 0
+    else:
+        sel, top = None, 0
+    shown = allspots[top:top + body]
+    for row, spot in enumerate(shown):
         when = str(spot.get("when", ""))[11:16] or str(spot.get("hhmm", ""))
         km = spot.get("km")
-        line = (f" {when:<5} {spot.get('snr', ''):>4} "
+        # The band is on the row because band hopping makes two spots an
+        # hour apart answer different questions, and a session that hopped
+        # is unreadable without it.
+        here = sel is not None and top + row == sel
+        line = (f"{'\u25b8' if here else ' '}{when:<5} {spot.get('snr', ''):>4} "
                 f"{str(spot.get('call', '')):<10}"
                 f"{str(spot.get('grid', '') or '-'):<7}"
-                f"{spot.get('dbm', ''):>4}"
-                f"{('  ' + str(km)) if km else ''}")
-        out.append([(line[:width].ljust(width), "")])
+                f"{spot.get('dbm', ''):>4} "
+                f"{str(spot.get('band', '') or ''):<6}"
+                f"{(str(km) if km else ''):>5}")
+        out.append([(line[:width].ljust(width), "reverse" if here else "")])
     while len(out) < WSPR_HEADER_ROWS + 1 + body:
         out.append([(" " * width, "")])
 
@@ -1757,11 +1815,22 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     out.append(_pad(wspr_power(st.get("watts"), st.get("dbm"),
                                st.get("dbm_exact"), st.get("ceiling", 0),
                                st.get("power_fallback")), width))
+    if st.get("slot_in") is not None:
+        out.append(_pad(wspr_slot(st.get("slot_in"),
+                                  capture=bool(st.get("in_capture", True)),
+                                  to_next=st.get("slot_to_next"),
+                                  next_tx=st.get("next_tx")), width))
+    else:
+        out.append([(" slot  —  not running".ljust(width)[:width], "dim")])
+
     counts = (f" heard {st.get('heard', 0)}  sent {st.get('sent', 0)}"
               f"  upload {st.get('upload') or 'off'}")
     tot = st.get("timeout_left")
     if tot is not None:
-        counts += f"   {int(tot) // 60}:{int(tot) % 60:02d} left"
+        # Named as the SESSION's timer. "left" on its own was read as the
+        # time left in something else -- the slot, most plausibly, since a
+        # slot clock sits directly above it now.
+        counts += f"   session {int(tot) // 60}:{int(tot) % 60:02d} left"
     if st.get("decoding"):
         counts += "   decoding"
     out.append([(counts[:width].ljust(width), "dim")])
