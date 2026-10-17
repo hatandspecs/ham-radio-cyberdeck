@@ -254,6 +254,10 @@ class Deck:
         # taken on every draw. See `_wspr_power`.
         self._wspr_power_cache = (None, None, False)
         self._wspr_power_at = 0.0
+        # Spawned `systemctl` calls waiting to be reaped. Never waited on:
+        # a stop that queues behind systemd's own start job takes tens of
+        # seconds, and the draw loop cannot be in that queue.
+        self._service_jobs = []
         # band -> the mode it was in before WSPR changed it. Only bands
         # actually changed appear, so leaving puts back exactly what was
         # taken and nothing else.
@@ -2284,42 +2288,6 @@ class Deck:
         self._wspr_give_audio()
         self._wspr_note(f"WSPR stopped{' — ' + why if why else ''}")
 
-    def _service(self, action, unit):
-        """systemctl, reporting rather than raising.
-
-        WSPR is the only thing on the deck that stops another service, and it
-        has to put it back -- so a failure here is reported and never raised:
-        the caller is usually in the middle of giving the deck back.
-        """
-        import subprocess
-        try:
-            # **No `sudo`.** polkit authorises this, through
-            # `polkit/10-cyberdeck-services.rules` — the same route the WiFi
-            # screen uses and for the same reason. A sudoers rule for the
-            # same two commands works from a login shell and fails from
-            # inside the service, which has no tty, no PAM session, and a
-            # `CapabilityBoundingSet` narrowed to CAP_SYS_TTY_CONFIG.
-            r = subprocess.run(["systemctl", action, unit],
-                               capture_output=True, text=True, timeout=60,
-                               stdin=subprocess.DEVNULL)
-            if r.returncode != 0:
-                # A silent False here cost a session of dead captures: fldigi
-                # kept the codec and every `arecord` failed "Device or
-                # resource busy" with nothing on screen to say why. The
-                # message names the file that fixes it, as `wifi.py` does for
-                # its own polkit rule.
-                why = (r.stderr or r.stdout or "").strip().splitlines()
-                tail = why[-1][:52] if why else f"exit {r.returncode}"
-                if "polkit" in tail.lower() or "authoriz" in tail.lower() \
-                        or "authentication" in tail.lower():
-                    tail = "not authorized — see polkit/10-cyberdeck-" \
-                           "services.rules"
-                self._wspr_note(f"systemctl {action} {unit}: {tail}")
-            return r.returncode == 0
-        except Exception as exc:
-            self._wspr_note(f"systemctl {action} {unit}: {exc}")
-            return False
-
     def _fldigi_holds_audio(self):
         """Whether the fldigi service is still up, and so still holding the
         USB codec.
@@ -2331,84 +2299,90 @@ class Deck:
         """
         import subprocess
         try:
+            # A short timeout: this is asked from the draw path, and
+            # `is-active` answers in milliseconds or not at all.
             r = subprocess.run(
                 ["systemctl", "is-active", "--quiet", "cyberdeck-fldigi"],
-                timeout=10, stdin=subprocess.DEVNULL,
+                timeout=3, stdin=subprocess.DEVNULL,
                 capture_output=True)
             return r.returncode == 0
         except Exception:
             return False
 
     def _wspr_take_audio(self):
-        """Stop fldigi so the exclusive codec is free. Returns whether it is.
+        """Ask systemd to stop fldigi. **Does not wait for it.**
 
-        One place, because three things need it now -- starting a session,
-        the receive calibration, and anything else that opens the card --
-        and because the failure mode is subtle enough that it must not be
-        written twice. See §2 and `docs/wspr_deploy.md` §4b.
+        This used to stop fldigi and then block until the codec was free,
+        polling with `time.sleep` and retrying -- on the keypress path, so
+        the draw loop stopped. Right after a reboot, when `cyberdeck-ui`
+        has just restarted and systemd is still starting fldigi because of
+        the UI's own `Wants=`, a `stop` queues behind that start job: the
+        panel froze for 30 to 40 seconds on the first toggle.
+        **Nothing on a keypress path may wait on systemd.**
+
+        So the command is spawned and the question "is the codec free" is
+        asked again before each capture, which is where the answer actually
+        matters. There is room for that: the scheduler skips the slot it is
+        already inside, so the first window is up to two minutes away.
         """
         if not self._fldigi_holds_audio():
             return True
-        self.wspr_fldigi_stopped = self._service("stop", "cyberdeck-fldigi")
-        if not self.wspr_fldigi_stopped:
-            self._wspr_note("could not stop fldigi — see "
-                            "docs/wspr_deploy.md §4b")
-            return False
-        # **Verified, and verified again after a pause.** Two claims are
-        # being distinguished, and the code used to conflate them: that
-        # systemd has stopped the unit, and that the card is actually free
-        # and stays free.
-        #
-        # `Restart=always` does NOT fire after a deliberate stop -- systemd
-        # clears the restart -- so that is not the mechanism. What can bring
-        # fldigi back is `cyberdeck-ui.service`'s own
-        # `Wants=cyberdeck-fldigi.service`: if the UI is restarted, systemd
-        # satisfies that dependency and starts fldigi again, which is
-        # exactly the window just after a deploy. A stop can also race a
-        # start job already queued from that.
-        #
-        # The reported symptom was "nothing works the first time I turn WSPR
-        # on, and it works after I toggle it off and on". This does not prove
-        # the cause -- it makes the deck check rather than assume, and say so
-        # when the check fails, which is what was missing either way.
-        for attempt in (0, 1):
-            if not self._wspr_wait_quiet():
-                if attempt:
-                    self._wspr_note("fldigi keeps restarting and holding "
-                                    "the audio — WSPR cannot capture")
-                    return False
-                self._service("stop", "cyberdeck-fldigi")
-                continue
-            return True
-        return False
-
-    def _wspr_wait_quiet(self, seconds=6.0, step=0.25):
-        """Wait for fldigi to be gone and stay gone. Polled, not slept blind.
-
-        Two separate questions: has it stopped, and is it still stopped a
-        moment later. A unit with `Restart=always` can answer yes to the
-        first and no to the second.
-        """
-        deadline = time.monotonic() + float(seconds)
-        while time.monotonic() < deadline:
-            if not self._fldigi_holds_audio():
-                break
-            time.sleep(step)
-        else:
-            return False
-        # Still gone after a pause long enough for a restart to have fired.
-        settle = time.monotonic() + 1.0
-        while time.monotonic() < settle:
-            if self._fldigi_holds_audio():
-                return False
-            time.sleep(step)
-        return True
+        self.wspr_fldigi_stopped = self._service_async(
+            "stop", "cyberdeck-fldigi")
+        return self.wspr_fldigi_stopped
 
     def _wspr_give_audio(self):
-        """Start fldigi again, if this code is what stopped it."""
+        """Start fldigi again, if this code is what stopped it. Also async:
+        leaving must not block either."""
         if self.wspr_fldigi_stopped:
-            self._service("start", "cyberdeck-fldigi")
+            self._service_async("start", "cyberdeck-fldigi")
             self.wspr_fldigi_stopped = False
+
+    def _service_async(self, action, unit):
+        """Spawn systemctl and return. Reaped by `_service_reap`.
+
+        Returns whether the command was SPAWNED, not whether it worked --
+        the same distinction `rigctld_client.set_ptt` draws, and for the
+        same reason: the answer arrives later.
+        """
+        import subprocess
+        try:
+            proc = subprocess.Popen(
+                ["systemctl", action, unit],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                text=True, stdin=subprocess.DEVNULL)
+        except Exception as exc:
+            self._wspr_note(f"systemctl {action} {unit}: {exc}")
+            return False
+        self._service_jobs.append((proc, action, unit))
+        del self._service_jobs[8:]
+        return True
+
+    def _service_reap(self):
+        """Collect finished systemctl jobs and report the ones that failed.
+
+        Polled from `_wspr_poll`, so a failure is reported a fraction of a
+        second after it happens rather than being waited for.
+        """
+        for job in list(self._service_jobs):
+            proc, action, unit = job
+            if proc.poll() is None:
+                continue
+            self._service_jobs.remove(job)
+            if proc.returncode == 0:
+                continue
+            why = ""
+            try:
+                why = (proc.stderr.read() or "").strip().splitlines()[-1]
+            except Exception:
+                pass
+            if "polkit" in why.lower() or "authoriz" in why.lower() \
+                    or "authentication" in why.lower():
+                why = ("not authorized — see "
+                       "polkit/10-cyberdeck-services.rules")
+            self._wspr_note(f"systemctl {action} {unit}: "
+                            + (why[:52] if why else
+                               f"exit {proc.returncode}"))
 
     def _wspr_data_mode(self):
         """The mode name to put the radio in for WSPR.
@@ -2510,6 +2484,7 @@ class Deck:
         if self.wspr is None:
             return
         now = time.time()
+        self._service_reap()
         for action, what in self.wspr.tick(now):
             if action == "stop":
                 self._wspr_stop(what)
@@ -2560,8 +2535,20 @@ class Deck:
             self._wspr_claim_mode(band)
 
     def _wspr_capture(self, band):
+        """Begin a window, unless fldigi still has the codec.
+
+        **This is where "is the audio free" is answered**, not on the
+        keypress that started the session -- see `_wspr_take_audio`. Asking
+        here costs one `systemctl is-active` per two minutes and keeps the
+        draw loop out of systemd's way entirely. A window skipped because
+        the codec was still busy says so and the next slot tries again.
+        """
         import datetime as _dt
         import wsprbands
+        if self._fldigi_holds_audio():
+            self._wspr_note("fldigi still has the audio — skipping this "
+                            "window (see docs/wspr_deploy.md §4b)")
+            return
         when = _dt.datetime.now(_dt.timezone.utc)
         self.wspr_rx.start_capture(when, band or self.wspr_band,
                                    wsprbands.dial_hz(band
