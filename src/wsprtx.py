@@ -44,6 +44,14 @@ TX_TIMEOUT_S = 118.0
 #: A test tone runs for this long unless stopped. Short deliberately: it
 #: exists for setting audio drive against a power meter, and a tone that
 #: outlives the operator's attention is a transmitter left keyed.
+# Transmit amplitude as a percent of full digital scale. 50 is what the
+# first build sent unconditionally; the deck measured close to 10 W with the
+# radio set to 5 W and the ALC half-scale, so this is the control that was
+# missing rather than a refinement. The floor is 1 and not 0 because a level
+# of nothing is an unkeyed transmitter dressed up as a transmission.
+DEFAULT_LEVEL = 50
+MIN_LEVEL = 1
+
 TEST_TONE_S = 10.0
 
 DEFAULT_DEVICE = "plughw:1,0"
@@ -107,10 +115,16 @@ class Transmitter:
     """
 
     def __init__(self, workdir, rig=None, device=DEFAULT_DEVICE, spawn=None,
-                 now=None):
+                 now=None, level=DEFAULT_LEVEL):
         self.workdir = workdir
         self.rig = rig
         self.device = device
+        # **Digital amplitude, WSPR's alone.** The alternative was the ALSA
+        # playback mixer, which fldigi shares -- turning WSPR down that way
+        # turns the digimodes down with it. Scaling the samples as they are
+        # rendered cannot touch anything else, because nothing else plays
+        # this file.
+        self.level = level
         self._spawn = spawn or self._real_spawn
         self._now = now or time.monotonic
         self._proc = None
@@ -139,6 +153,30 @@ class Transmitter:
 
     # -- the audio --------------------------------------------------------
 
+    @property
+    def level(self):
+        """Transmit amplitude as a percent of full scale, 1 to 100."""
+        return self._level
+
+    @level.setter
+    def level(self, pct):
+        try:
+            pct = int(round(float(pct)))
+        except (TypeError, ValueError):
+            pct = DEFAULT_LEVEL
+        pct = max(MIN_LEVEL, min(100, pct))
+        # A level change has to invalidate the rendered audio, or the next
+        # beacon goes out at the old amplitude and the operator watches a
+        # power meter that does not move.
+        if getattr(self, "_level", None) != pct:
+            self._level = pct
+            self.forget_cache()
+
+    @property
+    def amplitude(self):
+        """The level as the renderers want it: 0.0 to 1.0."""
+        return self._level / 100.0
+
     def beacon_wav(self, call, grid, dbm, base_hz=None):
         """The rendered transmission, from cache when it can be.
 
@@ -148,7 +186,8 @@ class Transmitter:
         rather than beaconing the old wattage.
         """
         base_hz = base_hz if base_hz is not None else 1500.0
-        key = (str(call).upper(), str(grid).upper(), int(dbm), float(base_hz))
+        key = (str(call).upper(), str(grid).upper(), int(dbm), float(base_hz),
+               self._level)
         if key == self._cache_key and self._cache_path \
                 and os.path.exists(self._cache_path):
             return self._cache_path
@@ -157,7 +196,8 @@ class Transmitter:
         # one, and padding the file is simpler and more reliable than timing
         # the start of playback to a tenth of a second.
         lead = [0.0] * int(wspr.SAMPLE_RATE * TX_OFFSET_S)
-        write_wav(path, lead + wspr.samples(call, grid, dbm, base_hz=base_hz))
+        write_wav(path, lead + wspr.samples(call, grid, dbm, base_hz=base_hz,
+                                            amplitude=self.amplitude))
         self._cache_key, self._cache_path = key, path
         return path
 
@@ -244,10 +284,16 @@ class Transmitter:
         return self.send(path, SENDING, TX_TIMEOUT_S)
 
     def test_tone(self, hz=1500.0, seconds=TEST_TONE_S):
-        """A steady tone for setting drive. Time-bounded by construction."""
+        """A steady tone for setting drive. Time-bounded by construction.
+
+        At the SAME amplitude as a beacon, which is the only thing that makes
+        it a calibration: a tone sent at a level the beacon will not use
+        sets the drive for a transmission that never happens.
+        """
         path = os.path.join(self.workdir, "tone.wav")
         try:
-            write_wav(path, tone_samples(hz, seconds))
+            write_wav(path, tone_samples(hz, seconds,
+                                         amplitude=self.amplitude))
         except Exception as exc:
             self.failed += 1
             self.last_error = f"tone: {exc}"

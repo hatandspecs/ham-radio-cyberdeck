@@ -1618,7 +1618,7 @@ def no_keyboard_screen(bonded, width, height, tick=0, can_pair=True):
 #: How many spots fit before the footer and the state block. Derived in
 #: `wspr_screen` from the height, named here so a test can reason about it.
 WSPR_HEADER_ROWS = 2
-WSPR_STATE_ROWS = 5
+WSPR_STATE_ROWS = 6
 WSPR_SLOT_CELLS = 14
 
 
@@ -1662,6 +1662,10 @@ def wspr_toggles(state):
                       ("TX NEXT", state.get("tx_next"))):
         out.append((f" {label} ", "reverse" if on else "dim"))
         out.append((" ", ""))
+    # Transmit armed while the deck is inhibited is the one combination that
+    # reads as ready and is not, so the toggles say so where they are read.
+    if state.get("inhibited"):
+        out.append((" INHIBITED ", "bright"))
     return out
 
 
@@ -1733,6 +1737,32 @@ def wspr_slot(seconds_in, capture=True, to_next=None, next_tx=None,
     return out
 
 
+def wspr_levels(tx_level=None, rx_gain=None, dbfs=None):
+    """The two audio levels and what the last capture measured.
+
+    Transmit is a digital amplitude WSPR renders at; receive is the capture
+    mixer WSPR sets while it owns the codec. Both are on screen because both
+    are set from the deck and neither is visible anywhere else -- and the
+    measured figure is what says whether the receive one is right.
+
+    `dbfs` is the WSJT-X analog: roughly -30 to -20 is healthy, and the
+    reading is marked when it falls outside that.
+    """
+    out = []
+    if tx_level is not None:
+        out.append((f" TX audio {int(tx_level)}%", ""))
+    if rx_gain is not None:
+        out.append((f"  RX gain {int(rx_gain)}%", ""))
+    if dbfs is None:
+        out.append(("  level —", "dim"))
+        return out
+    ok = -32.0 <= float(dbfs) <= -18.0
+    out.append((f"  level {float(dbfs):.0f} dBFS", "" if ok else "reverse"))
+    out.append(("" if ok else
+                (" quiet" if float(dbfs) < -32.0 else " hot"), "dim"))
+    return out
+
+
 def wspr_screen(spots, width, height, state=None, message="", footer=""):
     """The WSPR screen: what is being heard, and what the deck is doing.
 
@@ -1763,8 +1793,17 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
     hop_count = int(st.get("hop_count") or 0)
     if band:
         left += f"  hop {hop_count}" if st.get("hopping") else "  no hop"
+    # **TX INHIBITED displaces "next: TX".** The digimode and settings
+    # screens carry this in the same corner and WSPR had nothing: an
+    # operator armed transmit, was refused, and had no way to see why.
+    #
+    # It displaces rather than crowds because at 66 columns both do not fit,
+    # and because "next: TX" beside an inhibit is a false statement -- that
+    # slot will not transmit.
     right = ""
-    if st.get("next_tx") is not None:
+    if st.get("inhibited"):
+        right = "TX INHIBITED  "
+    elif st.get("next_tx") is not None:
         right = "next: TX  " if st.get("next_tx") else "next: RX  "
     clock = str(st.get("clock") or "")
     right += clock
@@ -1822,6 +1861,9 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
                                   next_tx=st.get("next_tx")), width))
     else:
         out.append([(" slot  —  not running".ljust(width)[:width], "dim")])
+
+    out.append(_pad(wspr_levels(st.get("tx_level"), st.get("rx_gain"),
+                                st.get("dbfs")), width))
 
     counts = (f" heard {st.get('heard', 0)}  sent {st.get('sent', 0)}"
               f"  upload {st.get('upload') or 'off'}")

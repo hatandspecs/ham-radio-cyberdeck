@@ -275,4 +275,65 @@ equals("aplay, quiet, on the same codec",
        wsprtx.aplay_command("/tmp/b.wav"),
        ["aplay", "-D", "plughw:1,0", "-q", "/tmp/b.wav"])
 
+print("\nthe transmit level scales the audio, and only WSPR's audio")
+# The deck measured close to 10 W with the radio set to 5 W and the ALC
+# half-scale, so this is the control that was missing. It is a digital
+# amplitude and NOT the playback mixer, because fldigi shares that one and
+# turning WSPR down there turns the digimodes down with it.
+import struct
+import wave
+
+def peak_of(path):
+    with wave.open(path) as w:
+        frames = w.readframes(w.getnframes())
+    vals = struct.unpack(f"<{len(frames) // 2}h", frames)
+    return max(abs(v) for v in vals)
+
+with tempfile.TemporaryDirectory() as tmp:
+    tx = wsprtx.Transmitter(tmp, rig=None, spawn=lambda c, **k: FakeProc())
+    equals("the default level is the one config ships", tx.level,
+           wsprtx.DEFAULT_LEVEL)
+    tx.level = 50
+    loud = peak_of(tx.beacon_wav("KD3CCO", "FN10", 37))
+    tx.level = 25
+    quiet = peak_of(tx.beacon_wav("KD3CCO", "FN10", 37))
+    check("half the level is half the amplitude",
+          0.45 < quiet / float(loud) < 0.55, f"{quiet} vs {loud}")
+    tx.level = 100
+    full = peak_of(tx.beacon_wav("KD3CCO", "FN10", 37))
+    check("100% stays inside 16-bit full scale", full <= 32767, str(full))
+
+    print("\na level change invalidates the rendered audio")
+    # Otherwise the next beacon goes out at the old amplitude and the
+    # operator watches a power meter that does not move.
+    tx.level = 50
+    first = tx.beacon_wav("KD3CCO", "FN10", 37)
+    again = tx.beacon_wav("KD3CCO", "FN10", 37)
+    equals("the same level re-uses the render", first, again)
+    before = peak_of(first)
+    tx.level = 20
+    after = peak_of(tx.beacon_wav("KD3CCO", "FN10", 37))
+    check("a changed level re-renders", after < before, f"{after} {before}")
+
+    print("\nthe level is clamped, and never to silence")
+    tx.level = 0
+    equals("zero becomes the floor", tx.level, wsprtx.MIN_LEVEL)
+    tx.level = 500
+    equals("and anything over full scale is full scale", tx.level, 100)
+    tx.level = "not a number"
+    equals("nonsense falls back to the default", tx.level,
+           wsprtx.DEFAULT_LEVEL)
+
+    print("\nthe test tone is sent at the beacon's level")
+    # A tone at a level the beacon will not use sets the drive for a
+    # transmission that never happens.
+    tx.level = 30
+    tx.test_tone(seconds=0.2)
+    tone = peak_of(os.path.join(tmp, "tone.wav"))
+    tx.stop()
+    beacon = peak_of(tx.beacon_wav("KD3CCO", "FN10", 37))
+    check("the tone and the beacon are within a few percent",
+          abs(tone - beacon) / float(beacon) < 0.25,
+          f"tone={tone} beacon={beacon}")
+
 report()

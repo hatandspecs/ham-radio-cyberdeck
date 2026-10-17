@@ -216,6 +216,8 @@ class Deck:
         self.wspr_up = None           # wsprnet.Uploader
         self.wspr_spots = []          # newest first, for the screen
         self.wspr_sel = None          # None follows the newest spot
+        self.wspr_gain = None         # the capture mixer, built on first use
+        self.wspr_dbfs = None         # what the last capture measured
         self.wspr_message = ""
         self.wspr_band = ""
         self.wspr_fldigi_stopped = False
@@ -2133,6 +2135,16 @@ class Deck:
         if self.wspr_tx is None:
             self.wspr_tx = wsprtx.Transmitter(self._wspr_dir(),
                                               rig=self._log_rig())
+        # Reapplied on every build, not only on the first: the setting is
+        # changed from the menu and the transmitter is not rebuilt for it.
+        # The setter drops the rendered audio when the value moves, so the
+        # next beacon goes out at the new amplitude.
+        self.wspr_tx.level = self.cfg.get("WSPR_TX_LEVEL", 50)
+        if self.wspr_gain is None:
+            import wsprgain
+            self.wspr_gain = wsprgain.Gain(
+                card=self.cfg.get("WSPR_RX_CARD", 1),
+                control=self.cfg.get("WSPR_RX_CONTROL", "Mic"))
         if self.wspr_up is None:
             self.wspr_up = wsprnet.Uploader()
 
@@ -2169,9 +2181,17 @@ class Deck:
             self._wspr_note("fldigi still holds the audio — WSPR cannot "
                             "capture (see docs/wspr_deploy.md §4b)")
             return
+        # The capture mixer, now that fldigi is down and nothing else is
+        # listening. The previous value is remembered and put back by
+        # `_wspr_stop`, which is what makes this WSPR's level rather than a
+        # change to the station.
+        why = self.wspr_gain.apply(self.cfg.get("WSPR_RX_GAIN", 70))
+        if why:
+            self._wspr_note(f"capture gain: {why}")
         self.wspr.start(time.time())
         self.wspr_spots = []
         self.wspr_sel = None
+        self.wspr_dbfs = None
         self._wspr_note(f"WSPR started on {self.wspr_band} — "
                         f"^O ^P are locked until it stops")
 
@@ -2188,6 +2208,11 @@ class Deck:
             self.wspr_rx.stop()
         if self.wspr is not None:
             self.wspr.stop()
+        # Before fldigi comes back, so the level it finds is the one it had.
+        if self.wspr_gain is not None:
+            why = self.wspr_gain.restore()
+            if why:
+                self._wspr_note(f"could not restore the capture gain: {why}")
         if self.wspr_fldigi_stopped:
             self._service("start", "cyberdeck-fldigi")
             self.wspr_fldigi_stopped = False
@@ -2419,6 +2444,14 @@ class Deck:
             kind = event[0]
             if kind == "captured":
                 path, band = event[1], event[2]
+                # The WSJT-X analog: the figure that says whether the
+                # capture gain is right. Measured on the file that was just
+                # written, so it costs no extra audio handling, and strided
+                # so a 114-second window is not walked sample by sample on a
+                # 512 MB board.
+                import wsprgain
+                level = wsprgain.level_of(path)
+                self.wspr_dbfs = level[2] if level else None
                 if self.wspr.decode:
                     self.wspr_rx.start_decode(path, band,
                                               wsprbands.dial_hz(band))
@@ -3056,6 +3089,12 @@ class Deck:
             "timeout_left": (sched.timeout_remaining(now)
                              if sched else None),
             "decoding": bool(self.wspr_rx and self.wspr_rx.busy_decoding),
+            # The inhibit, which this screen did not show at all: transmit
+            # was refused and nothing on screen said why.
+            "inhibited": bool(self.session.inhibited),
+            "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
+            "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+            "dbfs": self.wspr_dbfs,
         }
         # The arrows are advertised: a key that scrolls a list nobody knows
         # scrolls is a key that does not exist. Both forms fit 66 columns,
@@ -4144,6 +4183,9 @@ class Deck:
                 "hopping": len(bands) > 1, "hop_count": len(bands),
                 "tx_percent": self.cfg.get("WSPR_TX_PERCENT", 20),
                 "timeout_minutes": self.cfg.get("WSPR_TIMEOUT_MIN", 60),
+                "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
+                "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+                "dbfs": self.wspr_dbfs,
                 "upload": menus and wsprnet.upload_state(
                     self.cfg.get("WSPR_UPLOAD") == "yes", self._online(),
                     self.wspr_running),
@@ -4930,6 +4972,39 @@ class Deck:
                     "there is a network" if on else "spot upload off")
             elif key == "f":
                 self._open_editor("WSPR_LOG_PATH", "Spot log")
+            elif key in ("l", "g"):
+                # Cycled rather than prompted, as the transmit percent is:
+                # these are adjusted by ear against a power meter or a dBFS
+                # reading, which is a "try the next one down" operation and
+                # not a number anybody knows in advance.
+                order = (5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100)
+                setting = ("WSPR_TX_LEVEL" if key == "l"
+                           else "WSPR_RX_GAIN")
+                now = int(self.cfg.get(setting,
+                                       50 if key == "l" else 70))
+                nxt = (order[(order.index(now) + 1) % len(order)]
+                       if now in order else
+                       min(order, key=lambda v: abs(v - now)))
+                self.cfg[setting] = nxt
+                self._save_state()
+                if key == "l":
+                    # Straight onto the transmitter, which drops the
+                    # rendered audio so the next beacon uses the new level.
+                    if self.wspr_tx is not None:
+                        self.wspr_tx.level = nxt
+                    self._wspr_note(f"TX audio level {nxt}% — "
+                                    "send a test tone and read the meter")
+                else:
+                    note = f"RX capture gain {nxt}%"
+                    # Only live while WSPR owns the codec; otherwise fldigi
+                    # has it and the deck must not touch a control fldigi is
+                    # using. It applies at the next start.
+                    if self.wspr_running and self.wspr_gain is not None:
+                        why = self.wspr_gain.apply(nxt)
+                        note += f" — {why}" if why else " — set now"
+                    else:
+                        note += " — applies when WSPR starts"
+                    self._wspr_note(note)
             elif key == "c":
                 self._wspr_test_tone()
             elif key == "k":

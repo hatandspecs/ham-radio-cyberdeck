@@ -125,6 +125,18 @@ SCHEMA = {
                                     "runs and there is a network"),
     "WSPR_DEVICE":     ("plughw:1,0", str, "ALSA device for WSPR capture "
                                            "and playback"),
+    # Transmit amplitude, WSPR's own. Not the playback mixer, which fldigi
+    # shares: a level set there turns the digimodes down with it.
+    "WSPR_TX_LEVEL":   (50, int, "WSPR transmit audio level, percent of "
+                                 "full scale; lower it if the ALC engages"),
+    # And the capture side, which IS the shared mixer -- WSPR owns the codec
+    # exclusively while it runs, so it sets this on start and puts it back
+    # on stop rather than changing the station's level.
+    "WSPR_RX_GAIN":    (70, int, "WSPR capture gain, percent; restored when "
+                                 "WSPR stops"),
+    "WSPR_RX_CARD":    (1, int, "ALSA card number for the capture mixer"),
+    "WSPR_RX_CONTROL": ("Mic", str, "the capture control amixer names on "
+                                    "that card"),
     "WSPR_SESSION":    ("", str, "the WSPR session being logged; blank is "
                                  "no session"),
     "WSPR_SESSION_START": ("", str, "when that session began, pinned at "

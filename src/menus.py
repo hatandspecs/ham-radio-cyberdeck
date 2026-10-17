@@ -661,6 +661,15 @@ def wspr_menu(state=None):
     ]
     # Only with a radio that can be tested into. Keyed and time-bounded, so
     # it sits behind a menu rather than under a key that can be brushed.
+    # The two audio levels, beside the test tone that is used to set them.
+    # Transmit is WSPR's own digital amplitude; receive is the capture mixer,
+    # which WSPR sets while it owns the codec and puts back afterwards.
+    items.append(("l", f"TX audio level               "
+                       f"{st.get('tx_level', 50)}%"))
+    items.append(("g", f"RX capture gain              "
+                       f"{st.get('rx_gain', 70)}%"
+                       + (f" — {st.get('dbfs'):.0f} dBFS"
+                          if st.get("dbfs") is not None else "")))
     items.append(("c", "Calibrate transmit audio     a steady tone"))
     # Only worth a row when there is a rotation to check, but harmless with
     # one band and clearer than a key that appears and disappears.
