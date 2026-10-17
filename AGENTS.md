@@ -688,8 +688,46 @@ did, which is why the install needed no service restart.
    danger menu also cut a session name mid-word at 63 columns ("from Satu"),
    so the name moved to the footer — the same fault the log columns were
    rebuilt to avoid, found again in a new place.
-5. **The exclusive lock** — `AREA_LOCKED` plus stopping fldigi.
-6. **The TX test tone** and its time bound.
+5. ~~The exclusive lock.~~ **DONE** — WSPR is a fourth ring area and
+   `_ring` refuses to leave it while running, saying what is in the way
+   rather than doing nothing. `_wspr_start` stops `cyberdeck-fldigi` and
+   `_wspr_stop` restarts it, ordered so the transmitter is unkeyed first.
+6. ~~The TX test tone.~~ **DONE** — behind the menu and a confirmation that
+   states the current reading, time-bounded by construction.
+
+**All of it is wired.** `tests/test_wspr_panel.py` drives it through a real
+pty under both terminals. What is NOT tested there is starting WSPR for
+real, because that stops fldigi and opens the sound card — the start path's
+refusals are unit-tested instead.
+
+### Three bugs the pty test found that the pure tests could not
+
+All three were about key dispatch and screen transitions, which is the whole
+reason that file exists:
+
+* **The ring landed on WSPR without building the engines.** `_ring` set
+  `self.screen = WSPR` directly, so `self.wspr` stayed None and every toggle
+  reported `off` — including Decode, which defaults to on. It goes through
+  `_open_wspr()` now.
+* **`Esc` from the band picker went UP to the WSPR menu** when the operator
+  had pressed `F3` from the screen. Same inconsistency fixed once already on
+  the log screen: a picker reached from a screen returns to that screen.
+  `wspr_band` has no `MENU_PARENT` entry; `wspr_danger` keeps one, because
+  arriving there is deliberate.
+* **A band key ADDED to the rotation instead of going to that band.** So
+  pressing 20 m from a default of 40 m produced a two-band rotation. A
+  number now selects that band alone and `+` then a number adds one — the
+  same `c+n`/`d+n` shape the schema picker uses.
+
+### And a vacuous assertion, for the third time this session
+
+`check("the WSPR screen is drawn", "WSPR" in body)` **passed while the deck
+was refusing to start**, because the error it printed named
+`WSPR_LOG_PATH`. The underlying fault was mine: the WSPR settings were added
+with `cfg.setdefault` but never to `config.SCHEMA`, so a conf naming them was
+rejected outright. **A substring check against a screen that might be an
+error message is not an assertion.** It now checks the header's shape and
+that no `unknown setting` appears.
 
 ### What still needs the deck
 

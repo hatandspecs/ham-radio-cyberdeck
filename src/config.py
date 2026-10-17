@@ -100,6 +100,35 @@ SCHEMA = {
     "LOGGING":         ("no", str, "yes | no — the contact log, off by default"),
     "LOG_PATH":        ("", str, "contact log file; blank means "
                                  "~/.local/share/cyberdeck/qso.log"),
+
+    # -- WSPR -------------------------------------------------------------
+    #
+    # A spot is not a QSO, so none of this touches the contact log: the spot
+    # log is its own file. See docs/wspr_design.md §5.
+    "WSPR_LOG_PATH":   ("", str, "WSPR spot log; blank means wspr.log "
+                                 "beside the contact log"),
+    "WSPR_BANDS":      ("", str, "bands to hop through, comma separated, "
+                                 "e.g. '40 m,30 m'; one means no hopping, "
+                                 "blank means 40 m"),
+    # WSJT-X's default, matched rather than invented for the same reason
+    # wsprd is the decoder. Beaconing in every slot hears nothing and
+    # crowds a shared 200 Hz window.
+    "WSPR_TX_PERCENT": (20, int, "fraction of slots that beacon rather "
+                                 "than listen; 0 never transmits"),
+    # The one function that runs with nobody watching. The failure it
+    # prevents is a deck left beaconing on a park bench for an afternoon.
+    "WSPR_TIMEOUT_MIN": (60, int, "stop WSPR after this many minutes; "
+                                  "0 means no limit"),
+    # Armed, not automatic: this plus WSPR running plus a network are three
+    # conditions and all three are the operator's.
+    "WSPR_UPLOAD":     ("yes", str, "report spots to wsprnet while WSPR "
+                                    "runs and there is a network"),
+    "WSPR_DEVICE":     ("plughw:1,0", str, "ALSA device for WSPR capture "
+                                           "and playback"),
+    "WSPR_SESSION":    ("", str, "the WSPR session being logged; blank is "
+                                 "no session"),
+    "WSPR_SESSION_START": ("", str, "when that session began, pinned at "
+                                    "its start"),
     # How tall one contact is in the list. One line is the contact; two adds
     # where they are; three adds this station's side and the notes. A contact
     # always takes exactly this many rows, blank ones included, because the

@@ -119,6 +119,15 @@ MENU_PARENT = {
     # Esc out of the danger zone goes back to the logging menu, not out to the
     # screen: arriving there is deliberate and leaving should be too.
     "danger": "logging",
+    # The band picker has NO parent, so Esc closes it to the WSPR screen --
+    # the same rule the log's schema picker follows (§7i). An operator who
+    # pressed F3 from the screen expects Esc to return there, and sending
+    # them up to a menu they did not open is the inconsistency that was
+    # fixed once already on the log screen.
+    #
+    # The danger zone DOES go back to the WSPR menu: arriving there is
+    # deliberate and leaving should be, which is why `danger` does the same.
+    "wspr_danger": "wspr",
 }
 
 DISPLAY = {
@@ -687,3 +696,34 @@ def wspr_danger_menu(session="", heard=0, sent=0, total_heard=0,
         "footer": ("Esc back   ↑↓ move   Enter select   "
                    + (session[:24] if session else "no session")),
     }
+
+
+def wspr_band_menu(chosen=(), current=""):
+    """Pick the band, or the set to hop through.
+
+    The keys are `menus.BANDS`' own -- same eleven bands, same digits, `a`
+    for 70 cm -- so a band key an operator already knows means the same band
+    here. The FREQUENCIES differ: that table holds digimode calling
+    frequencies and this one WSPR dial frequencies.
+
+    A band already in the rotation is marked `*` and the one in use is marked
+    `<`.
+
+    **A number SELECTS that band alone; `+` then a number ADDS one to the
+    rotation.** One key for the common thing and two for the rarer one, the
+    same shape as the schema picker's `c+n` and `d+n`. It toggled membership
+    at first, which meant pressing 20 m from a default of 40 m produced a
+    two-band rotation rather than 20 m -- and an operator pressing a band
+    key means "go there".
+    """
+    import wsprbands
+    picked = set(chosen or ())
+    items = []
+    for key, label, dial in wsprbands.BANDS:
+        mark = "*" if label in picked else " "
+        here = " <" if label == current else ""
+        items.append((key, f"{mark} {label:<6} "
+                           f"{dial / 1_000_000:>11.6f} MHz{here}"))
+    return {"title": "WSPR BAND", "items": items,
+            "footer": "Esc back  Enter select  +n add to rotation  "
+                      "* in it"}
