@@ -41,6 +41,13 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         return conn
 
 
+# Control characters removed from received text. A noisy channel, or one
+# being decoded by a modem that is not listening for it, produces these; the
+# screen cannot draw them and a NUL crashes `curses.addstr` outright.
+_RX_STRIP = {i: None for i in range(32) if chr(i) not in "\n\r\t"}
+_RX_STRIP[0x7f] = None
+
+
 class FldigiError(Exception):
     pass
 
@@ -123,7 +130,18 @@ class Fldigi:
             return ""
         raw = chunk.data if isinstance(chunk, xmlrpc.client.Binary) else bytes(chunk)
         self._rx_pos = length
-        return raw.decode("utf-8", errors="replace")
+        text = raw.decode("utf-8", errors="replace")
+        # **Control characters are stripped here, not at the screen.**
+        # `errors="replace"` handles bytes that are not valid UTF-8; it does
+        # nothing about bytes that are. NUL is valid UTF-8, decodes to
+        # "\x00", and makes curses' `addstr` raise ValueError -- which took
+        # the deck down on 2026-10-18 while the decoder was parked on the
+        # NULL modem during an SSB session.
+        #
+        # Newline and tab are kept: the transcript is line-based and they
+        # carry meaning. Everything else below space, and DEL, is noise from
+        # a channel being decoded by a modem that is not listening for it.
+        return text.translate(_RX_STRIP)
 
     def clear_rx(self):
         self._call("text.clear_rx")

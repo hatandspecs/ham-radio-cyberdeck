@@ -34,7 +34,22 @@ class FakeRig:
         return self.accepts
 
     def ptt(self):
-        return self.reads
+        """What the radio reports. **Mirrors what was set, by default.**
+
+        It used to return `self.reads` unconditionally, so a rig told to
+        unkey still read as keyed -- harmless while `_unkey` fired and
+        forgot, and wrong the moment it started confirming. The three cases
+        the real code cares about are kept:
+
+            reads=True   a normal radio: PTT reads back what was set
+            reads=False  a radio that will not key at all
+            reads=None   a radio with no PTT readback
+        """
+        if self.reads is None:
+            return None
+        if self.reads is False:
+            return False
+        return self.keyed
 
     @property
     def keyed(self):
@@ -101,6 +116,9 @@ with tempfile.TemporaryDirectory() as tmp:
     events = t.tick()
     equals("it completed", [e[0] for e in events], ["sent"])
     check("and the radio is UNKEYED", not rig.keyed, str(rig.history))
+    # The SET history is unchanged -- one key, one unkey. `_unkey` now also
+    # READS PTT back to confirm, which `FakeRig.history` does not record,
+    # and that readback is what the verified-unkey cases below exercise.
     equals("keyed then unkeyed, once each", rig.history, [True, False])
     equals("counted", t.sent, 1)
     equals("and it is idle", t.state, wsprtx.IDLE)
@@ -341,5 +359,85 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the tone and the beacon are within a few percent",
           abs(tone - beacon) / float(beacon) < 0.25,
           f"tone={tone} beacon={beacon}")
+
+print("\nunkeying is verified, not fired and forgotten")
+# **A transmitter left keyed is the worst outcome this module has**, and the
+# one command that prevents it had no check on it: one `set_ptt(False)`,
+# return value discarded, exceptions swallowed. A rigctld that was busy left
+# the radio keyed and nothing noticed. Reported from the air on 2026-10-17.
+class StubbornRig:
+    """A rig that stays keyed for `clears_after` unkey attempts."""
+
+    def __init__(self, clears_after=1, readable=True):
+        self.clears_after = clears_after
+        self.readable = readable
+        self.asked = 0
+        self.keyed = True
+
+    def set_ptt(self, on):
+        if not on:
+            self.asked += 1
+            if self.asked >= self.clears_after:
+                self.keyed = False
+        else:
+            self.keyed = True
+        return True
+
+    def ptt(self):
+        return self.keyed if self.readable else None
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    rig = StubbornRig(clears_after=3)
+    t = wsprtx.Transmitter(tmp, rig=rig, spawn=lambda c, **k: FakeProc())
+    t._unkey()
+    equals("it keeps asking until the radio reads unkeyed", rig.keyed, False)
+    check("which took more than one attempt", rig.asked >= 3, str(rig.asked))
+    equals("and nothing is recorded as failed", t.last_error, "")
+
+    # A radio that never drops PTT must be REPORTED, not silently accepted.
+    rig = StubbornRig(clears_after=99)
+    t = wsprtx.Transmitter(tmp, rig=rig, spawn=lambda c, **k: FakeProc())
+    t._unkey()
+    equals("a radio that stays keyed is tried the full number of times",
+           rig.asked, wsprtx.UNKEY_TRIES)
+    check("and the failure is recorded rather than swallowed",
+          "still keyed" in t.last_error, t.last_error)
+    check("and counted", t.failed >= 1, str(t.failed))
+
+    # None is not True: a rig without PTT readback must not loop forever.
+    rig = StubbornRig(clears_after=99, readable=False)
+    t = wsprtx.Transmitter(tmp, rig=rig, spawn=lambda c, **k: FakeProc())
+    t._unkey()
+    equals("an unreadable PTT is asked once and believed", rig.asked, 1)
+    equals("and is not reported as stuck", t.last_error, "")
+
+print("\nstopping waits for the player to actually exit")
+# `kill()` sends the signal and returns; `aplay` holds the exclusive codec
+# until the kernel finishes with it, and fldigi is restarted immediately
+# afterwards. fldigi opens the codec once at startup and does not retry, so
+# the race produced an fldigi that was up, answering, and deaf.
+class SlowProc(FakeProc):
+    def __init__(self):
+        super().__init__()
+        self.waited = None
+
+    def wait(self, timeout=None):
+        self.waited = timeout
+        return 0
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    proc = SlowProc()
+    # A rig, because `send` keys first and refuses outright without one --
+    # the first version of this case passed `rig=None`, so nothing was ever
+    # spawned and "it was killed" was asserted against no process at all.
+    t = wsprtx.Transmitter(tmp, rig=FakeRig(), spawn=lambda c, **k: proc)
+    equals("it started", t.send(a_wav(tmp)), "")
+    t.stop()
+    check("the killed player was waited for", proc.waited is not None,
+          repr(proc.waited))
+    equals("with the module's timeout", proc.waited, wsprtx.KILL_WAIT_S)
+    check("and it was killed first", proc.killed, "")
 
 sys.exit(report())

@@ -2332,11 +2332,48 @@ class Deck:
         return self.wspr_fldigi_stopped
 
     def _wspr_give_audio(self):
-        """Start fldigi again, if this code is what stopped it. Also async:
-        leaving must not block either."""
-        if self.wspr_fldigi_stopped:
-            self._service_async("start", "cyberdeck-fldigi")
-            self.wspr_fldigi_stopped = False
+        """Start fldigi again, if this code is what stopped it.
+
+        **The engines are stopped and reaped before this runs** -- see
+        `_wspr_stop`. fldigi opens the codec once at startup and does not
+        retry, so starting it while a dying `arecord` still holds the card
+        produces an fldigi that is up, answering XML-RPC, and deaf. The
+        symptom is a transmitter that keys into silence, which is what this
+        comment exists to prevent happening twice.
+        """
+        if not self.wspr_fldigi_stopped:
+            return
+        if self._wspr_audio_busy():
+            self._wspr_note("something still holds the audio — fldigi will "
+                            "be started anyway; restart it if it is deaf")
+        self._service_async("start", "cyberdeck-fldigi")
+        self.wspr_fldigi_stopped = False
+
+    def _wspr_audio_busy(self):
+        """Whether anything still has the capture device open.
+
+        Asked of the device rather than of systemd: what matters here is
+        the card, not a unit. `fuser` is quiet and quick; a board without it
+        answers "not busy", which is the same answer this gave before the
+        check existed.
+        """
+        import glob
+        import subprocess
+        # Expanded here, not by a shell: `fuser` is handed real paths, and
+        # passing `pcmC*D*c` literally would have asked about a file that
+        # does not exist and always answered "free".
+        nodes = sorted(glob.glob("/dev/snd/pcmC*D*c"))
+        if not nodes:
+            return False
+        try:
+            r = subprocess.run(["fuser", "-s"] + nodes, timeout=2,
+                               stdin=subprocess.DEVNULL, capture_output=True)
+            return r.returncode == 0
+        except Exception:
+            # No `fuser` on the board: the same answer this gave before the
+            # check existed, which is the safe direction -- it only suppresses
+            # a warning, it never withholds the restart.
+            return False
 
     def _service_async(self, action, unit):
         """Spawn systemctl and return. Reaped by `_service_reap`.
@@ -4738,6 +4775,17 @@ class Deck:
         except curses.error:
             pass
 
+    # Characters curses will not draw. NUL is the one that matters: a
+    # `\x00` anywhere in a string makes `addstr` raise ValueError, not
+    # `curses.error`, so it was not caught and it took the whole panel down.
+    # Observed 2026-10-18 while logging SSB -- the rig was out of a data
+    # mode, so the decoder was parked on fldigi's NULL modem, and what came
+    # back from the RX buffer carried a NUL. Every redraw hit the same byte,
+    # so the deck crash-looped until the text scrolled off.
+    _UNDRAWABLE = {ord(c): None for c in
+                   [chr(i) for i in range(32) if chr(i) not in "\n\r\t"]}
+    _UNDRAWABLE[0x7f] = None
+
     def _put(self, row, col, segments, width):
         x = col
         for text, kind in segments:
@@ -4748,6 +4796,18 @@ class Deck:
                 self.scr.addstr(row, x, chunk, colors.attr(kind))
             except curses.error:
                 pass
+            except ValueError:
+                # **Never let one bad byte stop the deck.** Strip what
+                # cannot be drawn and try once more; if that still fails,
+                # skip the segment rather than crash. A panel missing a
+                # character is a nuisance; a panel that is gone is an
+                # operator with no radio.
+                try:
+                    self.scr.addstr(row, x,
+                                    chunk.translate(self._UNDRAWABLE),
+                                    colors.attr(kind))
+                except Exception:
+                    pass
             x += len(chunk)
 
     # -- keyboard ----------------------------------------------------------
@@ -6505,6 +6565,20 @@ def main(stdscr, settings):
         # start reads the modem to decide whether its restore took.
         try:
             deck.fldigi.unpark_decoder()
+        except Exception:
+            pass
+        # **Give WSPR's borrowings back.** The deck exiting with a session
+        # running used to leave fldigi stopped, the capture gain at WSPR's
+        # value, the codec's AGC off, and any band WSPR switched sitting in
+        # DATA-U -- because only `_wspr_stop` undoes those and nothing here
+        # called it. The next start then found a deck that could not hear
+        # anything and a radio in the wrong mode.
+        #
+        # Last of the three, because the two above are about a keyed
+        # transmitter and run first whatever happens here.
+        try:
+            if deck.wspr is not None and deck.wspr.wspr:
+                deck._wspr_stop("the deck is shutting down")
         except Exception:
             pass
         # Put the console palette back. The deck redefines entries in the

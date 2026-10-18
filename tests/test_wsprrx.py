@@ -286,4 +286,51 @@ with tempfile.TemporaryDirectory() as tmp:
           "-d" in sp.cmds[0] and sp.cmds[0][sp.cmds[0].index("-d") + 1] == "1",
           str(sp.cmds[0]))
 
+print("\nstopping waits for the children to actually exit")
+# `kill()` sends the signal and returns. The process still holds the
+# EXCLUSIVE codec while the kernel tears it down, and `_wspr_stop` starts
+# fldigi immediately afterwards -- which opens the card once and does not
+# retry. The race produced an fldigi that was up, answering XML-RPC, and
+# deaf, and on the air that is a transmitter keying into silence.
+class WaitProc(FakeProc):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.waited = None
+
+    def wait(self, timeout=None):
+        self.waited = timeout
+        return 0
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    cap, dec = WaitProc(finish_after=9), WaitProc(finish_after=9)
+    sp = Spawner([cap, dec])
+    r = wsprrx.Receiver(tmp, spawn=sp)
+    r.start_capture(WHEN, "40 m", DIAL)
+    r.stop()
+    check("the capture was killed", cap.killed, "")
+    check("and waited for", cap.waited is not None, repr(cap.waited))
+    equals("with the module's timeout", cap.waited, wsprrx.KILL_WAIT_S)
+
+with tempfile.TemporaryDirectory() as tmp:
+    probe = WaitProc(finish_after=9)
+    r = wsprrx.Receiver(tmp, spawn=Spawner([probe]))
+    r.start_probe()
+    r.stop()
+    check("a probe is killed too", probe.killed, "")
+    check("and waited for", probe.waited is not None, repr(probe.waited))
+
+# A process that refuses to die must not hang the draw loop.
+class Stuck(FakeProc):
+    def wait(self, timeout=None):
+        raise RuntimeError("will not exit")
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    r = wsprrx.Receiver(tmp, spawn=Spawner([Stuck(finish_after=9)]))
+    r.start_capture(WHEN, "40 m", DIAL)
+    r.stop()                      # must return rather than raise
+    equals("a child that will not exit still leaves the receiver idle",
+           r.state, wsprrx.IDLE)
+
 sys.exit(report())

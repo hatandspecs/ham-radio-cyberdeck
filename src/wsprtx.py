@@ -55,6 +55,16 @@ TX_TIMEOUT_S = 118.0
 # The calibration tone is longer than the menu's one-shot: the operator is
 # adjusting a level under it and watching a meter settle, which ten seconds
 # does not allow. Still bounded, for the same reason everything here is.
+# How long to wait for a killed `aplay` to exit. It holds the exclusive
+# codec until it does. See `Transmitter.stop`.
+KILL_WAIT_S = 2.0
+
+# How many times to ask the radio to unkey, and how long to wait between
+# asking and reading it back. A transmitter left keyed is the worst outcome
+# this module has, so the one command that prevents it is verified.
+UNKEY_TRIES = 4
+UNKEY_POLL_S = 0.15
+
 CAL_TONE_S = 40.0
 
 PTT_CONFIRM_S = 0.6
@@ -267,14 +277,40 @@ class Transmitter:
         return ""
 
     def _unkey(self):
-        """Drop PTT. Never raises, and tries even when it has already been
-        asked: this is called from every path out of a transmission."""
+        """Drop PTT, and CONFIRM it dropped. Never raises.
+
+        **This used to be fire-and-forget**: one `set_ptt(False)`, return
+        value discarded, exceptions swallowed. `set_ptt` reports only that
+        the command was SENT, so a rigctld that was busy or unreachable left
+        the radio keyed and nothing anywhere noticed. A transmitter left
+        keyed is the worst failure this program has, and it was the one
+        operation with no check on it.
+
+        So: ask, read it back, and ask again. `ptt()` returning None means
+        the radio cannot be read, which is not the same as keyed -- a rig
+        without PTT readback would otherwise retry here forever.
+        """
         if self.rig is None:
             return
-        try:
-            self.rig.set_ptt(False)
-        except Exception:
-            pass
+        for attempt in range(UNKEY_TRIES):
+            try:
+                self.rig.set_ptt(False)
+            except Exception:
+                pass
+            try:
+                state = self.rig.ptt()
+            except Exception:
+                state = None
+            if state is not True:
+                if attempt:
+                    self.last_error = ""
+                return
+            time.sleep(UNKEY_POLL_S)
+        # Still reading as keyed after every attempt. Recorded where the
+        # caller can surface it rather than discarded.
+        self.failed += 1
+        self.last_error = ("the radio is still keyed after "
+                           f"{UNKEY_TRIES} attempts to unkey it")
 
     # -- transmitting -----------------------------------------------------
 
@@ -388,6 +424,12 @@ class Transmitter:
         if self._proc is not None:
             try:
                 self._proc.kill()
+            except Exception:
+                pass
+            # Waited for, like the receiver's: `aplay` holds the codec until
+            # it exits, and fldigi is restarted straight after this.
+            try:
+                self._proc.wait(timeout=KILL_WAIT_S)
             except Exception:
                 pass
         self._finish()

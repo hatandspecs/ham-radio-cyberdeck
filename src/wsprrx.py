@@ -46,6 +46,11 @@ CAPTURE_SECONDS = 114
 # dominated by one syllable of noise, short enough that the meter feels live.
 PROBE_SECONDS = 1
 
+# How long to wait for a killed child to actually exit. It holds the
+# exclusive codec until it does, and fldigi is started as soon as this
+# returns -- see `Receiver.stop`.
+KILL_WAIT_S = 2.0
+
 DECODE_TIMEOUT_S = 110
 
 IDLE = "idle"
@@ -334,12 +339,27 @@ class Receiver:
         """
         # The probe too: it holds the exclusive codec exactly as a window
         # does, and one left running would keep fldigi from reopening it.
+        #
+        # **And each one is WAITED FOR.** `kill()` sends the signal and
+        # returns; the process is still holding the sound card while the
+        # kernel tears it down. `_wspr_stop` starts fldigi immediately
+        # afterwards, so without this the race is real and its outcome is
+        # an fldigi that came up with no audio device and stayed that way:
+        # it opens the codec once at startup and does not retry. The
+        # symptom on the air is a transmitter that keys with silence.
         for holder in (self._capture, self._decode, self._probe):
             if holder is None:
                 continue
+            proc = holder[0]
             try:
-                holder[0].kill()
+                proc.kill()
             except Exception:
+                pass
+            try:
+                proc.wait(timeout=KILL_WAIT_S)
+            except Exception:
+                # A process that will not die in two seconds is not going to,
+                # and blocking the draw loop longer helps nobody.
                 pass
         self._capture = None
         self._decode = None
