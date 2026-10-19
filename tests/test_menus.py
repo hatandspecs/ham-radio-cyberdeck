@@ -391,4 +391,19 @@ equals("has_qrz_key no longer changes the menu",
        [k for k, _l in menus.log_menu(True, count=3, has_qrz_key=True)["items"]],
        [k for k, _l in menus.log_menu(True, count=3, has_qrz_key=False)["items"]])
 
+print("\na time-out is printed as an operator reads it")
+# Minutes all the way up read badly past an hour: a twelve hour time-out
+# printed as "720 min" is arithmetic the reader has to do.
+for mins, want in ((0, "off"), (15, "15 min"), (30, "30 min"),
+                   (60, "1 h"), (90, "1 h 30 min"), (120, "2 h"),
+                   (240, "4 h"), (480, "8 h"), (720, "12 h")):
+    equals(f"{mins} min reads {want!r}", menus._duration(mins), want)
+equals("and nonsense reads off", menus._duration("x"), "off")
+equals("as does a negative", menus._duration(-5), "off")
+
+# The menu row itself, so the label and the value stay together.
+row = dict(menus.wspr_menu({"timeout_minutes": 720})["items"])["o"]
+check("the WSPR menu shows twelve hours", "12 h" in row, row)
+check("and still names it the session's", "Session ToT" in row, row)
+
 sys.exit(report())

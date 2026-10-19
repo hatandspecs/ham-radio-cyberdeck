@@ -17,13 +17,39 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 | `docs/` | Runbook and operating tutorial |
 | `docs/screens/` | Rendered screenshots of every screen |
 | `docs/logging_tutorial.md` | Operating the contact log, with screenshots (its images predate the entry form and are stale) |
+| `docs/wspr_operating_tutorial.md` | **Operating WSPR**, and pulling the spot log off the deck (§11). Screens are the generated ones, so they stay true |
+| `docs/logging_tutorial.md` §6 | Pulling contacts off the deck and importing to QRZ by hand |
 | `docs/qso_log_design.md` | The logger's design and every decision in it — §7f one log and sessions, §7g the schema decides the columns, §7h danger zone, §7i what follows an activity |
 | `docs/wspr_deploy.md` | **Installing `wsprd` on the deck and benchmarking it.** Decode only; nothing in it transmits |
-| `docs/wspr_design.md` | **WSPR: design, with the pure layers built.** Branch `add-wspr`. Read §4 and §8 first — the audio device contention with fldigi and the five open questions are what the shape depends on |
-| `docs/logger_branch_deploy.md` | **Deploying this branch, and the recovery sequence back to `main`.** Read before touching the deck |
+| `docs/wspr_design.md` | **WSPR: design and decisions, all of it built and on `main`.** Read §4 and §8 first — the audio device contention with fldigi and the five open questions are what the shape depends on |
+| `docs/logger_branch_deploy.md` | The logger deploy and recovery sequence, written when the logger was a branch. Merged to `main` since; `docs/scratch_notes.md` carries the current deploy and revert |
 | `slides/cyberdeck-talk.md` | The talk, as Marp markdown; `slides/diagrams/` holds the mermaid sources |
 
 ## Things that cost a lot to rediscover
+
+- **The no-keyboard screen is a startup answer and nothing else.** An
+  in-session watcher polled /proc and raised it whenever a keyboard went
+  away; it was removed deliberately on 2026-10-18. A Bluetooth keyboard that
+  idles asleep drops its input device and is indistinguishable from one
+  switched off, so the watcher either interrupted an operator who had merely
+  paused or needed a delay long enough to be useless. Worse, to be useful it
+  had to reach across all four areas, remember which one it interrupted and
+  hand it back -- and dismissing it sent the operator to the conversation
+  unconditionally, which from WSPR meant a dead digimodes screen reached by
+  stepping past the ring lock. That is a lot of mechanism for a problem the
+  operator is already looking at: a keyboard that dies mid-session announces
+  itself by nothing happening. **If a watcher reappears, this is the
+  reasoning it has to beat.** `tests/test_pair.py` asserts its absence.
+- **`x  Export this session` in the WSPR menu is rendered but has no
+  handler.** `menus.py` lists it; the `m == "wspr"` key branch in
+  `cyberdeck.py` handles `w d t n e b p o u f a z` and not `x`, so the key
+  does nothing. The spot log comes off with `rsync`, which is what both the
+  README and the WSPR tutorial document. Either wire it or drop the item --
+  a menu line that does nothing is worse than no line.
+- **Logs come off the deck into `~/Downloads/deck-exports/`**, by `rsync`.
+  `qso.log` plus an ADIF that must be exported on the deck first (`F1 a`),
+  and `wspr.log` which has no export at all. Documented in README
+  "Getting data off the deck" and in both operating tutorials.
 
 - **Run the laptop test rig in foot: `./deck --foot`.** That is what the
   sessions that worked used. The rig is the real `src/cyberdeck.py` in a pty at
@@ -106,9 +132,19 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 - **Run tests with `tools/run_tests.sh`, not pytest.** Each test file is a
   standalone script that prints its own checks and ends with `ALL PASS`.
   Invoking pytest on them wastes minutes and ends in `INTERNALERROR`.
-- **fldigi must be running for the tests** — four of them drive the real
+- **fldigi must be running for the tests** — six of them drive the real
   program through a pseudo-terminal and read the screen back. No radio is
-  needed, but a modem is.
+  needed, but a modem is. Without it, `test_menu_arrows`, `test_menu_nav`,
+  `test_menus`, `test_screen`, `test_state` and `test_wspr_panel` fail 17
+  checks between them, every one naming fldigi or the state it leaves
+  behind, and they fail the same way on a clean checkout of `HEAD`.
+- **An innocent explanation covering most of a failure list will be assumed
+  to cover all of it. Check every failing file against `HEAD`, not a
+  sample.** On 2026-10-18 a run failed 18 checks; 17 were the fldigi set
+  above and the eighteenth, `test_wspr_panel`'s `the time-out to 60
+  minutes`, was a real regression from the 12-hour ToT work. Four of the six
+  files were compared against `HEAD`, the pattern looked settled, and the
+  odd one out was reported as environmental.
 - **`tests/test_log_panel.py` takes 903 seconds for 225 checks** (measured
   2026-10-16) and so was being killed three seconds inside a 900-second
   timeout. **A run that stops mid-screen with no traceback and no `ALL PASS` is
@@ -602,10 +638,13 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 
 ## What is being worked on now
 
-**Branch `add-wspr`, uncommitted.** WSPR: transmit and receive, exclusive
-while running, band hopping, a session log, spot upload. The design is
-`docs/wspr_design.md` (845 lines) and the install runbook is
-`docs/wspr_deploy.md`.
+**WSPR, merged to `main` and proven on the air.** Transmit and receive,
+exclusive while running, band hopping, a session log, spot upload. The design
+is `docs/wspr_design.md`, the install runbook is `docs/wspr_deploy.md`, and
+operating it is `docs/wspr_operating_tutorial.md`.
+
+`add-wspr` and the logger branch no longer exist -- `main` is the only branch.
+What is uncommitted is working-tree work, not a branch.
 
 ### Built, tested, and proven on real hardware
 
@@ -939,10 +978,20 @@ control with it; upload armed by three operator conditions rather than
 automatic; one fixed schema, no pickers; the four independent toggles; the TX
 test tone is necessary and the RX calibration mode is not.
 
-## Where it stands## Where it stands
+## Where it stands
 
-**2379 checks across 32 files, all 32 green as of 2026-10-16** on branch
-`add-wspr` — a clean serial run with nothing edited while it was in flight.
+**3146 checks across 41 files, all passing as of 2026-10-18** — a clean
+serial run with nothing edited while it was in flight, fldigi up via
+`tools/dev-fldigi.sh`, through `tools/run_tests.sh`.
+
+Run it that way rather than looping over the files by hand. `run_tests.sh`
+checks each file for its `ALL PASS` line, which is the only thing that proves
+a file reached its end; counting `PASS` lines proves only that execution got
+that far, and a file that dies two thirds of the way down still prints
+plenty of them. `test_log_panel` needs its 1800-second timeout.
+
+The 2379-check figure this line used to carry was measured 2026-10-16 on
+branch `add-wspr`, before WSPR's own tests and the audio-level work landed.
 The WSPR modules account for 255 of those: `test_wspr.py` (the encoder, the
 parser and dedupe), `test_wsprsched.py` (slots, hopping, the time-out) and
 `test_wsprnet.py` (the uploader, with no network touched).
@@ -1085,12 +1134,12 @@ place, which nothing on the deck could do before — the callsign was in one
 menu, the rig in another and the log in a third.
 
 `docs/qso_log_design.md` carries the design and the open decisions.
-**`docs/logger_branch_deploy.md` carries the deploy sequence and the recovery
-sequence back to `main`** — read it before putting this branch on the deck.
-The two most expensive things in it: the conf and the code must move together,
-because `main`'s `config.py` refuses the keys this branch adds; and
-`systemctl is-active` reports `active` for a unit crash-looping every three
-seconds, so `journalctl -u cyberdeck-ui` is the only health check.
+**`docs/logger_branch_deploy.md` carries the deploy and recovery sequence**,
+written while the logger was a branch; `docs/scratch_notes.md` carries the
+current one. The two most expensive things in it still apply: the conf and the
+code must move together, because a `config.py` that predates a key refuses it;
+and `systemctl is-active` reports `active` for a unit crash-looping every
+three seconds, so `journalctl -u cyberdeck-ui` is the only health check.
 
 It is a **general** log and that is a constraint, not a description. Activity
 types (`src/activities.py`, `activities.conf`) are named, ordered field lists

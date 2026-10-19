@@ -1,2 +1,0 @@
-1. Set the band once. F1 → 3 → 1 for 14.070. Then take your hand off the VFO knob.
-this did not actually change the radio vfo. the radio vfo is still on 14.071.885, same as it was before I selected this menu item

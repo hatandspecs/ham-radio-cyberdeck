@@ -278,9 +278,23 @@ body = show("Ctrl-X clears",
 check("the transcript is emptied", "transcript cleared" in body, body[:300])
 check("and the startup notes are gone", "fldigi 4.2" not in body, body[:300])
 
-body = show("Ctrl-B arms transmit", run(keys=[DIGI, CTRL_B], settle=1.4))
-check("INH clears from the status line", " INH " not in body, body[:120])
-check("and it is recorded", "transmit enabled" in body, body[:400])
+# **Ctrl-B is refused while the radio is not in a data mode**, and that is
+# the interlock working rather than a dead key. The rig behind the test rig
+# reports USB, so arming is exactly the half that gets refused -- inhibiting
+# is always allowed, because a safety control that can fail to engage is not
+# one. The refusal names the mode and says what to do about it, because a
+# key that silently did nothing would read as broken.
+body = show("Ctrl-B against a radio in USB",
+            run(keys=[DIGI, CTRL_B], settle=2.0))
+check("the inhibit stays up, because the radio is not in a data mode",
+      " INH " in body, body[:120])
+check("and the refusal says so rather than doing nothing",
+      "transmit stays inhibited" in body, body[:400])
+check("naming the mode the radio is actually in", "USB" in body, body[:400])
+# The whole body, not the first 400 characters: the sentence is longer than
+# the panel is wide and the deck wraps it onto a second line.
+check("and that the mode is the thing in the way",
+      "not a data mode" in body, body)
 
 
 print("\n-- The RX hold after an over is adjustable from Tune Settings --")

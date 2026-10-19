@@ -94,6 +94,8 @@ places, because the copy that is wrong is never the one being read.
 | **Build the deck** | Flash a card with `tools/build_deck_image.sh` | [The runbook](docs/deploy_cyberdeck_instructions.md) |
 | **Operate the digital modes** | — | [The digimodes operating tutorial](docs/digimodes_operating_tutorial.md) |
 | **Operate the log** | — | [The logging tutorial](docs/logging_tutorial.md) |
+| **Operate WSPR** | — | [The WSPR operating tutorial](docs/wspr_operating_tutorial.md) |
+| **Get the contacts and spots off the deck** | `rsync` to a Downloads folder | [Getting data off the deck](#getting-data-off-the-deck) |
 | **Understand one application** | — | [digimodes](docs/digimodes_design.md) · [the log](docs/qso_log_design.md) · [deck & rig](docs/deck_rig_design.md) · [WSPR](docs/wspr_design.md) |
 | **Understand the platform** | — | [`platform_design.md`](docs/platform_design.md) — requirements, hardware, architecture, rig control, transmit safety, boot, configuration, and what was measured and what broke |
 
@@ -601,6 +603,70 @@ twice.
 The inhibit is `Ctrl-B`, from any screen. It was `Ctrl-I`, which is the same
 byte as `Tab` — ASCII 9 — so `Tab` armed and inhibited the transmitter,
 including on a form where `Tab` means "next field". `Ctrl-B` was unbound.
+
+## Getting data off the deck
+
+The deck records two logs and exports one of them. Both live in
+`~/.local/share/cyberdeck/`, both are append-only `key=value` text, and both
+are fsynced on write, so a power pull loses nothing already written.
+
+| File | What it is | How it gets out |
+|---|---|---|
+| `qso.log` | Contacts. One line each, carrying only the fields that have a value | `rsync`, and it is the archival copy |
+| `*.adi` | ADIF export of the above, written when asked | `F1` `a` on the deck, then `rsync` |
+| `wspr.log` | Every WSPR decode and beacon, with the session name | `rsync` — there is no export |
+
+**Export the ADIF first, on the deck.** It is written when asked for, not
+continuously: `F1` then `a` for the whole log, `F1` then `x` for one activity.
+
+Then, from the laptop:
+
+```bash
+mkdir -p ~/Downloads/deck-exports
+
+# contacts: the export, and the raw log it came from
+rsync -av deck@cyberdeck.local:'~/.local/share/cyberdeck/*.adi' ~/Downloads/deck-exports/
+rsync -av deck@cyberdeck.local:~/.local/share/cyberdeck/qso.log  ~/Downloads/deck-exports/
+
+# WSPR spots
+rsync -av deck@cyberdeck.local:~/.local/share/cyberdeck/wspr.log ~/Downloads/deck-exports/
+
+grep -c '<EOR>' ~/Downloads/deck-exports/qso.adi   # contacts, one per record
+wc -l ~/Downloads/deck-exports/wspr.log            # spots, one per line
+```
+
+Those two counts are worth noting before an upload: they are what the
+receiving program should report importing, and comparing them is the only way
+to catch a partial import.
+
+**Pull the raw logs as well as the ADIF.** ADIF carries what ADIF has fields
+for, and an activity's field list is the operator's to define — so a contest
+exchange or a field invented for one activity can exist in `qso.log` and
+nowhere in the `.adi`.
+
+Read the spot log with the project's own parser rather than by eye:
+
+```bash
+python3 -c "
+import sys, os, collections; sys.path.insert(0, 'src')
+import wsprlog
+recs = wsprlog.read(os.path.expanduser('~/Downloads/deck-exports/wspr.log'))
+rx = [r for r in recs if r.get('kind') == 'rx']
+print(f'{len(recs)} records, {len(rx)} heard, {len(recs)-len(rx)} sent')
+print('unique stations:', len({r.get(\"call\") for r in rx}))
+for b, n in sorted(collections.Counter(r.get('band','?') for r in rx).items()):
+    print(f'  {b:>6}  {n}')
+"
+```
+
+`rsync` copies and removes nothing. The danger zones in the logging and WSPR
+menus are the only things that delete records, and each states its count and
+asks first.
+
+Full procedures, including what QRZ rejects on import and why corrupt WSPR
+decodes must be filtered out of any count:
+[the logging tutorial](docs/logging_tutorial.md#pulling-the-contacts-off-the-deck)
+and [the WSPR tutorial](docs/wspr_operating_tutorial.md#11-getting-the-spots-off-the-deck).
 
 ## How it is put together
 

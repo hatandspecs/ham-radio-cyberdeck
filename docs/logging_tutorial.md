@@ -352,6 +352,67 @@ carries a hard timeout.
 LoTW itself is free; it needs a certificate, not a subscription. That is
 unrelated to the QRZ logbook, which needs a paid one.
 
+### Pulling the contacts off the deck
+
+**Export first, on the deck.** The `.adi` is only written when asked for —
+there is no export sitting there from last time:
+
+```
+F1  then  a      export the whole log      -> qso.adi
+F1  then  x      export this activity only -> qso-<activity>.adi
+```
+
+The deck prints where it wrote. Confirm it, then copy it off:
+
+```bash
+ls -la ~/.local/share/cyberdeck/*.adi
+```
+
+**From the laptop**, into a Downloads subfolder:
+
+```bash
+mkdir -p ~/Downloads/deck-exports
+rsync -av deck@cyberdeck.local:'~/.local/share/cyberdeck/*.adi' ~/Downloads/deck-exports/
+grep -c '<EOR>' ~/Downloads/deck-exports/qso.adi      # one per contact
+```
+
+**Note that count.** It is the number of records the receiving program should
+report importing, and comparing the two is the only way to catch a partial
+import.
+
+**Pull the raw log as well**, not only the export:
+
+```bash
+rsync -av deck@cyberdeck.local:~/.local/share/cyberdeck/qso.log ~/Downloads/deck-exports/
+```
+
+The ADIF is lossy. It carries what ADIF has fields for, and the deck's own
+format carries whatever the activity defined — so a contest exchange or a
+field invented for one activity may exist in `qso.log` and nowhere in the
+`.adi`. The raw log is the archival copy.
+
+**Nothing here removes anything from the deck.** `rsync` copies. The danger
+zone in the logging menu is the only thing that deletes records, and each of
+its items states its count and asks first.
+
+#### Uploading to QRZ by hand
+
+Logbook -> Settings -> **Import ADIF**, choose the file, and check the count
+against the one above.
+
+Two things QRZ rejects, both worth checking before uploading rather than
+after:
+
+* **A contact with no band or mode.** Every contact the deck logs has both,
+  but a record edited by hand may not.
+* **A contact dated in the future.** If the deck's clock was wrong when
+  something was logged — no network, no RTC battery — that is the record that
+  will be refused, and the fix is to correct the date in the `.adi` before
+  importing.
+
+The deck's own spot log has a parallel procedure in
+[the WSPR tutorial](wspr_operating_tutorial.md#11-getting-the-spots-off-the-deck).
+
 ---
 
 ## 7. From a terminal, today

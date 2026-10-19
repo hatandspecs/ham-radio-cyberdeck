@@ -20,7 +20,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "src"))
 
 from harness import check, equals, report
 import btpair
+import colors
+import cyberdeck
 import render
+import touch as touchmod
 
 
 def dev(addr, name="Pebble K380s", icon="input-keyboard", **props):
@@ -143,5 +146,85 @@ if __name__ == "__main__":
     check("btpair is never imported at startup",
           "import btpair" in source and "\nimport btpair" not in source,
           "it must be imported inside the pairing entry point only")
+
+    # -- no keyboard, which is a question only power-on can ask -------------
+    # The deck watched /proc through the whole session and raised this screen
+    # whenever a keyboard went away. That was removed on purpose: a Bluetooth
+    # keyboard that idles asleep drops its input device and looks exactly
+    # like one switched off, so the watcher either interrupted someone who
+    # had paused or needed a delay long enough to be useless -- and it had to
+    # reach across every screen, remember which one it interrupted, and hand
+    # it back without stepping past the ring lock WSPR holds.
+    #
+    # A keyboard that dies mid-session announces itself by nothing happening.
+    # The case the operator genuinely cannot answer is the deck switched on
+    # before the keyboard, or without one at all, and that is visible at boot.
+    print("\nthe no-keyboard screen belongs to startup, and only to startup")
+
+    source = open(os.path.join(os.path.dirname(_HERE), "src",
+                               "cyberdeck.py")).read()
+    check("there is no in-session keyboard watcher",
+          "_check_keyboard" not in source,
+          "a watcher came back; the screen is a startup answer")
+    check("and nothing polls for one",
+          "_kb_checked" not in source and "_kb_gone_since" not in source,
+          "watcher state is back in the deck")
+    check("the startup check is still there",
+          "_pair_if_no_keyboard" in source, source[:0])
+
+    def booted(has_keyboard, enabled="yes"):
+        d = cyberdeck.Deck.__new__(cyberdeck.Deck)
+        d.screen = cyberdeck.CHAT
+        shown = []
+        d._show_no_keyboard = lambda: shown.append(True)
+        real_console, real_find = colors.on_linux_console, touchmod.find_keyboard
+        colors.on_linux_console = lambda: True
+        touchmod.find_keyboard = lambda *a, **k: has_keyboard
+        try:
+            d._pair_if_no_keyboard({"PAIR_ON_NO_KEYBOARD": enabled})
+        finally:
+            colors.on_linux_console = real_console
+            touchmod.find_keyboard = real_find
+        return shown
+
+    check("a deck that boots with no keyboard says so immediately",
+          booted(has_keyboard=False) == [True], "nothing was shown")
+    check("a deck that boots with one says nothing",
+          booted(has_keyboard=True) == [], "it warned anyway")
+    check("and the warning can be switched off entirely",
+          booted(has_keyboard=False, enabled="no") == [], "it warned anyway")
+
+    # Dismissal: any key, because a keystroke arriving IS the proof that the
+    # problem is solved. `Ctrl-B` is excluded from the inhibit handler on
+    # this screen, so it dismisses like any other key and **must not arm the
+    # transmitter on the way out** -- clearing a screen with whatever key is
+    # under your thumb should not key a radio.
+    print("\nany key dismisses it, and the inhibit key does not arm")
+
+    def dismissed(ch):
+        d = cyberdeck.Deck.__new__(cyberdeck.Deck)
+        d.screen, d.menu, d.edit = cyberdeck.NOKB, None, None
+        d.notes, armed = [], []
+
+        class _S:
+            state = cyberdeck.RX
+            inhibited = True
+
+            def note(self, text):
+                d.notes.append(text)
+
+        d.session = _S()
+        d._toggle_inhibit = lambda: armed.append("toggled")
+        d.handle(ch)
+        return d, armed
+
+    d, armed = dismissed(ord("x"))
+    equals("an ordinary key clears it", d.screen, cyberdeck.CHAT)
+    check("and says the keyboard works",
+          "keyboard is working" in d.notes, d.notes)
+
+    d, armed = dismissed(cyberdeck.INHIBIT_KEY)
+    equals("the inhibit key clears it too", d.screen, cyberdeck.CHAT)
+    check("and does not arm the transmitter doing it", armed == [], armed)
 
     sys.exit(report())

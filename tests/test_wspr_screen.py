@@ -190,7 +190,9 @@ check("Transmit shows off", "Transmit                     off" in text, text)
 check("the session is named", "Saturday night" in text, text)
 check("the band, and that it is hopping", "hopping 3 bands" in text, text)
 check("the transmit percent", "20%" in text, text)
-check("the time-out", "60 min" in text, text)
+# `1 h`, not `60 min`: the label prints hours once there are hours, so a
+# twelve hour time-out does not read as "720 min".
+check("the time-out", "1 h" in text, text)
 check("the upload state", "Upload spots                 on" in text, text)
 # Calibration moved to its own submenu -- `a` -- because the transmit
 # level, the capture gain and the tone that sets them are one job, and three
@@ -295,6 +297,19 @@ print("\nthe session time-out is named as the session's")
 body = "\n".join(plain(render.wspr_screen(
     SPOTS, 66, 20, state={"timeout_left": 240})))
 check("it is the session's", "session 4:00 left" in body, body)
+
+# **Hours once there are hours.** `timeout_left` is seconds, so a twelve
+# hour time-out printed as minutes reads "720:00 left", which looks like a
+# count of something other than time. Under an hour keeps m:ss, which is the
+# resolution that matters near the end.
+for secs, want in ((43200, "session 12h 00m left"),
+                   (28800, "session 8h 00m left"),
+                   (3600, "session 1h 00m left"),
+                   (3599, "session 59:59 left"),
+                   (45, "session 0:45 left")):
+    shown = "\n".join(plain(render.wspr_screen(
+        SPOTS, 66, 20, state={"timeout_left": secs})))
+    check(f"{secs}s reads {want!r}", want in shown, shown)
 
 print("\nband hopping is named whether it is on or off")
 # Its absence had to be read as "off" rather than "this deck has no such

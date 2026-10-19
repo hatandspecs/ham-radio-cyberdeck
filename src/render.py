@@ -2054,8 +2054,16 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
         # Named as the SESSION's timer. "left" on its own was read as the
         # time left in something else -- the slot, most plausibly, since a
         # slot clock sits directly above it now.
-        groups.append([(f"session {int(tot) // 60}:{int(tot) % 60:02d} left",
-                        "dim")])
+        # **Hours once there are hours.** `tot` is seconds, so a twelve hour
+        # time-out printed as minutes reads `720:00 left`, which looks like a
+        # count of something other than time. Under an hour keeps m:ss,
+        # because that is the resolution that matters near the end.
+        left = int(tot)
+        if left >= 3600:
+            shown = f"{left // 3600}h {left % 3600 // 60:02d}m"
+        else:
+            shown = f"{left // 60}:{left % 60:02d}"
+        groups.append([(f"session {shown} left", "dim")])
     if st.get("decoding"):
         groups.append([("decoding", "dim")])
     out.append(_spread(groups, width))

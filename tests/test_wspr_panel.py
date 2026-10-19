@@ -23,6 +23,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "src"))
 
+import menus
+
 from harness import check, equals, report
 from test_screen import run, show
 
@@ -104,7 +106,10 @@ for term in ("xterm", "linux"):
 print("\nthe defaults are the ones the design settled on")
 body = deck([TO_WSPR, F1["linux"]], "the menu's defaults", settle=3.0)
 check("transmit percent defaults to WSJT-X's 20%", "20%" in body, body)
-check("the time-out to 60 minutes", "60 min" in body, body)
+# `1 h`, not `60 min`: `menus._duration` prints hours once there are
+# hours, so a twelve-hour time-out does not read as "720 min". The
+# default is still sixty minutes; only the way it is written changed.
+check("the time-out to 60 minutes", "1 h" in body, body)
 check("decoding starts on", "Decode                       on" in body, body)
 check("and transmit starts OFF — beaconing is never a default",
       "Transmit                     off" in body, body)
@@ -294,45 +299,53 @@ d = menus.wspr_menu({"tx_level": 25, "rx_gain": 70, "timeout_minutes": 60})
 equals("13 items, with one to spare under the threshold",
        len(d["items"]) <= 14, True)
 body = deck([TO_WSPR, F1["linux"]], "the menu keeps its values", settle=3.0)
-for want in ("20%", "60 min", "wspr.log", "TX 25%"):
+# The deck under test runs on its own defaults, so these are the configured
+# levels rather than the ones handed to `wspr_menu` above.
+for want in ("20%", "1 h", "wspr.log", "TX 50%  RX 70%"):
     check(f"the menu still shows {want!r}", want in body, body)
 
 print("\nthe audio levels are one submenu, which is one job")
 body = deck([TO_WSPR, F1["linux"], "a"], "a opens the audio menu",
             settle=3.2)
 check("it opens", "WSPR AUDIO" in body, body[:120])
-check("the transmit level is there", "TX audio level" in body, body)
-check("and the capture gain", "RX capture gain" in body, body)
-check("and the tone that sets the first", "Calibrate" in body, body)
-# Which of the two touches the mixer fldigi shares is the question an
-# operator will ask, so the menu answers it without being asked.
-check("it says which one is the shared mixer",
-      "shared mixer" in body, body)
+# Both levels on one line, with the measured dBFS beside the gain it judges.
+check("the transmit level is there", "TX audio 50%" in body, body)
+check("and the capture gain", "RX gain 70%" in body, body)
+check("and no reading until something has been captured",
+      "no reading yet" in body, body)
+check("and the two calibration screens that set them",
+      "Calibrate transmit" in body and "Calibrate receive" in body, body)
+check("which is where the levels are set, not here",
+      "the levels are set in those" in body, body[-200:])
 
-print("\nboth levels cycle from that menu")
+print("\nboth levels cycle from that menu, and the menu line shows it")
+# `t` and `r` step the levels. They are not advertised on the menu, which
+# offers the calibration screens instead -- the level belongs next to a
+# meter. They work, and the line above reports the new value immediately.
 body = deck([TO_WSPR, F1["linux"], "a", "t"], "t cycles the TX level",
             settle=3.4)
-check("the transmit level moved off 50", "TX audio level" in body, body)
+check("the transmit level moved off 50", "TX audio 60%" in body, body)
+check("and the capture gain did not move with it",
+      "RX gain 70%" in body, body)
 body = deck([TO_WSPR, F1["linux"], "a", "r"], "r cycles the RX gain",
             settle=3.4)
-check("the capture gain reports what it did",
-      "capture gain" in body.lower(), body)
-# It must NOT touch the mixer while fldigi holds it.
-check("and says it applies when WSPR starts",
-      "when WSPR starts" in body or "applies" in body, body[-300:])
+check("the capture gain moved off 70", "RX gain 75%" in body, body)
+check("and the transmit level did not move with it",
+      "TX audio 50%" in body, body)
 
 print("\nEsc from the audio menu goes back to the WSPR menu, not out")
 body = deck([TO_WSPR, F1["linux"], "a", ESC], "Esc from the audio menu",
             settle=3.4)
 check("the WSPR menu is what is drawn", "Transmit percent" in body, body)
 
-print("\nthe mode check moved to the band picker, where the rotation is")
-body = deck([TO_WSPR, F3["linux"]], "the picker offers it", settle=3.0)
-check("the picker advertises it", "k check modes" in body, body[-200:])
-body = deck([TO_WSPR, F3["linux"], "k"], "k runs it", settle=3.4)
-check("it reports rather than doing nothing silently",
-      "hop check" in body or "rig control" in body, body[-300:])
-check("and the menu is gone, so the sentence can be read",
-      "WSPR BAND" not in body[:120], body[:120])
+print("\nthe band picker offers the bands and the rotation, and says so")
+body = deck([TO_WSPR, F3["linux"]], "the picker", settle=3.0)
+check("it opens", "WSPR BAND" in body, body[:120])
+check("a band is chosen with Enter", "Enter use this one" in body, body[-200:])
+# The rotation is a checkbox on the row the arrows are already on. `+` then a
+# number came first and was reported undiscoverable, which it was.
+check("and the rotation is toggled with Space",
+      "Space hop on/off" in body, body[-200:])
+check("with a mark for the bands in it", "[*] in rotation" in body, body[-200:])
 
 sys.exit(report())

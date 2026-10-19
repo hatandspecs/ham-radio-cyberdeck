@@ -613,6 +613,24 @@ def render(menu, width, height, selected=None):
     return lines[:height]
 
 
+def _duration(minutes):
+    """A time-out as an operator reads it: `45 min`, `2 h`, `12 h`, `off`.
+
+    Minutes all the way up read badly once they pass an hour -- a twelve
+    hour time-out printed as `720 min` is arithmetic the reader has to do.
+    """
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return "off"
+    if minutes <= 0:
+        return "off"
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, rest = divmod(minutes, 60)
+    return f"{hours} h" if not rest else f"{hours} h {rest} min"
+
+
 def wspr_menu(state=None):
     """The WSPR menu. Grouped the way the logging menu is.
 
@@ -650,8 +668,7 @@ def wspr_menu(state=None):
         ("p", f"Transmit percent             {st.get('tx_percent', 0)}%"),
         # "Time-out" alone did not say time out of WHAT -- the slot, the
         # decode and the session all have clocks. It is the session's.
-        ("o", f"Session ToT                  "
-              + (f"{tot} min" if tot else "off")),
+        ("o", f"Session ToT                  " + _duration(tot)),
         ("u", f"Upload spots                 {st.get('upload') or 'off'}"),
 
         # -- the file, and getting out ------------------------------------

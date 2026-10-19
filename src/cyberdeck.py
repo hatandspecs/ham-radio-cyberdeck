@@ -418,7 +418,6 @@ class Deck:
         self._nokb_bonded = []
         self._nokb_can_pair = False
         self._nokb_tick = 0
-        self._kb_checked = 0.0
         self.fldigi = Fldigi(url=settings["FLDIGI_URL"])
         self.session = Session(
             callsign=settings["CALLSIGN"],
@@ -505,6 +504,22 @@ class Deck:
         from here — a bonded keyboard switched off or asleep, and no bond at
         all — and the first is far the more common. Jumping into a scan would
         answer the rarer one and bury the answer to the usual one.
+
+        **Startup only.** A watcher polled /proc through the session and
+        raised this screen whenever a keyboard went away; it was removed
+        deliberately. A keyboard that idles asleep drops its input device and
+        is indistinguishable from one switched off, so the watcher either
+        interrupted an operator who had merely paused or needed a timer long
+        enough to be useless — and it had to reach across every screen,
+        remember which one it interrupted, and hand it back without stepping
+        past the ring lock WSPR holds. That is a lot of mechanism for a
+        problem the operator is already looking at: a keyboard that stops
+        working mid-session announces itself by nothing happening.
+
+        The case worth answering is the one where the deck cannot be told
+        anything at all, which is power-on: the deck switched on before the
+        keyboard, or the keyboard left at home. Both are visible the moment
+        the deck boots, and `_pair_if_no_keyboard` answers them there.
         """
         try:
             import btpair
@@ -580,7 +595,6 @@ class Deck:
         else:
             self._tx_idle = 0
 
-        self._check_keyboard()
         self._scroll_by_touch()
         self._poll_pair()
         self._poll_wifi()
@@ -708,39 +722,6 @@ class Deck:
             # Clamped at zero exactly as PgDn is: the transcript cannot be
             # scrolled forward past its own end.
             self.scroll = max(0, self.scroll + rows)
-
-    def _check_keyboard(self):
-        """Notice a keyboard going away, and coming back.
-
-        A Bluetooth keyboard that sleeps, runs flat or is switched off leaves
-        a deck that cannot be told anything — including that it has a problem.
-        The screen is the only thing left, so it says so, rather than the
-        operator pressing keys at a terminal that looks perfectly healthy.
-
-        Checked at a human rate. /proc is cheap but not free, and a keyboard
-        does not come and go five times a second.
-        """
-        if self.cfg.get("PAIR_ON_NO_KEYBOARD") != "yes":
-            return
-        if not colors.on_linux_console():
-            return
-        if self.screen == PAIR or self.menu or self.edit is not None:
-            return
-        now = time.monotonic()
-        if now - self._kb_checked < 3.0:
-            return
-        self._kb_checked = now
-        present = touchmod.find_keyboard()
-        if present and self.screen == NOKB:
-            self.screen = CHAT
-            self.session.note("keyboard is back")
-        elif not present and self.screen == CHAT and self.session.state != TX:
-            # Not mid-over: the transcript is what matters while a
-            # transmission is going out, and the keyboard being absent does
-            # not stop it finishing.
-            self._show_no_keyboard()
-
-    # -- pairing a keyboard ------------------------------------------------
 
     def _open_pair(self):
         """Start a pairing session and show its screen.
@@ -5554,7 +5535,11 @@ class Deck:
                     self.wspr.tx_percent = nxt
                 self._save_state()
             elif key == "o":
-                order = (0, 15, 30, 60, 120, 240)
+                # Up to twelve hours. A WSPR session is left running for an
+                # evening or overnight -- this station has run one for most
+                # of a day -- and a four hour ceiling meant re-arming a
+                # timer whose whole purpose is to be left alone.
+                order = (0, 15, 30, 60, 120, 240, 480, 720)
                 now = int(self.cfg.get("WSPR_TIMEOUT_MIN", 60))
                 nxt = order[(order.index(now) + 1) % len(order)] \
                     if now in order else 60
