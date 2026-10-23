@@ -38,11 +38,17 @@ def _read_sys(name, sysfs=SYS_FB, default=""):
 
 
 def geometry(device=FB_DEVICE, sysfs=SYS_FB):
-    """`(width, height, bytes_per_pixel)` for the panel, or None.
+    """`(width, height, bytes_per_pixel, stride)` for the panel, or None.
 
     Read from sysfs rather than an ioctl, because sysfs is text and an ioctl
     would need the kernel's struct layout for whichever architecture this is
     built on. The panel does not change size at runtime.
+
+    **`stride` is the bytes between one scanline and the next, and it is not
+    always `width * bytes_per_pixel`.** A driver may pad each line for
+    alignment, and addressing by width alone then shifts every row left by
+    the padding, shearing the picture. Where sysfs does not report it, the
+    unpadded value is the right guess.
     """
     size = _read_sys("virtual_size", sysfs)
     bpp = _read_sys("bits_per_pixel", sysfs)
@@ -55,7 +61,11 @@ def geometry(device=FB_DEVICE, sysfs=SYS_FB):
         return None
     if depth not in (16, 32):
         return None
-    return (w, h, depth // 8)
+    try:
+        stride = int(_read_sys("stride", sysfs) or 0)
+    except ValueError:
+        stride = 0
+    return (w, h, depth // 8, stride or w * (depth // 8))
 
 
 def available(device=FB_DEVICE, sysfs=SYS_FB):
@@ -85,39 +95,67 @@ class Canvas:
     is faster than 384,000 seeks on a Pi 3A+.
     """
 
-    def __init__(self, width, height, bytes_per_pixel, background=0x000000):
+    def __init__(self, width, height, bytes_per_pixel, background=0x000000,
+                 stride=0):
         self.width = width
         self.height = height
         self.bpp = bytes_per_pixel
+        # Bytes per scanline on the real device, which may exceed
+        # `width * bpp`. The buffer is built at the device's stride so one
+        # write lands every row where the panel expects it.
+        self.stride = stride or width * bytes_per_pixel
         self._blank = pack(background, bytes_per_pixel)
-        self.buf = bytearray(self._blank * (width * height))
+        row = bytearray(self._blank * width)
+        row += bytes(self.stride - len(row))
+        self.buf = bytearray(row * height)
 
     def point(self, x, y, rgb):
         if 0 <= x < self.width and 0 <= y < self.height:
-            off = (y * self.width + x) * self.bpp
+            off = y * self.stride + x * self.bpp
             self.buf[off:off + self.bpp] = pack(rgb, self.bpp)
 
     def points(self, coords, rgb):
         """Many pixels of one color, which is how a map is drawn."""
         px = pack(rgb, self.bpp)
         w, h, bpp, buf = self.width, self.height, self.bpp, self.buf
+        stride = self.stride
         for x, y in coords:
             if 0 <= x < w and 0 <= y < h:
-                off = (y * w + x) * bpp
+                off = y * stride + x * bpp
                 buf[off:off + bpp] = px
 
-    def write(self, device=FB_DEVICE):
+    def write(self, device=FB_DEVICE, from_row=0, rows=None):
         """Put it on the screen. Returns False rather than raising.
+
+        `from_row` and `rows` write only that band of scanlines, seeking
+        past the rest. That is how the map and the text share the panel:
+        curses owns the rows above and below and never has a cell of its own
+        overwritten, and the framebuffer owns the band between them. Writing
+        the whole buffer would blank the text rows every frame and they
+        would flicker.
 
         A map that cannot be drawn is a message on the panel, not a traceback
         that takes the deck down mid-session.
         """
+        first = max(0, from_row)
+        last = self.height if rows is None else min(self.height, first + rows)
+        if last <= first:
+            return False
+        start, stop = first * self.stride, last * self.stride
         try:
-            with open(device, "wb") as fh:
-                fh.write(self.buf)
+            with open(device, "r+b") as fh:
+                fh.seek(start)
+                fh.write(self.buf[start:stop])
             return True
         except OSError:
             return False
+
+    def fill(self, rgb):
+        """Repaint every pixel. Used to wipe a map off the panel."""
+        px = pack(rgb, self.bpp)
+        row = bytearray(px * self.width)
+        row += bytes(self.stride - len(row))
+        self.buf = bytearray(row * self.height)
 
 
 def canvas_for(device=FB_DEVICE, sysfs=SYS_FB, background=0x000000):
@@ -125,4 +163,4 @@ def canvas_for(device=FB_DEVICE, sysfs=SYS_FB, background=0x000000):
     geo = geometry(device, sysfs)
     if not geo:
         return None
-    return Canvas(geo[0], geo[1], geo[2], background)
+    return Canvas(geo[0], geo[1], geo[2], background, stride=geo[3])

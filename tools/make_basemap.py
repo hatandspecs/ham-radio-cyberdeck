@@ -21,25 +21,34 @@ import os
 import sys
 import zlib
 
-WIDTH, HEIGHT = 800, 480
+# 432 rows, not the panel's 480. The map screen gives curses one row at the
+# top (the summary) and one at the bottom (the keys), and the picture fits
+# between them: 480 - 2 x 24. They used to overlap and curses won every
+# frame, which is what made the map on the deck look like fragments
+# squeezed into the top of the screen.
+WIDTH, HEIGHT = 800, 432
 
 # The world is cut at 90 E -- through Tibet and the Bay of Bengal -- so that
 # no path from this station crosses the seam and the station sits near the
 # middle of its own map. Longitudes east of the cut are shifted by -360.
 CUT_LON = 90.0
 
-# Three views, cycled on the deck with one key, all Mercator.
+# Two views, cycled on the deck with one key, both Mercator.
 #
-# One clip cannot serve both questions the map gets asked. "Is anyone in
-# Europe hearing me" wants North America and Europe filling the panel; "did
-# I really reach Antarctica" wants the whole globe. So the deck ships all
-# three and switches between them, which costs about 30 kB.
+# One clip cannot serve both questions the map gets asked. "Where did I
+# reach tonight" wants the whole world; "who is working me around the
+# states" wants North America filling the panel. So the deck ships both and
+# switches between them, which costs about 16 kB.
 #
-# `wide` keeps the Antarctic bases -- DP0GVN at Neumayer III, -70.65, was
-# decoded on 30 m. `global` drops the ice and gains the mid latitudes.
-# `focus` is North America and Europe at the largest scale that still shows
-# both, and deliberately clips everything south of the tropics: the screen
-# says how many spots fell off rather than pretending they did not exist.
+# `global` is the world from -60 to 75, which drops the ice and gains the
+# mid latitudes. `focus` is the continental United States at the largest
+# scale that fits, and deliberately clips everything else: the screen says
+# how many spots fell off rather than pretending they did not exist.
+#
+# A third view, `wide`, carried -72 to 78 for the Antarctic bases -- DP0GVN
+# at Neumayer III, -70.65, was decoded on 30 m. It was dropped 2026-10-23:
+# twelve more degrees at each pole is too nearly the same picture as
+# `global` to be worth a press of the key.
 # (lat_south, lat_north, lon_west, lon_east). A longitude window of None
 # means the full 360 degrees ending at the cut, which is what the two world
 # views use.
@@ -52,9 +61,8 @@ CUT_LON = 90.0
 VIEWS = {
     "focus":  (22.0, 53.0, -130.0, -62.0),
     "global": (-60.0, 75.0, None, None),
-    "wide":   (-72.0, 78.0, None, None),
 }
-VIEW_ORDER = ("focus", "global", "wide")
+VIEW_ORDER = ("focus", "global")
 
 # Clipped to where there are stations, and no further.
 #

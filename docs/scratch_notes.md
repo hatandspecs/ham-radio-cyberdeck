@@ -1,14 +1,23 @@
 # Scratch notes — pending deploy
 
-**Everything below is tested and uncommitted as of 2026-10-23.** Two rounds
-of work are pending: the seven features from `docs/next_steps.md`, built
-2026-10-22, and the transmitter-safety and crash fixes from 2026-10-18 that
-may or may not have reached the deck. One deploy carries both, because the
-procedure replaces the whole directory rather than patching it.
+**Everything below is tested and uncommitted as of 2026-10-23.** Four rounds
+of work are pending and one deploy carries all of them, because the
+procedure replaces the whole directory rather than patching it:
 
-**3912 checks across 52 files pass off the deck.** Nothing here has run on
-the panel. The framebuffer writes, the CAT tuner sequence and the WiFi bind
-are the three things the tests cannot reach.
+- **2026-10-23c — the second hardware session.** The map simplified down to
+  one key, the tuner's dwell made reachable, the bulk selections and locks
+  removed.
+- **2026-10-23b — the first hardware session.** A crash in the auto tuner,
+  a map the panel erased, the WSPR session list.
+- **2026-10-22 — the seven features** from `docs/next_steps.md`.
+- **2026-10-18 — transmitter safety and a crash fix**, which may or may not
+  have reached the deck.
+
+**The 2026-10-23c round has not been through the full automated suite.**
+Every module it touches passes — `bandplan`, `bandscreens`, `wsprmap`,
+`mapscreen`, `fbdraw`, `tuner`, `render`, `menus`, `wsprlog` — and so does
+every other file that runs without a pty. The six pty-driven files have not
+been re-run against it.
 
 ## Deploy
 
@@ -16,10 +25,9 @@ are the three things the tests cannot reach.
 needs are not Python:
 
 ```
-src/bandplans.tsv        the band plan, from 47 CFR §97.301
-src/basemap_focus.bin    the three map outlines, 1-bit, zlib
+src/bandplans.tsv        the band plan, from 47 CFR §97.301 and §97.305(c)
+src/basemap_focus.bin    the two map outlines, 1-bit, zlib, 800x432
 src/basemap_global.bin
-src/basemap_wide.bin
 ```
 
 `bandplan.segments()` and `wsprmap.load()` both raise `FileNotFoundError`
@@ -46,7 +54,8 @@ ls /tmp/deckupd/bandplans.tsv /tmp/deckupd/basemap_*.bin
 ls /tmp/deckupd/*.py | wc -l
 ```
 
-Four files, then `32`. Anything missing, stop.
+THREE files, then `32`. `basemap_wide.bin` is gone -- the third map view was
+dropped -- so a stale copy on the deck is harmless but no longer read.
 
 Snapshot — this is what the revert restores:
 
@@ -79,7 +88,17 @@ through `os.path.join(HERE, ...)`:
 ls -la /opt/cyberdeck/bandplans.tsv /opt/cyberdeck/basemap_*.bin
 ```
 
-Four files: the TSV about 10.8 kB, the basemaps 6.4, 11.2 and 10.9 kB.
+Three files: the TSV about 3.3 kB, the basemaps 5.8 and 10.1 kB.
+**All three changed again on 2026-10-23c.** The basemaps were regenerated
+for a two-row overlay, so a deploy that carries the Python and leaves them
+behind puts the wrong-sized picture under the screen.
+
+The deck may still hold `basemap_wide.bin` from an earlier deploy. Nothing
+reads it; removing it is tidiness, not a step:
+
+```bash
+sudo rm -f /opt/cyberdeck/basemap_wide.bin
+```
 
 And that they load under the deck's own Python:
 
@@ -88,8 +107,9 @@ cd /opt/cyberdeck
 python3 -c "import bandplan, wsprmap, export, decall, tuner, fbdraw; print(len(bandplan.segments('us_general')), 'segments;', wsprmap.load(view='global').width, 'px map')"
 ```
 
-Prints `19 segments; 800 px map`. A traceback here means an asset is
-missing or truncated — revert.
+Prints `21 segments; 800 px map`. A traceback here means an asset is
+missing or truncated — revert. A segment count of 19 means the OLD band plan
+is still in place; 29 or 32 means Technician and the reference plans are.
 
 **Do not deploy during a WSPR session.** Staging to `/tmp/deckupd` is safe at
 any time, but copying into `/opt/cyberdeck` while the deck runs mixes new
@@ -135,6 +155,103 @@ journalctl -u cyberdeck-ui -n 60 --no-pager
 
 ## What this carries
 
+### 2026-10-23c — what the second hardware session found
+
+The repairs below held: the map drew, the tuner swept 17 m, the interlock
+showed. What this round does is mostly take things away.
+
+**The map is the session's, not the whole log.** It was plotting every
+record the deck had ever written and reporting six thousand spots, which
+answered no question. A session is the deployment.
+
+**The band toggles are gone**, with the row they needed, and so is the lag
+they caused -- they were what made the map re-read and re-project the log on
+every frame. Within one session every band answers the same question, and
+which band a spot arrived on is a column in the spot list.
+
+**The heard / heard-by filter is gone, because the deck has no heard-by
+data.** The spot log holds what the deck decoded and what it sent; who heard
+IT is on wsprnet. One of that filter's two positions was always empty.
+
+The map screen is now `v` and `Esc`, with the summary on the top row and the
+keys on the bottom row. **`Esc back` is no longer clipped to `Esc bac`.**
+
+**Spots are `+` in the bright colour; this station is an `×`.** The `×` used
+to mean a direction and read as the fainter marker -- a diagonal cross puts
+no pixel on the row or column through its centre. Home was white, which is
+not one of the phosphor colours.
+
+**The right-edge stripe is wiped.** The console is 66 columns of a 12-pixel
+font -- 792 of the panel's 800 -- so the last 8 pixels belong to no cell and
+`clearok` cannot reach them. Leaving a map blanks the framebuffer first.
+
+**The contact map shows the current activity**, not every contact in the
+log, and names it on the top row so the two maps cannot be mistaken for each
+other.
+
+**The third map view is gone.** `wide` was `global` plus twelve degrees at
+each pole.
+
+**The tuner's bulk selections and locks are gone.** `Space` is the only way
+to pick a segment. **`+` and `-` step the dwell** in half seconds between
+0.5 and 5.0 -- the same keys the squelch uses on the tuning screen -- and
+the footer carries the current value. It was bound to `d` and advertised
+nowhere.
+
+### 2026-10-23b — what the first hardware session found
+
+**The auto tuner crashed the deck.** `_start_tuner_sweep` passed `self.rig`,
+which does not exist -- every other call site uses `self._log_rig()`. Enter
+on that screen raised `AttributeError`, systemd restarted the terminal, and
+the symptom on the panel was a pause, a flash, and the tuner screen
+"escaping" with the radio untouched. **No test called that method**: the
+sweep engine was tested against a fake rig and the screen was tested on its
+own, and nothing exercised the wire between them.
+
+**The maps were erased by curses one frame after being drawn.** `draw` opens
+with `scr.erase()`, so a picture written before the refresh is wiped by it;
+what survived were the cells curses happened to think unchanged, which read
+as a map squeezed into the top of the screen with fragments left behind on
+the way out. Three changes: the blit runs after `scr.refresh()`, it starts
+below the two text rows so curses never has a cell overwritten, and leaving
+a map sets `clearok` so the next frame repaints every cell and takes the
+residue with it.
+
+**The basemaps are regenerated at 800x432** -- the panel less its two
+24-pixel text rows -- so the picture and the text no longer share pixels.
+`fbdraw` also reads the framebuffer's `stride` now rather than assuming
+`width * bytes_per_pixel`, because a padded scanline would shear the image.
+
+**The auto tuner shows the interlock.** `^B` always worked there -- it is
+handled before any screen's own keys -- but the header had no status field,
+so nothing changed on screen and the key read as dead.
+
+**WSPR sessions can be resumed.** `F2` opens a session list rather than the
+name editor, with the contact log's own keys: `Enter` resume, `n` new, `r`
+rename, `d` forget, `Esc` back. A session and a logger activity are the same
+idea, so they get the same keys; it is simpler by one thing, because a
+session has no schema to choose. The spot list also loads the current
+session's spots on entering the area -- the deck came up on `general`,
+reported 5,992 heard, and drew an empty list, because `wspr_spots` only ever
+held what that RUN had decoded.
+
+**`WSPR_FORGOTTEN` is read for the first time.** The danger zone has been
+writing it and no screen honoured it, so "forget all sessions" set a value
+that changed nothing.
+
+**Both maps are on `F5`.** It was `m` on the WSPR screen and `F5` on the log
+screen -- two keys for one idea.
+
+**The contact map counts contacts.** `SpotMap.summary` took a noun; a
+contact map reporting "11 spots" described the wrong thing.
+
+**The band plan is US General and US Extra only**, and every band is split at
+its §97.305(c) phone edge. Technician and the four stray reference plans are
+gone. Corrections along the way: 17 m and 12 m were "All Modes" across the
+whole band for General, which is true of the privilege and false of the
+emissions; and General's 80/40/20/15 m rows cited §97.301(b), the Amateur
+Extra paragraph, where General is (d).
+
 ### 2026-10-22 — seven features from `docs/next_steps.md`
 
 The ring is five areas and in an order the operator sets.
@@ -150,8 +267,10 @@ The ring is five areas and in an order the operator sets.
 | 7 | Export to a phone | deck & rig `F1` `5` |
 
 New settings, all with defaults, so `cyberdeck.conf` needs no edit:
-`RING_ORDER`, `LICENSE_CLASS`, `TUNER_LOCKED`, `TUNER_DWELL_S`, `MAP_VIEW`,
-`LOG_HOTKEY`, `EXPORT_DIR`, `EXPORT_PORT`, `EXPORT_IDLE_MIN`.
+`RING_ORDER`, `LICENSE_CLASS`, `TUNER_DWELL_S`, `MAP_VIEW`, `LOG_HOTKEY`,
+`EXPORT_DIR`, `EXPORT_PORT`, `EXPORT_IDLE_MIN`, `WSPR_FORGOTTEN`.
+(`TUNER_LOCKED` was added in that round and removed in 2026-10-23c with the
+locks it configured; a stale value in the state file is ignored.)
 
 **The export server opens a port on the WiFi address**, for five minutes per
 export, at a path with a fresh four-character token. It serves five named
@@ -167,17 +286,37 @@ fixed dwell and too short a dwell fails silently.
 
 Stop at the first that misbehaves and revert.
 
-1. `^O` once from the boot screen reaches **BAND PLAN**. This is the check
-   that catches a `*.py`-only deploy. `Space` cycles the license class.
-2. `^O` again reaches WSPR; `m` draws the map. `v` cycles the three views,
-   `1`-`0` toggle bands, `Esc` returns. A black screen carrying only the two
-   text rows means `fbdraw` could not open `/dev/fb0`.
-3. `F1` `4` from deck & rig opens the ring editor. `Esc` cancels without
-   saving; nothing is written until `Enter`.
-4. `F1` `5` opens the export page. The address goes into a phone browser,
-   one file downloads, `Esc` takes the server down.
-5. `F1` `3` opens the auto tuner. **Transmit stays inhibited (`^B`) for the
-   first look**, and the first real run gets one segment, not a band plan.
+1. **`^O` once from the boot screen reaches BAND PLAN.** The check that
+   catches a `*.py`-only deploy. `Space` cycles General and Extra, and only
+   those two. Every band reads `(CW/Data)` or `(Phone)` except 160 m
+   (All Modes) and 30 m (CW/Data only).
+2. **`^O` again reaches WSPR; `F5` draws the map.**
+   - The summary row at the top names the session; the key row at the
+     bottom reads `v view   Esc back`, not `Esc bac`.
+   - The picture fills everything between them. **Fragments, a squeezed
+     picture, or a stripe left on the right edge after `Esc` mean the
+     repair did not take.**
+   - Spots are `+`; this station is an `×` in the same colour as the
+     coastline's brighter shade, not white.
+   - `v` cycles two views, the USA and the world. There is no third.
+   - The count is this SESSION's spots, not every spot the deck has.
+3. **`F2` on the WSPR screen opens the session list.** `*` marks the one in
+   use. `Enter` on another resumes it and the spot list fills with that
+   run's spots. `n` new, `r` rename, `d` forget after a confirmation.
+4. **`F5` on the log screen** draws the contact map, named for the current
+   activity, and the line says "contacts".
+5. `F1` `4` from deck & rig opens the ring editor. `Esc` cancels.
+6. `F1` `5` opens the export page.
+7. **`F1` `3` opens the auto tuner.**
+   - The header carries `INH` or `INH off`, and `^B` flips it without
+     leaving the screen.
+   - The footer reads `+ - dwell 5s`. `+` and `-` step it by half a second
+     between 0.5 and 5.0.
+   - `Space` is the only way to pick a segment. There is no `a`, `p`, `c`,
+     `i`, `n` or `l`.
+   - With the interlock off and rigctld answering, `Enter` sweeps: the VFO
+     moves, the progress line counts, `^X` stops it. **One segment for the
+     first run.**
 
 ### 2026-10-18 — transmitter safety, a crash fix, three features
 

@@ -292,10 +292,6 @@ SCHEMA = {
     "LICENSE_CLASS":   ("us_general", str, "band plan to display and sweep: "
                                            "us_technician | us_general | "
                                            "us_extra"),
-    # Segments the auto tuner will never offer, comma separated, as
-    # `band:label` keys. A lock overrides every bulk selection.
-    "TUNER_LOCKED":    ("", str, "segments the auto tuner never offers, "
-                                 "as band:label, comma separated"),
     # How long each frequency is held for the tuner to settle. Five seconds
     # suits a cold start; a re-sweep where the tuner begins near a stored
     # memory can be far shorter. **Too short fails silently** -- the radio

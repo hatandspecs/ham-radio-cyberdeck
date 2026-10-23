@@ -99,6 +99,11 @@ AREA_WSPR = "wspr"
 ALLOC = "alloc"
 AREA_ALLOC = "alloc"
 
+# What `+` and `-` step the tuner dwell between, in seconds. The floor is
+# `tuner.MIN_DWELL_S`; the ceiling is where a sweep gets slow enough that a
+# longer dwell is better spent on fewer segments.
+DWELL_MIN, DWELL_MAX = 0.5, 5.0
+
 # The auto tuner. NOT an area: it is a sub-screen of deck & rig, because it
 # is a thing done once to an antenna rather than a place to operate from, and
 # because a screen that keys the transmitter for an hour should not be one
@@ -109,6 +114,11 @@ TUNER = "tuner"
 # picture from different records and an operator on the WSPR screen wants the
 # WSPR one without walking the ring to find it.
 WSPRMAP, LOGMAP = "wsprmap", "logmap"
+
+# The WSPR session list: which run the spots belong to, and the way back
+# into an earlier one. A sub-screen of the WSPR area, like the calibration
+# screens -- sessions are chosen between runs, not walked to.
+WSPRSES = "wsprses"
 
 # The ring `^O` and `^P` walk, in its default order. **The order is the
 # operator's** -- `RING_ORDER` in the config overrides this, and the ring
@@ -183,6 +193,7 @@ AREA_OF = {
     FIELDS: AREA_LOG, ORDER: AREA_LOG,
     CHAT: AREA_DIGI, TUNE: AREA_DIGI,
     WSPR: AREA_WSPR, WSPRCAL: AREA_WSPR, WSPRMAP: AREA_WSPR,
+    WSPRSES: AREA_WSPR,
     LOGMAP: AREA_LOG,
     ALLOC: AREA_ALLOC,
     # The tuner belongs to deck & rig, so `^O` out of it lands where deck &
@@ -208,7 +219,7 @@ _REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
                # this tuple follows -- without them the ring order and every
                # lock would go back to the conf file on the next power cycle,
                # which reads as the deck forgetting rather than as a bug.
-               "RING_ORDER", "LICENSE_CLASS", "TUNER_LOCKED",
+               "RING_ORDER", "LICENSE_CLASS",
                "TUNER_DWELL_S", "MAP_VIEW", "LOG_HOTKEY",
                # **Every WSPR setting, because not one of them was here.**
                # They are all reached from a WSPR menu or a calibration
@@ -313,6 +324,9 @@ class Deck:
         self.wspr_tx = None           # wsprtx.Transmitter
         self.wspr_up = None           # wsprnet.Uploader
         self.wspr_spots = []          # newest first, for the screen
+        # Whether this session's logged spots have been read in. Cleared
+        # when the session changes, so the next entry reloads.
+        self._wspr_loaded = False
         self.wspr_sel = None          # None follows the newest spot
         self.wspr_gain = None         # the capture mixer, built on first use
         self.wspr_dbfs = None         # what the last capture measured
@@ -2599,6 +2613,14 @@ class Deck:
         self.screen = WSPR
         if not self.wspr_band:
             self.wspr_band = self._wspr_bands()[0]
+        # The current session's spots, once, when there is nothing to show.
+        # `wspr_spots` holds what this RUN decoded, so a deck powered on into
+        # a session with a night behind it drew an empty list under a header
+        # reporting thousands heard. Read once on entry rather than on every
+        # draw: the file is the size of the whole log.
+        if not self.wspr_spots and not self._wspr_loaded:
+            self._wspr_loaded = True
+            self._wspr_load_spots()
 
     def _wspr_start(self):
         """Take the deck: stop fldigi, start the slot clock.
@@ -4114,20 +4136,77 @@ class Deck:
         want = str(self.cfg.get("MAP_VIEW", wsprmap.DEFAULT_VIEW))
         return want if want in wsprmap.VIEWS else wsprmap.DEFAULT_VIEW
 
-    def _map_state(self):
-        """Per-screen map state, built lazily and kept across visits."""
-        if getattr(self, "map_state", None) is None:
-            self.map_state = {"bands": None, "dirs": None, "msg": "",
-                              "drawn": False}
-        return self.map_state
+    def _map_state(self, which=None):
+        """Per-MAP state, built lazily and kept across visits.
+
+        Keyed by which map it belongs to. One shared dict meant a filter set
+        on the WSPR map was still in force on the contact map, where the
+        band names are written differently -- `20 m` against `20m` -- so
+        every contact was filtered out and the screen looked like the wrong
+        map rather than an empty one. The filters are gone; the message is
+        still per-map, and so is anything added later.
+        """
+        which = which or self.screen
+        if getattr(self, "map_states", None) is None:
+            self.map_states = {}
+        if which not in self.map_states:
+            self.map_states[which] = {"msg": "", "drawn": False}
+        return self.map_states[which]
 
     def _build_map(self, which):
-        """Plot the records onto the current view.
+        """Plot the records onto the current view, from a cache.
 
-        Rebuilt on every draw request rather than cached: a map is looked at
-        after something has happened, and a stale picture of a live band is
-        worse than a pause.
+        **Cached on `(which, view, how many records)`.** This reads the whole
+        spot log and projects every record in it, and it was being called
+        from `draw` five times a second: against a log of six thousand spots
+        that is six thousand grid conversions per frame, which is what made
+        pressing a band toggle feel like the key was sticking.
+
+        The band and direction filters do NOT invalidate it. They select
+        which of the already-projected points are drawn -- `SpotMap.pixels`
+        does that work -- so the map behind them is the same map.
+
+        The record count is the staleness check: a run decoding spots grows
+        the log, and a map that did not notice would be a lie about a live
+        band. Counting is a read of the file either way, so the saving is
+        the projection rather than the I/O.
         """
+        import wsprmap
+        cache = getattr(self, "_map_cache", None)
+        key = (which, self._map_view(), self._map_record_count(which))
+        if cache and cache[0] == key:
+            return cache[1]
+        sm = self._build_map_now(which)
+        self._map_cache = (key, sm)
+        return sm
+
+    def _wspr_map_records(self):
+        """The spots the map plots: THIS SESSION's, not the whole log.
+
+        The map was reading every record the deck had ever written, so a
+        field deployment's picture carried six thousand spots from every
+        night before it and answered no question at all. A session is the
+        deployment -- that is what it is for -- and scoping the map to it is
+        what lets the band toggles go.
+        """
+        import wsprlog
+        try:
+            records = wsprlog.read(wsprlog.log_path(
+                self.cfg.get("WSPR_LOG_PATH", "")))
+        except Exception:                                  # noqa: BLE001
+            return []
+        name = str(self.cfg.get("WSPR_SESSION", "") or "")
+        start = str(self.cfg.get("WSPR_SESSION_START", "") or "")
+        return wsprlog.for_session(records, name, start) if name else records
+
+    def _map_record_count(self, which):
+        """How many records the map would be built from, for the cache."""
+        if which != WSPRMAP:
+            return len(self._log_shown())
+        return len(self._wspr_map_records())
+
+    def _build_map_now(self, which):
+        """The projection itself. `_build_map` is the cache in front of it."""
         import wsprmap
         base = wsprmap.load(view=self._map_view())
         home = None
@@ -4139,148 +4218,185 @@ class Deck:
         sm = wsprmap.SpotMap(base, home=home)
         if which == WSPRMAP:
             import wsprlog
-            try:
-                records = wsprlog.read(wsprlog.log_path(
-                    self.cfg.get("WSPR_LOG_PATH", "")))
-            except Exception:
-                records = []
-            for rec in records:
+            for rec in self._wspr_map_records():
+                # Received spots only. A `tx` record is this station's own
+                # beacon: it carries no remote grid, so it was never a place
+                # on the map, and who heard it is on wsprnet rather than in
+                # this log.
+                if rec.get("kind") == wsprlog.TX:
+                    continue
                 locator = rec.get("grid") or ""
                 if not locator:
                     continue
-                direction = (wsprmap.HEARD if rec.get("kind") == "rx"
-                             else wsprmap.HEARD_BY)
-                sm.add_grid(locator, rec.get("band", ""), direction)
+                sm.add_grid(locator, rec.get("band", ""), wsprmap.HEARD)
         else:
             # Contacts carry a grid when the schema has one or the callbook
             # lookup filled it, and not otherwise. The ones without are
             # COUNTED rather than quietly dropped: a map showing eleven of
             # forty contacts, with nothing on screen saying so, reads as a
             # map of a quiet weekend.
-            for rec in self.log_records:
+            for rec in self._log_shown():
                 locator = rec.get("grid") or rec.get("gridsquare") or ""
                 if not locator:
                     sm.ungridded += 1
                     continue
                 if not sm.add_grid(locator, rec.get("band", ""),
-                                   wsprmap.HEARD_BY):
+                                   wsprmap.HEARD):
                     sm.ungridded += 1
         return sm
 
     def _draw_map(self, which, h, w):
-        """The picture to the framebuffer, the two text rows through curses.
+        """The two text rows curses owns. The picture is `_blit_map`'s.
 
-        **The picture is written once, not every frame.** The framebuffer is
-        the same memory the text console draws on, so every write fights the
-        curses redraw; drawing it on entry and on change, and letting curses
-        own the two rows it needs, is what keeps both legible.
+        **The picture goes down every frame, after the refresh.** The
+        framebuffer is the same memory the text console draws on and curses
+        wins every fight over it: `draw` opens with `scr.erase()`, so a
+        picture written before the refresh is wiped by it. Writing after,
+        and below the rows curses uses, is what keeps both on the screen.
         """
+        import fbdraw
         import wsprmap
-        state = self._map_state()
+        state = self._map_state(which)
+        # Rebuilt here and blitted from `draw` once curses has refreshed.
+        # This method only puts down the two rows curses owns.
         sm = self._build_map(which)
         self.map_spots = sm
-
-        if not state.get("drawn"):
-            state["drawn"] = self._blit_map(sm, state)
-
-        bands = sm.bands()
-        dirs = self._map_dirs(which, state)
-        summary = sm.summary()
-        if not state.get("drawn"):
+        summary = sm.summary("contact" if which == LOGMAP else "spot")
+        # Asked of the framebuffer, not of whether a blit has happened yet.
+        # The blit comes after this method, so on the first frame nothing
+        # has been drawn and a check on that flashed "no framebuffer" on a
+        # deck that has one.
+        if not fbdraw.available():
             summary = "no framebuffer on this machine — map unavailable"
-        lines = render.map_overlay(summary, bands, state["bands"],
-                                   self._map_view(), w, directions=dirs,
-                                   message=state.get("msg", ""))
-        for i, line in enumerate(lines):
-            self._put(i, 0, line, w)
+        lines = render.map_overlay(summary, self._map_view(), w,
+                                   message=state.get("msg", ""),
+                                   title=self._map_title(which))
+        # The summary at the top, the keys at the BOTTOM, and the picture
+        # between them. Both rows were drawn at the top, which put the key
+        # row on the first scanlines of the map.
+        self._put(0, 0, lines[0], w)
+        if len(lines) > 1:
+            self._put(h - 1, 0, lines[1], w)
         try:
             curses.curs_set(0)
         except curses.error:
             pass
 
-    def _map_dirs(self, which, state):
-        """The direction legend: what each glyph means and whether it is lit.
+    def _map_title(self, which):
+        """Which map this is, and whose records are on it.
 
-        Two entries on the WSPR map, one on the log map. A worked contact is
-        two-way by definition -- both stations copied each other, or there
-        would be no entry -- so offering the heard / heard-by filter there
-        would offer a distinction the data does not make, and one of its two
-        positions would always show an empty map.
+        On the screen because the two were mistaken for each other: a
+        contact map with nothing gridded draws the same empty coastline as a
+        WSPR map with no spots, and neither said which it was.
         """
-        import wsprmap
-        if which == LOGMAP:
-            return [("worked", "+", True)]
-        return [("heard", "+", state["dirs"] is None
-                 or wsprmap.HEARD_BY in state["dirs"]),
-                ("by me", "x", state["dirs"] is None
-                 or wsprmap.HEARD in state["dirs"])]
+        if which == WSPRMAP:
+            return str(self.cfg.get("WSPR_SESSION", "") or "WSPR") or "WSPR"
+        return self._activity_name() or MASTER_LOG
 
     def _blit_map(self, sm, state):
-        """Put the picture on the panel. False where there is no panel."""
+        """Put the picture on the panel, below the rows curses owns.
+
+        **Curses and the framebuffer are the same memory, and curses wins.**
+        `draw` opens with `scr.erase()`, so a frame drawn before the refresh
+        is wiped by it -- what survived were the cells curses happened to
+        think unchanged, which on the deck looked like a map squeezed into
+        the top of the screen with fragments left behind on the way out.
+        Found on the panel 2026-10-23.
+
+        Two things keep them apart now. The blit runs AFTER `scr.refresh()`,
+        from `draw`, so nothing repaints over it; and it starts below the two
+        text rows, so curses never has a cell of its own overwritten. The
+        basemaps are generated 48 rows short of the panel for exactly this
+        -- 800x432 under two 24-pixel rows.
+        """
         import fbdraw
         canvas = fbdraw.canvas_for()
         if canvas is None:
             return False
         dim, bright = colors.map_colors(self.scheme)
         base = sm.base
+        # Where the picture starts. The map screen gives curses one row at
+        # the top (the summary) and one at the bottom (the keys), and the
+        # basemap is generated to fit between them -- 800x432 on an 800x480
+        # panel with 24-pixel rows. The offset is derived from the two
+        # heights rather than assumed, so a panel this was not written for
+        # still puts the map below the top row; `rows=base.height` leaves
+        # the bottom row alone.
+        rows = max(1, canvas.height // 20)
+        top = min(rows, max(0, canvas.height - base.height))
         coast = []
         for y in range(base.height):
             row = y * base.width
             for x in range(base.width):
                 if base.bits[row + x]:
-                    coast.append((x, y))
+                    coast.append((x, y + top))
         canvas.points(coast, dim)
-        canvas.points([(x, y) for x, y, _b, _d
-                       in sm.pixels(state["bands"], state["dirs"])], bright)
-        canvas.points(sm.home_pixels(), 0xFFFFFF)
-        return canvas.write()
+        canvas.points([(x, y + top) for x, y, _b, _d
+                       in sm.pixels()], bright)
+        # This station in the scheme's own bright colour, not white. Its `×`
+        # is what tells it apart from the spots, which are all `+`; white is
+        # not one of the phosphor colours and read as a fault on the panel.
+        canvas.points([(x, y + top) for x, y in sm.home_pixels()], bright)
+        return canvas.write(from_row=top, rows=base.height)
 
-    def _handle_map(self, which, ch):
-        import wsprmap
+    def _blit_map_now(self):
+        """Called from `draw`, after the refresh, while a map is showing."""
         state = self._map_state()
         sm = getattr(self, "map_spots", None)
-        bands = sm.bands() if sm else []
+        if sm is None:
+            return
+        state["drawn"] = self._blit_map(sm, state)
+
+    def _map_left(self):
+        """Leaving a map: wipe the picture and repaint every cell.
+
+        **`clearok` is not enough on its own.** The console is 66 columns of
+        a 12-pixel font -- 792 of the panel's 800 -- so curses owns nothing
+        in the last 8 pixels and cannot repaint them whatever it is told.
+        A stripe of map survived there on every exit. The framebuffer is
+        blanked first, which reaches the pixels curses cannot.
+        """
+        self.map_spots = None
+        try:
+            import fbdraw
+            canvas = fbdraw.canvas_for()
+            if canvas is not None:
+                canvas.write()
+        except Exception:                                  # noqa: BLE001
+            pass
+        try:
+            self.scr.clearok(True)
+        except Exception:                                  # noqa: BLE001
+            pass
+
+    def _handle_map(self, which, ch):
+        """Two keys and Esc. The band toggles are gone with their row.
+
+        The map is the session's, and within one session every band answers
+        the same question together. Which band a spot came in on is a
+        question the spot LIST answers, with a column.
+        """
+        import wsprmap
+        state = self._map_state(which)
         key = chr(ch).lower() if 32 <= ch < 127 else ""
         state["msg"] = ""
 
         if ch == 27:
-            self.map_state = None
+            self._map_left()
             self.screen = WSPR if which == WSPRMAP else LOG
         elif key == "v":
             self.cfg["MAP_VIEW"] = wsprmap.next_view(self._map_view())
             self._save_state()
-            self.map_state = None          # the picture must be redrawn
-        elif key in render.MAP_BAND_KEYS and bands:
-            i = render.MAP_BAND_KEYS.index(key)
-            if i < len(bands):
-                on = set(bands if state["bands"] is None else state["bands"])
-                band = bands[i]
-                on.discard(band) if band in on else on.add(band)
-                state["bands"] = on
-                state["drawn"] = False
-        elif key == "t" and which == LOGMAP:
-            state["msg"] = "every contact is two-way — nothing to filter"
-        elif key == "t":
-            # The two directions, which is how "am I deaf" gets asked.
-            order = (None, {wsprmap.HEARD_BY}, {wsprmap.HEARD})
-            here = state["dirs"]
-            nxt = order[(order.index(here) + 1) % len(order)] \
-                if here in order else None
-            state["dirs"] = nxt
-            state["drawn"] = False
-        elif key == "r":
-            state["drawn"] = False
+            # The view changed, so the cached picture is the wrong one. The
+            # direction filter is the operator's and stays.
+            self._map_cache = None
         return True
 
     def _tuner_selection(self):
         """The selection, built once per license and kept across visits."""
         import bandplan
         if getattr(self, "tuner_sel", None) is None:
-            locked = [k.strip() for k in
-                      str(self.cfg.get("TUNER_LOCKED", "")).split(",")
-                      if k.strip()]
-            self.tuner_sel = bandplan.Selection(self._alloc_segments(),
-                                                locked=locked)
+            self.tuner_sel = bandplan.Selection(self._alloc_segments())
             self.tuner_row = 0
         return self.tuner_sel
 
@@ -4288,8 +4404,6 @@ class Deck:
         import tuner as tunermod
         return tunermod.clamp_dwell(self.cfg.get("TUNER_DWELL_S", 5.0))
 
-    def _save_locks(self):
-        self.cfg["TUNER_LOCKED"] = ",".join(self._tuner_selection().locked_keys())
         self._save_state()
 
     def _draw_tuner(self, h, w):
@@ -4302,7 +4416,8 @@ class Deck:
                 sel, self.tuner_row, w, h, self._license_name(),
                 dwell_s=self._tuner_dwell(),
                 message=getattr(self, "tuner_message", ""),
-                running=run.progress() if run else None)):
+                running=run.progress() if run else None,
+                inhibited=self.session.inhibited)):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -4355,40 +4470,28 @@ class Deck:
             self.tuner_row = min(n - 1,
                                  self.tuner_row + render.SEGMENTS_PER_PAGE)
         elif ch == 32 and rows:                                # Space
-            if not sel.toggle(rows[self.tuner_row].key):
-                self.tuner_message = "that segment is locked — l unlocks it"
-            else:
-                self.tuner_message = ""
-        elif key == "l" and rows:
-            locked = sel.toggle_lock(rows[self.tuner_row].key)
-            self.tuner_message = ("locked — bulk selections will skip it"
-                                  if locked else "unlocked")
-            self._save_locks()
-        elif key == "a":
-            sel.select_all()
+            # The only way to pick a segment. The bulk selections -- all,
+            # none, invert, all-phone, all-CW -- and the per-segment lock
+            # that existed to override them were removed 2026-10-23:
+            # scrolling this list and pressing Space is fast enough, and
+            # with no bulk operation to protect against, a lock protected
+            # against nothing.
+            sel.toggle(rows[self.tuner_row].key)
             self.tuner_message = ""
-        elif key == "n":
-            sel.clear()
-            self.tuner_message = ""
-        elif key == "i":
-            sel.invert()
-            self.tuner_message = ""
-        elif key == "p":
-            sel.select_phone()
-            self.tuner_message = ""
-        elif key == "c":
-            sel.select_cw()
-            self.tuner_message = ""
-        elif key == "d":
-            # Cycles rather than prompts, as the transmit percent does. The
-            # right value is found by watching a sweep, not known in advance.
-            order = (1.5, 2.0, 3.0, 5.0, 8.0)
+        elif key in ("+", "=", "-", "_"):
+            # **Steps, not a cycle.** Half a second at a time between 0.5 and
+            # 5.0, the same `+` / `-` the squelch level uses on the tuning
+            # screen. A cycling key wrapped from the longest dwell back to
+            # the shortest, which is a long way to go to undo one press.
+            # `=` and `_` are the unshifted keys on the same caps.
+            step = 0.5 if key in ("+", "=") else -0.5
             now = self._tuner_dwell()
-            nxt = order[(order.index(now) + 1) % len(order)] \
-                if now in order else 5.0
+            nxt = max(DWELL_MIN, min(DWELL_MAX, round(now * 2 + step * 2) / 2))
             self.cfg["TUNER_DWELL_S"] = nxt
             self._save_state()
-            self.tuner_message = f"dwell {nxt} s"
+            self.tuner_message = (f"dwell {nxt:g} s" if nxt != now else
+                                  f"dwell {nxt:g} s — "
+                                  f"{'longest' if step > 0 else 'shortest'}")
         elif key == "k":
             self._cycle_license()
             self.tuner_message = f"band plan: {self._license_name()}"
@@ -4413,7 +4516,20 @@ class Deck:
         if not freqs:
             self.tuner_message = "nothing selected"
             return False
-        self.tuner_run = tunermod.Sweep(freqs, self.rig,
+        rig = self._log_rig()
+        if rig is None:
+            # Refused here rather than inside the sweep, which would report
+            # it as `no rig control: 'NoneType' object has no attribute
+            # 'send_cat'`. The operator needs to know rigctld is not
+            # answering, not what that looks like from inside a method.
+            self.tuner_message = "no rig control — is rigctld running?"
+            return False
+        # `self._log_rig()`, not `self.rig` -- there is no `self.rig`, and
+        # the attribute error took the whole deck down the moment Enter was
+        # pressed on this screen. systemd restarted it, so it read as the
+        # tuner screen "just escaping" with the radio untouched. Found on
+        # the panel 2026-10-23; no test called this method.
+        self.tuner_run = tunermod.Sweep(freqs, rig,
                                         dwell_s=self._tuner_dwell())
         if not self.tuner_run.start():
             self.tuner_message = self.tuner_run.message
@@ -4478,9 +4594,12 @@ class Deck:
         if ch == curses.KEY_F1:
             self._open_menu("wspr")
         elif ch == curses.KEY_F2:
-            self._open_editor(None, "WSPR session name",
-                              text=self.cfg.get("WSPR_SESSION", ""),
-                              sink=self._wspr_set_session)
+            # The session LIST, not the name editor. Naming a session was
+            # the only thing this key did, which left no way back into an
+            # earlier run -- the deck came up on `general`, reported 5,992
+            # heard, and showed an empty list. "+ start a new session" on
+            # that list reaches the editor.
+            self._open_wspr_sessions()
         elif ch == curses.KEY_F3:
             self._open_menu("wspr_band")
         elif ch == 3:                                   # Ctrl-C
@@ -4495,8 +4614,12 @@ class Deck:
                 self._wspr_stop("stopped by hand")
             else:
                 self._wspr_note("WSPR is not running")
-        elif ch == 109:                                 # m, the map
-            self.map_state = None
+        elif ch == curses.KEY_F5:                       # the map
+            # F5 on both maps. It was `m` here and F5 on the log screen,
+            # where every printable key types into the entry form -- two
+            # keys for one idea, and the operator has to remember which
+            # screen they are on to press the right one.
+            self._map_cache = None
             self.screen = WSPRMAP
         elif ch in (curses.KEY_UP, curses.KEY_DOWN):
             self._wspr_move(-1 if ch == curses.KEY_UP else 1)
@@ -4550,7 +4673,239 @@ class Deck:
         self.cfg["WSPR_SESSION"] = name
         self.cfg["WSPR_SESSION_START"] = self._utc_now()
         self._save_state()
+        # A new session starts empty, and the next entry must not refill it
+        # from the one before.
+        self.wspr_spots = []
+        self._wspr_loaded = True
         self._wspr_note(f"session {name}")
+
+    # -- WSPR sessions -----------------------------------------------------
+
+    def _wspr_forgotten(self):
+        """Sessions taken off the list. `[(name, start), ...]`.
+
+        The same arrangement as the contact log's `FORGOTTEN_SESSIONS`, and
+        for the same reason: the spots keep their labels, so a list derived
+        from the log would show a removed session again the moment it was
+        rebuilt.
+
+        **The danger zone has been writing `WSPR_FORGOTTEN` and nothing has
+        been reading it**, so "forget all sessions" set a value that changed
+        no screen. This is the reader.
+        """
+        out = []
+        for pair in (self.cfg.get("WSPR_FORGOTTEN") or []):
+            try:
+                name, start = pair
+            except (TypeError, ValueError):
+                continue
+            out.append((str(name), str(start)))
+        return out
+
+    def _wspr_session_rows(self):
+        """Every session in the log, newest first, minus the forgotten."""
+        import wsprlog
+        try:
+            records = wsprlog.read(wsprlog.log_path(
+                self.cfg.get("WSPR_LOG_PATH", "")))
+        except Exception:                                  # noqa: BLE001
+            records = []
+        return wsprlog.sessions_in(records, self._wspr_forgotten())
+
+    def _wspr_session_now(self):
+        return (str(self.cfg.get("WSPR_SESSION", "") or ""),
+                str(self.cfg.get("WSPR_SESSION_START", "") or ""))
+
+    def _open_wspr_sessions(self):
+        """The session list. Refused while WSPR runs.
+
+        Switching session mid-run would file the rest of the night under a
+        name the operator chose for a different one, and the spots already
+        decoded in this slot would land in whichever was current when the
+        slot ended.
+        """
+        if self.wspr_running:
+            self._wspr_note("stop WSPR before changing session")
+            return
+        self.wspr_ses_rows = self._wspr_session_rows()
+        self.wspr_ses_sel = 0
+        # Open on the session in use, so Enter is "stay here" rather than a
+        # jump to whatever happens to be newest.
+        here = self._wspr_session_now()
+        for i, row in enumerate(self.wspr_ses_rows):
+            if (row["name"], row["start"]) == here:
+                self.wspr_ses_sel = i
+                break
+        self.wspr_ses_message = ""
+        self._close_menu()
+        self.screen = WSPRSES
+
+    def _wspr_load_spots(self, name="", start=""):
+        """Fill the spot list from the log for a session.
+
+        The screen showed nothing on a deck powered on into a session with
+        5,992 spots behind it, because `wspr_spots` only ever held what this
+        RUN had decoded. The counts came from the log and the list did not,
+        so the two disagreed on screen.
+
+        Newest first, and capped the same way a live run caps it.
+        """
+        import grid
+        import wsprlog
+        name = name or str(self.cfg.get("WSPR_SESSION", "") or "")
+        start = start or str(self.cfg.get("WSPR_SESSION_START", "") or "")
+        try:
+            records = wsprlog.read(wsprlog.log_path(
+                self.cfg.get("WSPR_LOG_PATH", "")))
+        except Exception:                                  # noqa: BLE001
+            self.wspr_spots = []
+            return 0
+        chosen = wsprlog.for_session(records, name, start) if name else records
+        mine = self.cfg.get("LOCATOR", "")
+        out = []
+        for rec in chosen:
+            if rec.get("kind") == wsprlog.TX:
+                # A beacon is this station transmitting; the spot list is
+                # what was HEARD. The `sent` count already reports them.
+                continue
+            theirs = str(rec.get("grid", "") or "")
+            out.append(dict(rec,
+                            km=grid.distance_km(mine, theirs),
+                            az=grid.azimuth_deg(mine, theirs)))
+        out.sort(key=lambda r: str(r.get("when", "")), reverse=True)
+        self.wspr_spots = out[:200]
+        return len(self.wspr_spots)
+
+    def _wspr_resume(self, name, start):
+        """Make an existing session the current one and show its spots."""
+        self._wspr_counts_stale()
+        self.cfg["WSPR_SESSION"] = name
+        self.cfg["WSPR_SESSION_START"] = start
+        self._save_state()
+        n = self._wspr_load_spots(name, start)
+        self._wspr_loaded = True
+        self.wspr_sel = None
+        self._wspr_note(f"session {name} — {n} spot{'' if n == 1 else 's'}")
+
+    def _draw_wspr_sessions(self, h, w):
+        rows = getattr(self, "wspr_ses_rows", None) or [{"new": True}]
+        self.wspr_ses_sel = max(0, min(getattr(self, "wspr_ses_sel", 0),
+                                       len(rows) - 1))
+        for i, line in enumerate(render.wspr_sessions_screen(
+                rows, self.wspr_ses_sel, w, h,
+                current=self._wspr_session_now(),
+                message=getattr(self, "wspr_ses_message", ""))):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_wspr_sessions(self, ch):
+        """The contact log's activities keys, on the WSPR session list.
+
+        `Enter` resume, `n` new, `r` rename, `d` forget, `Esc` back. The same
+        keys because it is the same idea -- a WSPR session and a logger
+        activity are one concept -- and simpler by one thing: there is no
+        schema to choose, since every spot carries the same fields.
+        """
+        import wsprlog
+        rows = getattr(self, "wspr_ses_rows", None) or []
+        n = len(rows)
+        if ch == 27:
+            self.screen = WSPR
+        elif ch == curses.KEY_UP and rows:
+            self.wspr_ses_sel = (self.wspr_ses_sel - 1) % n
+            self.wspr_ses_message = ""
+        elif ch == curses.KEY_DOWN and rows:
+            self.wspr_ses_sel = (self.wspr_ses_sel + 1) % n
+            self.wspr_ses_message = ""
+        elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE) and rows:
+            step = -8 if ch == curses.KEY_PPAGE else 8
+            self.wspr_ses_sel = max(0, min(n - 1, self.wspr_ses_sel + step))
+        elif ch in (10, 13, curses.KEY_ENTER) and rows:
+            row = rows[self.wspr_ses_sel]
+            self._wspr_resume(row["name"], row["start"])
+            self.screen = WSPR
+        elif ch in (ord("n"), ord("N")):
+            # The existing editor, which pins a fresh start -- which is what
+            # makes it a new session rather than a rename.
+            self.screen = WSPR
+            self._open_editor(None, "WSPR session name",
+                              sink=self._wspr_set_session)
+        elif ch in (ord("r"), ord("R")) and rows:
+            row = rows[self.wspr_ses_sel]
+            # Prefilled with the name it has: a rename is almost always a
+            # correction to one word of it.
+            self._wspr_renaming = (row["name"], row["start"])
+            self._open_editor(None, "New session name", text=row["name"],
+                              sink=self._wspr_rename_session)
+        elif ch in (ord("d"), ord("D")) and rows:
+            row = rows[self.wspr_ses_sel]
+            heard, sent = row.get("heard", 0), row.get("sent", 0)
+            # "Forget", not "delete", because that is what happens. The spots
+            # keep their labels and stay in the log; only the list stops
+            # offering the session. The danger zone is where records are
+            # destroyed, and conflating the two would teach an operator to
+            # distrust the confirmation that really does delete.
+            self._ask_confirm(
+                "FORGET THIS SESSION",
+                [f"{row['name']}  {str(row['start'])[:10]}".strip(),
+                 "",
+                 f"Its {heard} spot{'' if heard == 1 else 's'} and "
+                 f"{sent} transmission{'' if sent == 1 else 's'} stay in",
+                 "the log and keep this name, so it can still be",
+                 "exported. Only the list forgets it.",
+                 "",
+                 "Running under the name again brings it back."],
+                lambda name=row["name"], start=row["start"]:
+                    self._wspr_forget_session(name, start),
+                back=WSPRSES)
+        return True
+
+    def _wspr_rename_session(self, new_name):
+        """Relabel every record of the session picked on the list."""
+        import wsprlog
+        pair = getattr(self, "_wspr_renaming", None)
+        self._wspr_renaming = None
+        if not pair:
+            return
+        name, start = pair
+        new_name = str(new_name or "").strip()
+        if not new_name or new_name == name:
+            self.screen = WSPRSES
+            return
+        try:
+            changed = wsprlog.rename_session(
+                wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")),
+                name, start, new_name)
+        except OSError as exc:
+            self._wspr_note(f"could not write the spot log: {exc}")
+            return
+        # The session in use follows its own rename, or the deck would go on
+        # writing spots under the old name.
+        if (str(self.cfg.get("WSPR_SESSION", "")), 
+                str(self.cfg.get("WSPR_SESSION_START", ""))) == (name, start):
+            self.cfg["WSPR_SESSION"] = new_name
+            self._save_state()
+        self._wspr_counts_stale()
+        self.wspr_ses_rows = self._wspr_session_rows()
+        self.wspr_ses_message = (f"renamed — {changed} record"
+                                 f"{'' if changed == 1 else 's'}")
+        self.screen = WSPRSES
+
+    def _wspr_forget_session(self, name, start):
+        """Take a session off the list. Destroys nothing."""
+        pairs = [list(p) for p in self._wspr_forgotten()]
+        if [name, start] not in pairs:
+            pairs.append([name, start])
+        self.cfg["WSPR_FORGOTTEN"] = pairs
+        self._save_state()
+        self.wspr_ses_rows = self._wspr_session_rows()
+        self.wspr_ses_sel = max(0, min(getattr(self, "wspr_ses_sel", 0),
+                                       len(self.wspr_ses_rows) - 1))
+        self.wspr_ses_message = f"{name} forgotten — every spot is still there"
+        self.screen = WSPRSES
 
     def _handle_activities(self, ch):
         rows = self._activity_choices()
@@ -5046,7 +5401,7 @@ class Deck:
         # this one cannot. F4 is the deck-wide color cycle, so F5 is the next
         # one free.
         elif ch == curses.KEY_F5:
-            self.map_state = None
+            self._map_cache = None
             self.screen = LOGMAP
         elif ch == 9:                                   # Tab
             # Leaving the callsign is the moment it is worth asking about.
@@ -5445,6 +5800,8 @@ class Deck:
             self._draw_ring_editor(h, w)
         elif self.screen == EXPORT:
             self._draw_export(h, w)
+        elif self.screen == WSPRSES:
+            self._draw_wspr_sessions(h, w)
         elif self.screen == PAIR:
             self._draw_pair(h, w)
         elif self.screen == WIFI:
@@ -5472,6 +5829,11 @@ class Deck:
         else:
             self._draw_chat(h, w)
         scr.refresh()
+        # **After the refresh, never before.** The framebuffer and the text
+        # console are the same memory: a picture drawn before `refresh` is
+        # erased by it. See `_blit_map`.
+        if self.screen in (WSPRMAP, LOGMAP):
+            self._blit_map_now()
 
     def _draw_chat(self, h, w):
         compose_h = 2
@@ -5811,6 +6173,8 @@ class Deck:
 
         if self.screen == WSPRCAL:
             return self._handle_wspr_cal(ch)
+        if self.screen == WSPRSES:
+            return self._handle_wspr_sessions(ch)
         if self.screen in (WSPRMAP, LOGMAP):
             return self._handle_map(self.screen, ch)
 
@@ -6669,7 +7033,7 @@ class Deck:
         if m == "logging":
             if key == "g":
                 self._close_menu()
-                self.map_state = None
+                self._map_cache = None
                 self.screen = LOGMAP
                 return True
             if key == "l":

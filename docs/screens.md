@@ -400,12 +400,12 @@ per row. The mode label is from the regulation too where there is one --
 │  30m (CW/Data only)                              10.100 - 10.150 │
 │▸ 20m (CW/Data)                                   14.025 - 14.150 │
 │  20m (Phone)                                     14.225 - 14.350 │
-│  17m (All Modes)                                 18.068 - 18.168 │
+│  17m (CW/Data)                                   18.068 - 18.110 │
+│  17m (Phone)                                     18.110 - 18.168 │
 │  15m (CW/Data)                                   21.025 - 21.200 │
 │  15m (Phone)                                     21.275 - 21.450 │
-│  12m (All Modes)                                 24.890 - 24.990 │
-│  10m (CW/Data)                                   28.000 - 28.300 │
-│  10m (SSB)                                       28.300 - 28.600 │
+│  12m (CW/Data)                                   24.890 - 24.930 │
+│  12m (Phone)                                     24.930 - 24.990 │
 │                                                                  │
 │                                                                  │
 │──────────────────────────────────────────────────────────────────│
@@ -427,9 +427,9 @@ The footer line counts what the run will cost before it starts.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ AUTO TUNER — General                                         1/2 │
+│ AUTO TUNER — General                                INH off  1/2 │
 │──────────────────────────────────────────────────────────────────│
-│  [x] 160m (All Modes)                              1.800 - 2.000 │
+│  [ ] 160m (All Modes)                              1.800 - 2.000 │
 │  [ ] 80m (CW/Data)                                 3.525 - 3.600 │
 │▸ [*] 80m (Phone)                                   3.800 - 4.000 │
 │  [ ] 40m (CW/Data)                                 7.025 - 7.125 │
@@ -437,16 +437,16 @@ The footer line counts what the run will cost before it starts.
 │  [ ] 30m (CW/Data only)                          10.100 - 10.150 │
 │  [ ] 20m (CW/Data)                               14.025 - 14.150 │
 │  [*] 20m (Phone)                                 14.225 - 14.350 │
-│  [*] 17m (All Modes)                             18.068 - 18.168 │
+│  [ ] 17m (CW/Data)                               18.068 - 18.110 │
+│  [*] 17m (Phone)                                 18.110 - 18.168 │
 │  [ ] 15m (CW/Data)                               21.025 - 21.200 │
 │  [*] 15m (Phone)                                 21.275 - 21.450 │
-│  [x] 12m (All Modes)                             24.890 - 24.990 │
-│  [ ] 10m (CW/Data)                               28.000 - 28.300 │
-│  [x] 10m (SSB)                                   28.300 - 28.600 │
+│  [ ] 12m (CW/Data)                               24.890 - 24.930 │
+│  [ ] 12m (Phone)                                 24.930 - 24.990 │
 │                                                                  │
 │──────────────────────────────────────────────────────────────────│
-│ selected: 5 segments   80 memories   about 4 min                 │
-│ Esc back  ↑↓ move  Space pick  l lock  p phone  Enter run        │
+│ selected: 5 segments   75 memories   about 4 min                 │
+│ Esc back  ↑↓ move  Space pick  + - dwell 2.5s  Enter run         │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -466,9 +466,9 @@ silently, which is why the floor is one second.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ AUTO TUNER — General                                         1/2 │
+│ AUTO TUNER — General                                INH off  1/2 │
 │──────────────────────────────────────────────────────────────────│
-│  [x] 160m (All Modes)                              1.800 - 2.000 │
+│  [ ] 160m (All Modes)                              1.800 - 2.000 │
 │  [ ] 80m (CW/Data)                                 3.525 - 3.600 │
 │▸ [*] 80m (Phone)                                   3.800 - 4.000 │
 │  [ ] 40m (CW/Data)                                 7.025 - 7.125 │
@@ -476,12 +476,12 @@ silently, which is why the floor is one second.
 │  [ ] 30m (CW/Data only)                          10.100 - 10.150 │
 │  [ ] 20m (CW/Data)                               14.025 - 14.150 │
 │  [*] 20m (Phone)                                 14.225 - 14.350 │
-│  [*] 17m (All Modes)                             18.068 - 18.168 │
+│  [ ] 17m (CW/Data)                               18.068 - 18.110 │
+│  [*] 17m (Phone)                                 18.110 - 18.168 │
 │  [ ] 15m (CW/Data)                               21.025 - 21.200 │
 │  [*] 15m (Phone)                                 21.275 - 21.450 │
-│  [x] 12m (All Modes)                             24.890 - 24.990 │
-│  [ ] 10m (CW/Data)                               28.000 - 28.300 │
-│  [x] 10m (SSB)                                   28.300 - 28.600 │
+│  [ ] 12m (CW/Data)                               24.890 - 24.930 │
+│  [ ] 12m (Phone)                                 24.930 - 24.990 │
 │                                                                  │
 │──────────────────────────────────────────────────────────────────│
 │ tuning 7/24   14.326 MHz   ^X aborts                             │
@@ -588,8 +588,8 @@ clips hard, and a map quietly dropping a third of the night would answer
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ 32 spots   1 off this view                               global  │
-│120m 215m 340m 417m 530m 610m 712m 880m    +heard v view  Esc back│
+│ fieldday — 32 spots   1 off this view                    global  │
+│ v view   Esc back                                                │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -609,8 +609,8 @@ nothing on this screen fixes a missing grid.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ 11 spots   4 with no grid                                 focus  │
-│140m 220m 315m    +worked                         v view  Esc back│
+│ Bald Eagle SP — 11 contacts   4 with no grid              focus  │
+│ v view   Esc back                                                │
 └──────────────────────────────────────────────────────────────────┘
 ```
 

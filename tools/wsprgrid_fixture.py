@@ -155,17 +155,14 @@ def new_screens(cols, rows):
     import export
 
     segs = bandplan.segments("us_general")
+    # Picked one row at a time, which is the only way there is: the bulk
+    # selections and the per-segment lock were removed 2026-10-23. The
+    # phone segments of the bands this station works.
     sel = bandplan.Selection(segs)
-    sel.select_phone()
-    # The locks the operator actually asked for: 160 m, 12 m, 10 m and 6 m
-    # off the sweep, because those are the bands this station does not work
-    # phone on. A locked segment is `[x]` and no bulk selection can turn it
-    # back on, which is the point of the lock rather than a second way to
-    # deselect.
-    for key in ("160m:All Modes", "12m:All Modes", "10m:SSB",
-                "10m:AM / misc", "10m:FM / repeaters", "6m:SSB",
-                "6m:FM simplex"):
-        sel.toggle_lock(key)
+    for seg in segs:
+        if seg.label == bandplan.PHONE and seg.band in ("80m", "40m", "20m",
+                                                        "17m", "15m"):
+            sel.toggle(seg.key)
 
     # The ring as an operator might set it: the band plan moved to the front,
     # WSPR left off.
@@ -242,26 +239,22 @@ def maps(cols, rows):
     import grid
     import wsprmap
 
-    def built(view, spots, directions):
+    def built(view, spots, noun="spot", title=""):
         base = wsprmap.load(view=view)
         sm = wsprmap.SpotMap(base, home=grid.to_latlon(HOME))
         for locator, band, kind in spots:
             sm.add_grid(locator, band,
                         wsprmap.HEARD if kind == "heard"
                         else wsprmap.HEARD_BY)
-        return sm, render.map_overlay(sm.summary(), sm.bands(), None, view,
-                                      cols, directions=directions)
+        return sm, render.map_overlay(sm.summary(noun), view, cols,
+                                      title=title)
 
-    wspr_sm, wspr_rows = built(
-        "global", MAP_SPOTS,
-        [("heard", "+", True), ("by me", "x", True)])
-    log_sm, log_rows = built(
-        "focus", [(g, b, "by") for g, b in LOG_SPOTS],
-        [("worked", "+", True)])
+    wspr_sm, wspr_rows = built("global", MAP_SPOTS, title="fieldday")
+    log_sm, _ = built("focus", [(g, b, "by") for g, b in LOG_SPOTS],
+                      noun="contact", title="Bald Eagle SP")
     # The contacts with no grid, which the log map counts rather than drops.
     log_sm.ungridded = 4
-    log_rows = render.map_overlay(log_sm.summary(), log_sm.bands(), None,
-                                  "focus", cols,
-                                  directions=[("worked", "+", True)])
+    log_rows = render.map_overlay(log_sm.summary("contact"), "focus", cols,
+                                  title="Bald Eagle SP")
     return [("wspr-map", wspr_sm, wspr_rows),
             ("log-map", log_sm, log_rows)]

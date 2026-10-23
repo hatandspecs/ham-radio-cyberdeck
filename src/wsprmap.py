@@ -35,7 +35,10 @@ BASEMAP = os.path.join(HERE, "basemap.bin")
 #
 # `focus` clips hard, so a map drawn in it is hiding spots. `SpotMap` counts
 # them and the screen says how many rather than letting them vanish.
-VIEWS = ("focus", "global", "wide")
+# Two views, cycled with `v`. The third was `wide` -- `global` with twelve
+# more degrees at each pole, carried for the Antarctic bases -- and it was
+# dropped 2026-10-23 as too nearly the same picture to be worth a press.
+VIEWS = ("focus", "global")
 DEFAULT_VIEW = "global"
 
 
@@ -194,20 +197,28 @@ def load(path=None, view=DEFAULT_VIEW):
 # panel, so a spot is five: legible against the outline without turning fifty
 # of them into a smear, which is the density a half-hour session produces.
 #
-# **Two shapes, because the two directions answer different questions.** A
-# plus is a station that heard this one; a diagonal cross is a station this
-# one heard. Seeing both at once is how "am I deaf?" gets answered -- if the
-# pluses reach Europe and the crosses stop at the coast, the receive side is
-# the weak half, which is exactly what the October analysis measured at
-# +11 dB. One shape for both would hide the thing worth looking for.
-HEARD_BY = "heard_by"       # they heard me
-HEARD = "heard"             # I heard them
+# **One shape, because the deck knows one direction.** Every point on these
+# maps is a station this deck HEARD. Who heard IT is on wsprnet and needs a
+# network the deck is often without, so a heard-by half was never in the
+# spot log to draw.
+#
+# The analysis repository does draw both, because it works from downloaded
+# wsprnet data where both exist -- that is where "am I deaf?" gets answered,
+# and the October capture measured it at +11 dB. It is not a question this
+# deck has the data to ask.
+HEARD = "heard"             # a station this deck decoded
 
 PLUS = ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1))
 CROSS = ((0, 0), (-1, -1), (1, 1), (-1, 1), (1, -1))
-SPOT_OFFSETS = PLUS         # kept: the single-direction maps use it
+SPOT_OFFSETS = PLUS
 
-SHAPES = {HEARD_BY: PLUS, HEARD: CROSS}
+SHAPES = {HEARD: PLUS}
+
+# This station. An `×`, so it is not one more `+` among the spots, and in
+# the scheme's own bright colour rather than white -- white is not one of
+# the phosphor colours and read as a fault.
+HOME = ((0, 0), (-1, -1), (1, 1), (-2, -2), (2, 2),
+        (-1, 1), (1, -1), (-2, 2), (2, -2))
 
 
 class SpotMap:
@@ -232,7 +243,7 @@ class SpotMap:
         # does not, because a spot without a grid is not a spot.
         self.ungridded = 0
 
-    def add(self, lat, lon, band="", direction=HEARD_BY):
+    def add(self, lat, lon, band="", direction=HEARD):
         xy = self.base.project(lat, lon)
         if xy is None:
             self.offmap += 1
@@ -240,7 +251,7 @@ class SpotMap:
         self.points.append((xy[0], xy[1], band, direction))
         return True
 
-    def add_grid(self, locator, band="", direction=HEARD_BY):
+    def add_grid(self, locator, band="", direction=HEARD):
         """A Maidenhead square, which is what both logs actually store."""
         import grid
         if not grid.valid(locator):
@@ -248,8 +259,12 @@ class SpotMap:
         lat, lon = grid.to_latlon(locator)
         return self.add(lat, lon, band, direction)
 
-    def summary(self):
+    def summary(self, noun="spot"):
         """The line under the map: what is on it, and what is not.
+
+        `noun` because the same map serves two logs: WSPR decodes are spots
+        and log entries are contacts, and a contact map reporting "11 spots"
+        describes the wrong thing to the operator reading it.
 
         Both kinds of absence are named. A point can be missing because the
         view clips it (`offmap`) or because the record never had a grid to
@@ -257,9 +272,10 @@ class SpotMap:
         by `v`, the second cannot be fixed from this screen at all.
         """
         n = len(self.points)
+        plural = noun if n == 1 else noun + "s"
         if not n and not self.offmap and not self.ungridded:
-            return "no spots yet"
-        line = f"{n} spot{'' if n == 1 else 's'}"
+            return f"no {noun}s yet"
+        line = f"{n} {plural}"
         if self.offmap:
             line += f"   {self.offmap} off this view"
         if self.ungridded:
@@ -303,12 +319,25 @@ class SpotMap:
         return out
 
     def bands(self):
-        """Bands present, in the order the band keys are shown."""
+        """Bands present, longest wavelength first.
+
+        The order a band row is read in. It used to be the order the bands
+        were MET in the log, which put 40, 20, 15, 30, 17, 80 on the row --
+        no order at all to anyone looking at it.
+
+        Sorted by the metres in the name, so `80 m` and `80m` both sort as
+        80 and a band this does not recognise falls to the end rather than
+        raising.
+        """
         seen = []
         for _x, _y, band, _d in self.points:
             if band and band not in seen:
                 seen.append(band)
-        return seen
+
+        def metres(name):
+            digits = "".join(c for c in str(name) if c.isdigit())
+            return -int(digits) if digits else 1
+        return sorted(seen, key=lambda b: (metres(b), str(b)))
 
     def pixels(self, bands=None, directions=None):
         """Every lit spot pixel, as `(x, y, band, direction)`.
@@ -332,20 +361,22 @@ class SpotMap:
         return out
 
     def home_pixels(self):
-        """The station's own marker: a small open square, so it reads as a
-        place rather than as the loudest spot on the map."""
+        """The station's own marker: an `×`, so it is not one more spot.
+
+        Every spot is a `+`; this is the one thing on the map that is not,
+        which is what makes it findable without a colour of its own.
+        """
         if not self.home:
             return []
         xy = self.base.project(*self.home)
         if xy is None:
             return []
         cx, cy = xy
-        # A set, because the four sides share corners and a doubled pixel is
+        # A set, because the arms share their centre and a doubled pixel is
         # a doubled draw -- harmless on a framebuffer, misleading in a count.
         seen = set()
-        for d in range(-2, 3):
-            for px, py in ((cx + d, cy - 2), (cx + d, cy + 2),
-                           (cx - 2, cy + d), (cx + 2, cy + d)):
-                if 0 <= px < self.base.width and 0 <= py < self.base.height:
-                    seen.add((px, py))
+        for dx, dy in HOME:
+            px, py = cx + dx, cy + dy
+            if 0 <= px < self.base.width and 0 <= py < self.base.height:
+                seen.add((px, py))
         return sorted(seen)

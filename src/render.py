@@ -937,6 +937,63 @@ def export_screen(urls, rows, width, height, remaining=0.0, downloads=0,
     return out[:height]
 
 
+def wspr_sessions_screen(rows, selected, width, height, current=("", ""),
+                         message=""):
+    """Every WSPR session in the log, newest first.
+
+    `rows` is `[{"name", "start", "heard", "sent", "bands", "last"}, ...]`.
+    The same screen as the contact log's activities list and deliberately so
+    -- a WSPR session and a logger activity are the same idea, so they get
+    the same keys. It is simpler by exactly one thing: a session has no
+    schema, because every spot carries the same fields.
+
+    The session in use is marked rather than hidden. The question this screen
+    answers is "which run am I looking at", and the answer has to include the
+    one already open.
+
+    Sessions are DERIVED from the spot log, so a run that decoded nothing is
+    not here. That is the honest listing: there is nothing to resume.
+    """
+    out = []
+    head = " WSPR SESSIONS"
+    right = f"{len(rows)} " if rows else ""
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    body = max(1, height - 5)
+    if rows:
+        page = min(max(0, selected // body), max(0, (len(rows) - 1) // body))
+        shown = rows[page * body:(page + 1) * body]
+    else:
+        page, shown = 0, []
+
+    if not rows:
+        out.append([("  no sessions yet — n starts one"
+                     .ljust(width)[:width], "dim")])
+    for i, row in enumerate(shown, start=page * body):
+        mark = "\u25b8" if i == selected else " "
+        here = (row.get("name", ""), row.get("start", "")) == tuple(current)
+        # The day, not the timestamp: two runs under one name are told apart
+        # by when they began, and the date is what an operator remembers.
+        day = str(row.get("start", ""))[:10] or "--"
+        counts = f"{row.get('heard', 0)}/{row.get('sent', 0)}"
+        bands = " ".join(row.get("bands", [])[:4])
+        line = (f"{mark}{'*' if here else ' '}{row.get('name', ''):<14}"
+                f"{day:<12}{counts:>9}  {bands}")
+        out.append([(line[:width].ljust(width),
+                     "bright" if i == selected else "")])
+
+    while len(out) < height - 3:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + message)[:width].ljust(width),
+                 "dim" if message else "")])
+    out.append([(" \u2191\u2193 pick  Enter resume  n new  r rename"
+                 "  d forget  Esc back".ljust(width)[:width], "dim")])
+    return out[:height]
+
+
 RING_ON, RING_OFF = "[*]", "[ ]"
 
 
@@ -2183,7 +2240,7 @@ SEGMENTS_PER_PAGE = 14
 # Marks on a segment row. A locked segment stays visible and marked rather
 # than hidden: a band that silently vanished reads as a missing band, and the
 # lock has to be as easy to undo as it is to set.
-SEG_ON, SEG_OFF, SEG_LOCKED = "[*]", "[ ]", "[x]"
+SEG_ON, SEG_OFF = "[*]", "[ ]"
 
 
 def _segment_row(seg, width, mark="", box=""):
@@ -2236,7 +2293,8 @@ def allocation_screen(segs, selected, width, height, license_name="",
 
 
 def tuner_screen(sel, selected, width, height, license_name="", dwell_s=5.0,
-                 message="", running=None, per_page=SEGMENTS_PER_PAGE):
+                 message="", running=None, per_page=SEGMENTS_PER_PAGE,
+                 inhibited=False):
     """The auto tuner's segment list.
 
     `sel` is a `bandplan.Selection`. `running` is None when idle, otherwise
@@ -2253,16 +2311,21 @@ def tuner_screen(sel, selected, width, height, license_name="", dwell_s=5.0,
     head = " AUTO TUNER"
     if license_name:
         head += f" — {license_name}"
-    right = f"{page + 1}/{pages} " if pages > 1 else ""
+    # **The interlock belongs on this header.** This screen keys the
+    # transmitter for the better part of an hour, and without the indicator
+    # `^B` changed nothing an operator could see -- the key worked, the
+    # screen did not say so, and it read as dead. Worded as the WSPR header
+    # words it, since that is the other screen that keys the radio.
+    right = "INH  " if inhibited else "INH off  "
+    if pages > 1:
+        right += f"{page + 1}/{pages} "
     pad = max(1, width - len(head) - len(right))
     out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
     out.append(rule(width))
 
     for i, seg in enumerate(shown, start=page * per_page):
-        mark = "▸" if i == selected else " "
-        if sel.is_locked(seg.key):
-            box, kind = SEG_LOCKED, "dim"
-        elif sel.is_selected(seg.key):
+        mark = "\u25b8" if i == selected else " "
+        if sel.is_selected(seg.key):
             box, kind = SEG_ON, "bright"
         else:
             box, kind = SEG_OFF, ""
@@ -2285,8 +2348,13 @@ def tuner_screen(sel, selected, width, height, license_name="", dwell_s=5.0,
     if running is not None:
         foot = "^X abort"
     else:
-        foot = ("Esc back  ↑↓ move  Space pick  l lock  "
-                "p phone  Enter run")
+        # **`d dwell` is on the footer.** It was bound and unadvertised, so
+        # the one setting this screen exists to vary could not be found from
+        # it. The bulk selections and the locks are gone: scrolling and
+        # pressing Space is fast enough on a list this long, and with no
+        # bulk operation to override, a lock protected against nothing.
+        foot = (f"Esc back  \u2191\u2193 move  Space pick  "
+                f"+ - dwell {dwell_s:g}s  Enter run")
     out.append([((" " + foot)[:width].ljust(width), "dim")])
     return out[:height]
 
@@ -2294,51 +2362,41 @@ def tuner_screen(sel, selected, width, height, license_name="", dwell_s=5.0,
 # Band keys on the map screen, in the order bands are listed. Digits, because
 # the band picker already uses digits for bands and an operator who knows
 # `3` is 30 m there should not learn a second alphabet here.
+# The band digits the map used to carry. Kept out of the map and still used
+# by the band PICKER, which is where choosing a band belongs.
 MAP_BAND_KEYS = "1234567890"
 
 
-def map_overlay(summary, bands, on_bands, view, width, directions=None,
-                message=""):
+def map_overlay(summary, view, width, message="", title=""):
     """The two text rows drawn over the map, as curses lines.
 
-    The picture itself goes to the framebuffer; this is what curses puts back
-    on top. Two rows only -- the map is the screen and the chrome has to earn
-    every line it takes.
+    **One key and Esc.** The map shows the stations this deck HEARD, in the
+    session being logged, and that is the whole of it.
+
+    What was here and is not:
+
+    - *Band toggles.* Within one session the question is "where is this
+      antenna being heard", which every band answers together. Which band a
+      spot arrived on is a question the spot LIST answers, with a column.
+    - *A heard / heard-by filter.* **The deck has no heard-by data.** Its
+      spot log holds what it decoded and what it transmitted; who heard IT
+      is on wsprnet, and reading that needs a network this deck is often
+      without. The filter was drawing the deck's own beacons, which carry no
+      remote grid, so one of its two positions was always empty.
+
+    `v` stays, because one clip cannot serve both "who is working me around
+    the states" and "where did I reach tonight".
+
+    The picture itself goes to the framebuffer; this is what curses puts
+    back on top.
     """
     out = []
-    head = f" {summary}"
+    head = f" {title + ' — ' if title else ''}{summary}"
     right = f"{view}  "
     pad = max(1, width - len(head) - len(right))
     out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
 
-    # The key and the band are SEPARATE segments, so the digit can be drawn
-    # as a key cap. In one segment the row read `180m 240m 330m 420m` -- five
-    # nonsense band names rather than four keys and four bands, and at eight
-    # bands there is no column to spare for a separator. The attribute is the
-    # separator.
-    keys = []
-    for i, band in enumerate(bands[:len(MAP_BAND_KEYS)]):
-        lit = on_bands is None or band in on_bands
-        keys.append((MAP_BAND_KEYS[i], "reverse" if lit else "dim"))
-        keys.append((band, "bright" if lit else "dim"))
-    if directions:
-        keys.append(("  ", ""))
-        for name, mark, lit in directions:
-            keys.append((f"{mark}{name}", "bright" if lit else "dim"))
-
-    line, used = [], 0
-    for text, kind in keys:
-        # No space after a key cap: the band name it labels comes next and
-        # belongs against it. The space goes after the band.
-        chunk = text if kind == "reverse" else text + " "
-        if used + len(chunk) >= width - 10:
-            break
-        line.append((chunk, kind))
-        used += len(chunk)
-    tail = "v view  Esc back"
-    if message:
-        tail = message[:width - used - 2]
-    line.append((tail.rjust(max(1, width - used))[:max(1, width - used)],
-                 "dim"))
-    out.append(line)
+    tail = message or "v view   Esc back"
+    out.append([((" " + tail)[:width].ljust(width),
+                 "bright" if message else "dim")])
     return out

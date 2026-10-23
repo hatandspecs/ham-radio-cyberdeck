@@ -24,11 +24,16 @@ BASE = wsprmap.load()
 HOME = (40.771, -77.792)          # FN10cs
 
 print("the shipped outline is the one the generator wrote")
-equals("800 by 480, the panel's own size", (BASE.width, BASE.height),
-       (800, 480))
+# 432 rows, not the panel's 480: the two text rows curses draws over the map
+# are 24 pixels each, and the picture is generated to fit BELOW them. They
+# used to overlap, and curses won -- which is what made the map on the deck
+# look like fragments squeezed into the top of the screen.
+equals("800 by 432, the panel below its two text rows",
+       (BASE.width, BASE.height),
+       (800, 432))
 equals("cut at 90 east, through Tibet", BASE.cut_lon, 90.0)
 # The default view is `global`: the whole world without the ice. The clip
-# that keeps the Antarctic bases is the `wide` view, asserted further down
+# that reached Antarctica is counted as off the view, asserted further down
 # where the three views are compared.
 check("it reaches both hemispheres", BASE.lat_south < 0 < BASE.lat_north,
       (BASE.lat_south, BASE.lat_north))
@@ -86,33 +91,39 @@ for lon in (-540, -180, 0, 180, 540, 719.9):
 
 print("\na spot is five pixels, because one is invisible at arm's length")
 sm = wsprmap.SpotMap(BASE, home=HOME)
-check("it adds", sm.add(51.5, -0.13, "20m", wsprmap.HEARD_BY))
+check("it adds", sm.add(51.5, -0.13, "20m", wsprmap.HEARD))
 equals("five pixels for one spot", len(sm.pixels()), 5)
 
-print("\nthe two directions are different shapes")
+print("\nevery spot is the same `+`, and only this station is not")
+# The deck knows one direction: what it HEARD. Who heard IT is on wsprnet,
+# which needs a network the deck is often without, so a heard-by half was
+# never in the spot log to draw. The one `×` on the map is home.
 sm = wsprmap.SpotMap(BASE, home=HOME)
-sm.add(51.5, -0.13, "20m", wsprmap.HEARD_BY)
-sm.add(51.5, -0.13, "20m", wsprmap.HEARD)
-by = {(x, y) for x, y, _b, d in sm.pixels() if d == wsprmap.HEARD_BY}
-hd = {(x, y) for x, y, _b, d in sm.pixels() if d == wsprmap.HEARD}
-equals("both are five pixels", (len(by), len(hd)), (5, 5))
-check("and they are not the same five", by != hd, (sorted(by), sorted(hd)))
-equals("they share only the centre", len(by & hd), 1)
+sm.add(51.5, -0.13, "20m")
+px = [(x, y) for x, y, _b, _d in sm.pixels()]
+equals("a spot is five pixels", len(px), 5)
+x0, y0 = min(p[0] for p in px), min(p[1] for p in px)
+equals("in a plus, not a cross", {(x - x0, y - y0) for x, y in px},
+       {(1, 0), (0, 1), (1, 1), (2, 1), (1, 2)})
+home = set(sm.home_pixels())
+check("home is a different shape from a spot", len(home) > 5, len(home))
+check("and no spot pixel is shaped like it", home != set(px))
 
-print("\nband and direction switch independently")
+print("\nthe band filter still works, though the map no longer offers it")
+# The map screen stopped filtering by band on 2026-10-23: it is scoped to
+# one session, and within a session every band answers the same question.
+# `pixels` keeps the argument because `bands()` is still what names them.
 sm = wsprmap.SpotMap(BASE, home=HOME)
-sm.add(51.5, -0.13, "20m", wsprmap.HEARD_BY)
-sm.add(-31.95, 115.86, "40m", wsprmap.HEARD)
-equals("both bands are offered", sorted(sm.bands()), ["20m", "40m"])
-equals("both directions too", sorted(sm.directions()),
-       sorted([wsprmap.HEARD, wsprmap.HEARD_BY]))
+sm.add(51.5, -0.13, "20m")
+sm.add(-31.95, 115.86, "40m")
+equals("both bands are reported, longest first",
+       sm.bands(), ["40m", "20m"])
+equals("one direction, because the deck knows one",
+       sorted(sm.directions()), [wsprmap.HEARD])
 equals("one band selected shows one spot",
        len(sm.pixels(bands=["20m"])), 5)
-equals("one direction selected shows one spot",
-       len(sm.pixels(directions=[wsprmap.HEARD])), 5)
-equals("neither selected shows nothing",
-       len(sm.pixels(bands=[], directions=[])), 0)
-equals("both selected shows both", len(sm.pixels()), 10)
+equals("none selected shows nothing", len(sm.pixels(bands=[])), 0)
+equals("unfiltered shows both", len(sm.pixels()), 10)
 
 print("\nshapes are clipped at the edge, never wrapped")
 # A spot at the cut is at the cut. Wrapping would draw half a marker on the
@@ -142,17 +153,17 @@ equals("no home, no marker",
 
 print("\nreach answers the steering question in numbers")
 sm = wsprmap.SpotMap(BASE, home=HOME)
-sm.add(51.5, -0.13, "20m", wsprmap.HEARD_BY)       # east
-sm.add(51.5, -0.13, "20m", wsprmap.HEARD_BY)
-sm.add(37.8, -122.4, "20m", wsprmap.HEARD_BY)      # west
+sm.add(51.5, -0.13, "20m", wsprmap.HEARD)       # east
+sm.add(51.5, -0.13, "20m", wsprmap.HEARD)
+sm.add(37.8, -122.4, "20m", wsprmap.HEARD)      # west
 sm.add(-22.9, -43.2, "20m", wsprmap.HEARD)         # south
 r = sm.reach()
-equals("two to the east", r[wsprmap.HEARD_BY]["E"], 2)
-equals("one to the west", r[wsprmap.HEARD_BY]["W"], 1)
+equals("two to the east", r[wsprmap.HEARD]["E"], 2)
+equals("one to the west", r[wsprmap.HEARD]["W"], 1)
 equals("and the other direction is counted apart",
        r[wsprmap.HEARD]["S"], 1)
 check("a direction with nothing in it is simply absent",
-      "N" not in r.get(wsprmap.HEARD_BY, {}), r)
+      "N" not in r.get(wsprmap.HEARD, {}), r)
 
 print("\nreach needs a home to measure from")
 sm = wsprmap.SpotMap(BASE, home=None)
@@ -171,14 +182,14 @@ equals("and leaves nothing behind", len(sm.points), 0)
 print("\nthree views of the same world, cycled with one key")
 for view in wsprmap.VIEWS:
     b = wsprmap.load(view=view)
-    equals(f"{view}: the panel's own size", (b.width, b.height), (800, 480))
+    equals(f"{view}: the panel below its text rows", (b.width, b.height),
+           (800, 432))
     check(f"{view}: has coastline", sum(b.bits) > 5000, sum(b.bits))
     equals(f"{view}: drawn in mercator", b.projection, "mercator")
 
 print("\nthe views differ in what they show, which is the point")
 focus = wsprmap.load(view="focus")
 glob = wsprmap.load(view="global")
-wide = wsprmap.load(view="wide")
 check("focus starts north of the tropics", focus.lat_south >= 15,
       focus.lat_south)
 check("and is a longitude slice, not the whole world",
@@ -197,10 +208,13 @@ check("the world views span the full 360",
       abs((glob.lon_east - glob.lon_west) - 360) < 0.01,
       (glob.lon_west, glob.lon_east))
 check("global drops the ice", glob.lat_south >= -65, glob.lat_south)
-check("wide keeps the Antarctic bases", wide.lat_south <= -70, wide.lat_south)
-check("DP0GVN at -70.65 is on the wide view only",
-      wide.project(-70.65, -8.27) is not None
-      and glob.project(-70.65, -8.27) is None, (wide.lat_south, glob.lat_south))
+# A third view, `wide`, carried -72 to 78 so that DP0GVN at Neumayer III
+# (-70.65) was on the map. It was dropped 2026-10-23: twelve more degrees
+# at each pole is too nearly the same picture as `global` to be worth a
+# press of the key. A spot below the clip is COUNTED, which is the part
+# that has to keep working -- see `offmap` above.
+equals("and a station below it is off the view rather than lost",
+       glob.project(-70.65, -8.27), None)
 
 print("\nfocus gives the USA far more of the panel")
 def us_share(b):
@@ -218,7 +232,7 @@ check("so focus is several times the scale",
 
 print("\nthe cycle wraps, and survives a name that is no longer a view")
 equals("focus to global", wsprmap.next_view("focus"), "global")
-equals("wide wraps to focus", wsprmap.next_view("wide"), "focus")
+equals("global wraps to focus", wsprmap.next_view("global"), "focus")
 equals("and backwards", wsprmap.next_view("global", -1), "focus")
 equals("an unknown view falls back", wsprmap.next_view("banana"),
        wsprmap.DEFAULT_VIEW)
@@ -237,7 +251,7 @@ check("and the summary says so", "3 off this view" in sm.summary(),
       sm.summary())
 
 print("\nthe wide view hides none of the same spots")
-sm = wsprmap.SpotMap(wide, home=HOME)
+sm = wsprmap.SpotMap(glob, home=HOME)
 for lat, lon in ((40.0, -105.0), (51.5, -0.13), (-31.95, 115.86),
                  (-22.9, -43.2)):
     sm.add(lat, lon, "20m")

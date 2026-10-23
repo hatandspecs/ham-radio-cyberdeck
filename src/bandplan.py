@@ -218,88 +218,40 @@ def segments(license_id="us_general", path=BANDPLANS, subdivide=True):
 
 
 class Selection:
-    """What is selected, what is locked, and what a sweep would cost.
+    """What is selected, and what a sweep of it would cost.
 
-    **A lock overrides every bulk operation.** `select_all`, `clear`,
-    `select_phone`, `select_cw` and `invert` all skip locked segments: a
-    locked row never becomes selected and `invert` does not flip it. Nothing
-    but unlocking puts a locked segment into a sweep.
-
-    That is the point of having both. Deselecting says "not this time";
-    locking says "never offer this", and it is how an operator records what
-    the antenna cannot do.
+    One segment at a time, through `toggle`. The bulk operations --
+    `select_all`, `clear`, `invert`, `select_phone`, `select_cw` -- and the
+    per-segment lock that existed to override them were removed
+    2026-10-23, after the first sweep on the panel: scrolling a list of
+    twenty-odd rows and pressing `Space` is fast enough, and with no bulk
+    operation to protect against, a lock protected against nothing.
     """
 
-    def __init__(self, segs, locked=(), chosen=()):
+    def __init__(self, segs, chosen=()):
         self._segs = list(segs)
-        self._locked = {k for k in locked}
-        self._chosen = {k for k in chosen if k not in self._locked}
+        self._chosen = set(chosen)
 
     # -- the rows -----------------------------------------------------------
     def rows(self):
         return list(self._segs)
 
-    def is_locked(self, key):
-        return key in self._locked
-
     def is_selected(self, key):
         return key in self._chosen
 
-    def locked_keys(self):
-        return sorted(self._locked)
-
     def selected(self):
-        """Selected segments, in list order, never including a locked one."""
-        return [s for s in self._segs
-                if s.key in self._chosen and s.key not in self._locked]
+        """Selected segments, in list order."""
+        return [s for s in self._segs if s.key in self._chosen]
 
     # -- single rows --------------------------------------------------------
     def toggle(self, key):
-        """Space on a row. A locked row does not move."""
-        if key in self._locked:
-            return False
+        """Space on a row. Returns whether the row is now selected."""
         if key in self._chosen:
             self._chosen.discard(key)
-        else:
-            self._chosen.add(key)
+            return False
+        self._chosen.add(key)
         return True
 
-    def toggle_lock(self, key):
-        """Lock or unlock a row. Locking also deselects it."""
-        if key in self._locked:
-            self._locked.discard(key)
-        else:
-            self._locked.add(key)
-            self._chosen.discard(key)
-        return key in self._locked
-
-    # -- the bulk operations, all of which respect locks --------------------
-    def _selectable(self):
-        return [s for s in self._segs if s.key not in self._locked]
-
-    def select_all(self):
-        self._chosen = {s.key for s in self._selectable()}
-
-    def clear(self):
-        self._chosen = set()
-
-    def select_phone(self, on=True):
-        keys = {s.key for s in self._selectable() if s.is_phone}
-        self._chosen |= keys if on else set()
-        if not on:
-            self._chosen -= keys
-
-    def select_cw(self, on=True):
-        keys = {s.key for s in self._selectable() if s.is_cw}
-        self._chosen |= keys if on else set()
-        if not on:
-            self._chosen -= keys
-
-    def invert(self):
-        sel = {s.key for s in self._selectable()}
-        self._chosen = sel - self._chosen
-
-    # -- what it costs ------------------------------------------------------
     def memory_count(self, step_hz=STEP_HZ):
         return sum(s.memory_count(step_hz) for s in self.selected())
 

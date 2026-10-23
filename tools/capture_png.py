@@ -81,8 +81,10 @@ def _draw_map(img, sm, scheme_key, w, h):
                 put(x, y, outline)
     for x, y, _band, _dirn in sm.pixels():
         put(x, y, spot)
+    # The scheme's own bright colour, as the deck draws it. White is not
+    # one of the phosphor colours; the `×` is what tells home from a spot.
     for x, y in sm.home_pixels():
-        put(x, y, (255, 255, 255))
+        put(x, y, spot)
 
 
 def draw(lines, scheme_key, path, cols=COLS, rows=ROWS, spotmap=None):
@@ -105,7 +107,16 @@ def draw(lines, scheme_key, path, cols=COLS, rows=ROWS, spotmap=None):
     if spotmap is not None:
         _draw_map(img, spotmap, scheme_key, w, h)
 
-    for row, line in enumerate(lines[:rows]):
+    # The map screen puts its first row at the top and its second at the
+    # BOTTOM, with the picture between -- drawn in order, the key row would
+    # sit on the map's first scanlines, which is what the deck did until
+    # 2026-10-23. The rows between are left alone rather than filled with
+    # blanks, or they would paint over the picture.
+    if spotmap is not None and len(lines) > 1:
+        placed = [(0, lines[0]), (rows - 1, lines[1])]
+    else:
+        placed = list(enumerate(lines[:rows]))
+    for row, line in placed:
         x = 0
         for text, kind in line:
             for ch in text:

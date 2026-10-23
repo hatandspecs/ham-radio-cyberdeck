@@ -67,9 +67,18 @@ marked = [ln for ln in lines
           if "".join(t for t, _k in ln).startswith("▸")]
 equals("one row carries the marker", len(marked), 1)
 
-print("\nthe tuner screen shows selection, locks and what it will cost")
-sel = bandplan.Selection(SEGS)
-sel.select_phone()
+def phone_picked(segs=None):
+    """A selection built the only way there is: one row at a time."""
+    segs = segs if segs is not None else SEGS
+    sel = bandplan.Selection(segs)
+    for seg in segs:
+        if seg.label == bandplan.PHONE:
+            sel.toggle(seg.key)
+    return sel
+
+
+print("\nthe tuner screen shows selection and what it will cost")
+sel = phone_picked()
 body = text(render.tuner_screen(sel, 0, 66, 20, "US General", dwell_s=5))
 check("it is titled as the tuner", "AUTO TUNER" in body, body[:80])
 check("selected rows are marked", render.SEG_ON in body, body[:300])
@@ -78,20 +87,22 @@ check("the summary names the segment count", "segment" in body, body)
 check("and the memory count", "memories" in body, body)
 check("and what it will cost in time", "about" in body, body)
 
-print("\na locked row is visible and marked, not hidden")
-# 6 m is last in band order, so the cursor has to be on its page for the
-# row to be drawn at all. Rendering page one and asserting the mark appears
-# tested the pagination, not the lock.
-locked_seg = [s for s in SEGS if s.band == "6m"][0]
-locked_idx = SEGS.index(locked_seg)
-sel = bandplan.Selection(SEGS, locked=[locked_seg.key])
-body = text(render.tuner_screen(sel, locked_idx, 66, 20, "US General"))
-check("the locked mark appears", render.SEG_LOCKED in body, body)
-check("and the band is still listed, not hidden", "6m (" in body, body)
-unlocked = text(render.tuner_screen(
-    bandplan.Selection(SEGS), locked_idx, 66, 20, "US General"))
-check("an unlocked row of the same band carries no lock mark",
-      render.SEG_LOCKED not in unlocked, unlocked)
+print("\nthe footer advertises the dwell and the key that changes it")
+# It was bound to `d` and on no footer, so the one setting this screen
+# exists to vary could not be found from it. `+` and `-` step it, as they
+# step the squelch on the tuning screen.
+for dwell in (0.5, 2.5, 5.0):
+    body = text(render.tuner_screen(bandplan.Selection(SEGS), 0, 66, 20,
+                                    "US General", dwell_s=dwell))
+    check(f"{dwell}s is on the footer", f"dwell {dwell:g}s" in body,
+          body[-120:])
+    check("with the keys that change it", "+ -" in body, body[-120:])
+
+print("\nthe interlock is on the header, because this screen keys the radio")
+for inhibited, want in ((True, "INH "), (False, "INH off")):
+    body = text(render.tuner_screen(bandplan.Selection(SEGS), 0, 66, 20,
+                                    "US General", inhibited=inhibited))
+    check(f"inhibited={inhibited} shows {want!r}", want in body, body[:80])
 
 print("\nnothing selected says so rather than showing a zero")
 sel = bandplan.Selection(SEGS)
@@ -100,8 +111,7 @@ check("it says nothing is selected", "nothing" in body, body)
 check("and does not claim 0 memories", "0 memories" not in body, body)
 
 print("\nthe running line replaces the summary and advertises the abort")
-sel = bandplan.Selection(SEGS)
-sel.select_phone()
+sel = phone_picked()
 body = text(render.tuner_screen(sel, 0, 66, 20, running=(7, 80, 7_180_000)))
 check("it shows progress", "7/80" in body, body)
 check("and the frequency being tuned", "7.180" in body, body)
@@ -111,8 +121,7 @@ check("the footer is only the abort",
       "Space pick" not in body, body[-120:])
 
 print("\nthe width property holds for the tuner screen too")
-sel = bandplan.Selection(SEGS)
-sel.select_all()
+sel = phone_picked()
 for w, h in SIZES:
     lines = render.tuner_screen(sel, 0, w, h, "US General")
     equals(f"{w}x{h}: the right number of rows", len(lines), h)

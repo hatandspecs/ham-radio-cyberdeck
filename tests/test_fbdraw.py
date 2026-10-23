@@ -40,10 +40,14 @@ equals("and there is no canvas to draw on",
 print("\nthe panel's geometry is read from sysfs")
 with tempfile.TemporaryDirectory() as tmp:
     sysfs = fake_sysfs(tmp)
-    equals("800x480 at two bytes a pixel",
-           fbdraw.geometry(sysfs=sysfs), (800, 480, 2))
+    # The fourth value is the STRIDE -- bytes per scanline. It is reported
+    # separately because it need not be width*bpp: a driver may pad each
+    # line, and addressing by width alone then shears the picture.
+    equals("800x480 at two bytes a pixel, 1600 bytes a scanline",
+           fbdraw.geometry(sysfs=sysfs), (800, 480, 2, 1600))
     equals("32-bit reads as four bytes",
-           fbdraw.geometry(sysfs=fake_sysfs(tmp, bpp="32")), (800, 480, 4))
+           fbdraw.geometry(sysfs=fake_sysfs(tmp, bpp="32")),
+           (800, 480, 4, 3200))
 
 print("\nan unreadable or unsupported panel is refused rather than guessed")
 with tempfile.TemporaryDirectory() as tmp:
@@ -103,6 +107,12 @@ equals("it returns False rather than raising",
 print("\nand writing to one that is there puts the whole frame down")
 with tempfile.TemporaryDirectory() as tmp:
     dev = os.path.join(tmp, "fb0")
+    # Pre-created, because `write` opens `r+b` and seeks rather than `wb`.
+    # A framebuffer must not be truncated and must be written at an offset;
+    # `/dev/fb0` always exists on the deck, and a device that does not is
+    # the case two checks above.
+    with open(dev, "wb") as fh:
+        fh.write(bytes(8 * 4 * 2))
     c = fbdraw.Canvas(8, 4, 2)
     c.point(0, 0, 0xFFFFFF)
     check("the write reports success", c.write(dev))
@@ -111,6 +121,34 @@ with tempfile.TemporaryDirectory() as tmp:
     equals("a whole frame was written, not a partial one",
            len(blob), 8 * 4 * 2)
     equals("with the pixel in it", blob[0:2].hex(), "ffff")
+
+print("\n`from_row` leaves the rows above it alone")
+# This is how the map and the two text rows share the panel: curses owns the
+# top, the framebuffer owns the rest, and neither overwrites the other.
+with tempfile.TemporaryDirectory() as tmp:
+    dev = os.path.join(tmp, "fb0")
+    with open(dev, "wb") as fh:
+        fh.write(b"\xAA" * (8 * 4 * 2))      # something recognisable
+    c = fbdraw.Canvas(8, 4, 2)
+    c.point(0, 2, 0xFFFFFF)
+    check("it writes", c.write(dev, from_row=2))
+    with open(dev, "rb") as fh:
+        blob = fh.read()
+    equals("the two rows above are untouched",
+           blob[:2 * 8 * 2], b"\xAA" * (2 * 8 * 2))
+    equals("and the row written carries the pixel",
+           blob[2 * 8 * 2:2 * 8 * 2 + 2].hex(), "ffff")
+    equals("the frame is still its own size", len(blob), 8 * 4 * 2)
+
+print("\na padded stride addresses rows where the panel expects them")
+# `stride` is bytes per scanline and need not be width*bpp. Addressing by
+# width alone shifts every row left by the padding and shears the picture.
+c = fbdraw.Canvas(4, 3, 2, stride=16)          # 8 bytes of pixels, 8 padding
+equals("the buffer is stride-sized", len(c.buf), 16 * 3)
+c.point(0, 1, 0xFFFFFF)
+equals("row 1 starts at one stride in", c.buf[16:18].hex(), "ffff")
+equals("and nothing landed at the unpadded offset",
+       c.buf[8:10].hex(), "0000")
 
 print("\na background colour fills the frame")
 c = fbdraw.Canvas(4, 2, 2, background=0xFFFFFF)

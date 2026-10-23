@@ -1,16 +1,174 @@
 # Next steps — design notes
 
-Seven features, specified on 2026-10-22 and built the same day. Each section
-states what the feature is, where it lives, how it is driven, and what it was
-built on; each ends with a **Built** note recording what was made, where the
-implementation departed from the specification, and why.
+Seven features, specified 2026-10-22, built the same day, and **first run on
+the panel 2026-10-23**. Each section states what the feature is, where it
+lives, how it is driven, and what it was built on; each ends with a **Built**
+note recording what was made and where the implementation departed from the
+specification.
 
-The departures are the part worth reading. Three of them:
+## Where each one stands after the first hardware session
+
+| # | Feature | On the panel |
+|---|---|---|
+| 1 | Ring order editor | **Works.** No faults found |
+| 2 | Band allocation tables | **Reworked.** The data was wrong; see below |
+| 3 | FTX-1 auto tuner | **Crashed, fixed, unverified.** `self.rig` does not exist |
+| 4 | `^G` logs the station heard | **Not yet exercised** |
+| 5 | WSPR map | **Fixed, then simplified.** Curses erased it; then the band and direction filters went |
+| 6 | Contact map | Same, and it was showing the whole log rather than the activity |
+| 7 | Export to a phone | **Works.** No faults found |
+
+Two of the seven worked as built, two were not reached, and three needed
+repair. The repairs are the 2026-10-23b round in `docs/scratch_notes.md`.
+
+## What the hardware session cost, and why
+
+**The auto tuner passed `self.rig`, which does not exist.** One line, the
+only such reference in the file, and it took the whole deck down on `Enter`.
+`tests/test_tuner.py` drives `tuner.Sweep` against a fake rig and the screen
+tests drive the renderer; **nothing called `Deck._start_tuner_sweep`**. The
+engine was tested, the screen was tested, and the wire between them was not.
+That is the gap to close before the next feature ships: a screen whose key
+starts something needs one test that presses the key.
+
+**The map was drawn and then erased.** `draw` opens with `scr.erase()`, so
+the framebuffer write landed a frame before curses overwrote it. No test
+could have caught this -- the suite has no framebuffer, `fbdraw.available()`
+is False off the deck, and every map test exercises the projection and the
+overlay rather than the two writing to one screen. **This class of fault
+needs the panel**, and the lesson is to say so rather than to let a green
+suite imply otherwise.
+
+**The band plan data was wrong in a way the code could not see.** Extra was
+one "Full band" row per band, which rendered as "All Modes" across ranges
+where phone is not permitted below the §97.305(c) edge. General had the same
+fault on 17 m and 12 m, and cited §97.301(b) -- the Amateur Extra paragraph
+-- for its own 80/40/20/15 m rows. Corrected against the CFR text on
+2026-10-23, and cut to US General and US Extra only.
+
+## The second hardware session, 2026-10-23
+
+The repairs held: the WSPR map draws, the auto tuner ran a sweep on the 17 m
+data segment, and the interlock shows on its header. What the session found
+is below, and it is mostly about the map.
+
+### The map
+
+- **Toggling a band is laggy.** `_build_map` re-reads the spot log and
+  re-projects every record on every draw, five times a second, against a log
+  of six thousand spots. The picture is rebuilt because the band set
+  changed; it is also rebuilt because a frame elapsed.
+- **The bands are in the order they were met, not by wavelength.** They come
+  off `SpotMap.bands()` in insertion order, so the row reads 40, 20, 15, 30,
+  17, 80, 12, 10. An operator reads a band row longest to shortest.
+- **The markers are the wrong way round.** Spots should be `+` in the bright
+  colour and the coastline dim; the heard/heard-by distinction drew one of
+  them as `×`, which reads as the fainter marker.
+- **This station should be an `×`**, in the scheme's own colour. It is a
+  white square, and white is not one of the phosphor colours.
+- **The band toggles space themselves inconsistently.** A lit band has no
+  gap between its key cap and its label and an unlit one has a gap, because
+  the cap carries no trailing space and the label does. One space in both
+  states.
+- **`v view` and `Esc back` belong at the bottom**, not beside the band
+  toggles, where `Esc back` is clipped to `Esc bac`.
+- **A stripe of map survives on the right edge.** The console is 66 columns
+  of a 12-pixel font -- 792 of the panel's 800 -- so curses owns nothing in
+  the last 8 pixels and cannot repaint them. `clearok` clears every cell
+  curses has; the stripe is outside all of them.
+- **The log screen's `F5` draws the WSPR map**, not the contacts.
+
+### The auto tuner
+
+- **The dwell cannot be set from the screen that uses it.** `TUNER_DWELL_S`
+  is a setting with no key.
+- **The bulk selections and the locks are not worth their keys.** Scrolling
+  the list and pressing `Space` is fast enough, and with no bulk operation
+  to override, a lock protects against nothing. Both go.
+
+### What the second session changed, 2026-10-23c
+
+Three of the findings were repairs. The rest were simplifications, and they
+removed more than they added.
+
+**The map is the SESSION's, not the whole log.** It was plotting every
+record the deck had ever written -- six thousand spots from every night
+before this one -- which answered no question at all. A session is the
+deployment; scoping the map to it is what let everything else go.
+
+**The band toggles are gone**, with the row they needed. Within one session
+every band answers the same question, and which band a spot arrived on is
+answered by the spot LIST, with a column. This also ends the lag: the
+toggles were what made `_build_map` re-read and re-project the log on every
+frame.
+
+**The heard / heard-by filter is gone, because the deck has no heard-by
+data.** Its spot log holds what it decoded and what it transmitted. Who
+heard IT is on wsprnet, which needs a network the deck is often without, so
+one of that filter's two positions was always empty. The analysis
+repository draws both because it works from downloaded wsprnet data; this
+is not a question the deck has the data to ask.
+
+What is left on the map screen is `v` and `Esc`.
+
+**Every spot is a `+` in the bright colour, this station is an `×`.** The
+two directions were `+` and `×`, and a diagonal cross puts no pixel on the
+row or column through its centre, so at one pixel wide it reads as dimmer
+even in the same colour. Home was white, which is not one of the phosphor
+colours.
+
+**The bands sort longest to shortest** where they are still listed.
+
+**The third map view is gone.** `wide` was `global` with twelve more degrees
+at each pole, carried for the Antarctic bases, and too nearly the same
+picture to be worth a press.
+
+**The tuner lost its bulk selections and its locks.** Scrolling twenty-odd
+rows and pressing `Space` is fast enough, and with no bulk operation to
+override, a lock protected against nothing. `+` and `-` step the dwell in
+half seconds between 0.5 and 5.0, the same keys the squelch uses on the
+tuning screen, and the footer says the current value -- it was bound to `d`
+and advertised nowhere, so the one setting that screen exists to vary could
+not be found from it.
+
+**The right-edge stripe was never curses' to clear.** The console is 66
+columns of a 12-pixel font -- 792 of the panel's 800 -- so the last 8 pixels
+belong to no cell and `clearok` cannot reach them. Leaving a map now blanks
+the framebuffer first.
+
+## The work plan from here
+
+**Before anything new.** The 2026-10-23b round is unverified on hardware and
+has not been through the full suite. It is the next thing to deploy and the
+next thing to confirm.
+
+1. **Confirm the repairs on the panel** -- the tuner sweep actually moving
+   the VFO, the map filling the screen below its two rows and leaving
+   nothing behind, the WSPR session list resuming a run. The checks are in
+   `scratch_notes.md`, riskiest last.
+2. **Exercise feature 4**, `^G`, which no hardware session has reached. It
+   writes to the contact log, so it wants a session where losing an entry
+   costs nothing.
+3. **Close the test gap the tuner found**: a check per screen that presses
+   the key that starts something, against the real `Deck` method rather than
+   the engine behind it.
+4. **Guard the missing-asset crash.** `_draw_alloc` and `_build_map` raise
+   `FileNotFoundError` into a draw path when their data file is absent. The
+   deploy procedure avoids it; a card that loses a file in the field would
+   not.
+
+**Then the two things specified and not built.** The Drive half of feature 7
+(`rclone`, §7 below), and the 60 m channels, which are channelised rather
+than a range and do not fit the tuner's 10 kHz grid.
+
+The departures from specification, which are the part worth reading:
 
 | Feature | Specified | Built | Why |
 |---|---|---|---|
 | 1. Ring order | Two screens, `FIELDS` then `ORDER` | One screen, same key bindings | Five areas fit one panel with room to spare |
+| 2. Band plan | Technician, General, Extra | General and Extra | Asked for 2026-10-23; the Technician table was also incomplete above 6 m |
 | 4. Log from the transcript | The most recent **transmit** line; arrows reach earlier ones | The most recent **receive** line; `^G` again steps back | A transmitted line proves a call, not a contact. `↑` `↓` are history recall on that screen |
+| 5/6. Maps | A picture under two curses rows | A picture under two curses rows, written after the refresh | They are the same memory and curses wins; see above |
 | 7. Export | A page on the deck, and rclone to Drive | The page only | The page needs no credentials, so it was the whole job; Drive is still open |
 
 The frequency allocation tables are shared between features 2 and 3, and the
@@ -138,8 +296,36 @@ earlier version carried a memory count, which belongs to the tuner.
   operating; three keystrokes into a menu is a thing looked up on a phone
   instead. It is the fifth area, and the ring editor (feature 1) means an
   operator who disagrees can take it off.
-- **Technician is included**, since the data already carried it. `Space`
-  cycles the class the table shows and `LICENSE_CLASS` remembers it.
+- **US General and US Extra, and nothing else.** Technician was in the data
+  and is now out, asked for 2026-10-23. Its HF rows did match §97.301(e),
+  but the table carried only 6 m above them and nothing on 2 m or 70 cm --
+  incomplete enough to mislead. The four reference plans that were also in
+  the file (`ca_basic` with a single row, plus EU, JP and SA) are gone too;
+  nothing should have been offering them.
+
+### Reworked 2026-10-23 — the data was wrong
+
+**Every band is split at its §97.305(c) phone edge.** Extra shipped as one
+"Full band" row per band, which the screen rendered as "All Modes" across
+ranges where phone is not permitted at all below the edge. The privilege and
+the emission types are two different facts and the table was carrying only
+the first.
+
+General had the same fault on 17 m and 12 m, and a second one: its
+80/40/20/15 m rows cited **§97.301(b)**, which is the Amateur Extra
+paragraph. General is **(d)**. Both corrected.
+
+160 m stays All Modes in both, because phone really is permitted across the
+whole band; 30 m stays CW/Data only for the same kind of reason.
+
+The ranges come from §97.301, the splits from §97.305(c), and each row cites
+whichever applies. Verified against the CFR text on 2026-10-23 rather than
+from memory -- this is data a transmitter acts on.
+
+**Memory counts differ from a plain inclusive grid count** by one or two on
+segments whose edges are not 10 kHz multiples. That is `EDGE_PAD_HZ`: the
+first point sits 1 kHz inside the lower edge and the last 1 kHz inside the
+upper, which was the stipulation, so 7.000-7.125 gives 14 points and not 13.
 
 ---
 
@@ -607,10 +793,29 @@ Locks respect nothing above them: `select_all`, `invert`, `select_phone` and
 select all" asked for. Mutation testing found two of those four tests
 passing vacuously and both were rewritten.
 
+### Repaired 2026-10-23 — it crashed the deck
+
+**`_start_tuner_sweep` passed `self.rig`, which does not exist.** Every
+other call site uses `self._log_rig()`, the lazily-built rigctld client, and
+that line was the only `self.rig` in the file. `Enter` raised
+`AttributeError`, the deck died, systemd restarted it, and the panel showed
+a pause, a flash and the screen "escaping" with the radio untouched.
+
+It also refuses early and says so when rigctld is not answering, rather than
+reporting `no rig control: 'NoneType' object has no attribute 'send_cat'`
+from inside the sweep.
+
+**The header carries the interlock now.** `^B` always worked on this screen
+-- it is handled before any screen's own keys -- but `tuner_screen` had no
+status field, so nothing changed and the key read as dead. It reads `INH` or
+`INH off`, worded as the WSPR header words it, because those are the two
+screens that key the radio.
+
 ### Answers to the open questions
 
-- **All three US classes**, since the data carried them. The Canadian plan is
-  a row in `bandplans.tsv` away and nothing in the code is US-specific.
+- **US General and US Extra** as of 2026-10-23, down from three classes. A
+  Canadian plan is a row in `bandplans.tsv` away and nothing in the code is
+  US-specific.
 - **The mode is not set per segment.** A tuner cares about frequency, the
   radio has not been observed refusing to tune in any mode, and setting the
   mode would make a sweep change something the operator did not ask it to
@@ -860,6 +1065,33 @@ decoration: `DP0GVN` at Neumayer III is a station this antenna has heard.
 **The world is cut at 90°E**, through Tibet, so no path crosses the seam.
 Cutting at the date line put Australia on the map twice with paths running
 to the wrong copy.
+
+#### Repaired 2026-10-23 — curses erased the picture
+
+**The framebuffer and the text console are the same memory, and curses
+wins.** `draw` opens with `scr.erase()`, so the blit -- which ran once, on
+entry, before the refresh -- was overwritten a frame later. What survived
+were the cells curses happened to think unchanged, which on the panel read
+as a map squeezed into the top of the screen, with lines left behind across
+the WSPR screen and down its right edge after `Esc`.
+
+Three changes, and all three are needed:
+
+- The blit runs **after `scr.refresh()`**, from `draw`, every frame.
+- It starts **below the two text rows**, so curses never has a cell of its
+  own overwritten and the rows never flicker. The basemaps are regenerated
+  at **800x432** -- the panel less two 24-pixel rows -- for exactly this.
+- Leaving a map sets **`clearok`**, so the next frame repaints every cell
+  and takes the residue with it.
+
+`fbdraw` also reads the framebuffer's `stride` rather than assuming
+`width * bytes_per_pixel`. A padded scanline would shear the picture, and
+the deck's own geometry is the wrong place to find that out.
+
+**No test could have caught this.** The suite has no framebuffer,
+`fbdraw.available()` is False off the deck, and every map test exercises the
+projection or the overlay rather than the two writing to one screen. This
+class of fault needs the panel.
 
 #### The wrong turn worth keeping
 
@@ -1151,3 +1383,60 @@ have — `qrzlog.py` already records that the API answers and refuses without
 one. Manual ADIF upload through the QRZ website works on any account. So
 file export is not a workaround for the safety decision; it is the only route
 available, and the safety decision costs nothing.
+
+---
+
+## 8. WSPR sessions — added 2026-10-23
+
+Not in the original seven. The first hardware session found that a WSPR
+session could be named and never returned to: the deck came up on `general`,
+reported `heard 5992  sent 118` in its own header, and drew an empty spot
+list underneath.
+
+**Two faults, one of them invisible from the code.** `wspr_spots` only ever
+held what the current RUN had decoded, so the counts came from the log and
+the list did not and the two disagreed on screen. And `F2` opened the name
+editor, which pins a fresh start every time -- so there was no way back into
+an earlier run at all, only a way to start another one.
+
+### A session and a logger activity are the same idea
+
+So they get the same keys. `F2` opens a list; `Enter` resumes, `n` starts a
+new one, `r` renames, `d` forgets after a confirmation, `Esc` backs out.
+That is the contact log's activities screen, deliberately, because an
+operator who has learned one has learned the other.
+
+It is simpler by exactly one thing: **a session has no schema.** An activity
+chooses which fields its form carries and a WSPR session cannot, because
+every spot has the same fields. There is no `FIELDS`/`ORDER` step and no
+type picker.
+
+### What each key does
+
+- **`Enter`** sets `WSPR_SESSION` and `WSPR_SESSION_START` to the picked
+  pair and reads that session's spots out of the log. The session in use is
+  marked `*` rather than hidden, because the question the screen answers is
+  "which run am I looking at".
+- **`n`** reaches the existing name editor, which pins a fresh start -- what
+  makes it a new session rather than a rename.
+- **`r`** relabels every record of the session through
+  `wsprlog.rename_session`, written to mirror `qsolog.rename_session`
+  including the part that matters: the START is left alone, so the session
+  keeps its identity and renaming it back undoes it exactly. The session in
+  use follows its own rename, or the deck would go on writing under the old
+  name.
+- **`d`** adds the pair to `WSPR_FORGOTTEN`. **Nothing had ever read that
+  key**: the danger zone has been writing it and no screen honoured it, so
+  "forget all sessions" set a value that changed nothing. The spots keep
+  their labels and stay in the log; only the list stops offering them.
+
+### Refusals
+
+**Switching session is refused while WSPR runs.** The rest of the night
+would be filed under a name chosen for a different run, and the spots
+already decoded in the open slot would land in whichever session was current
+when it ended.
+
+**The spot list is read once on entering the area**, not on every draw: the
+file is the size of the whole log. A new session clears it rather than
+reloading, so the one before it does not bleed through.

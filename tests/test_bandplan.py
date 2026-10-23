@@ -137,103 +137,40 @@ check("every row fits the 66-column panel beside its range",
               f"{s.end_hz/1e6:.3f}") <= 66 for s in segs),
       max(len(s.name) for s in segs))
 
-print("\nselect-all-phone takes the All Modes segments too")
-# Phone is permitted on 17m, so a "phone" selection that skipped All Modes
-# would omit the band that is wanted while still needing it added by hand.
-sel = bandplan.Selection(bandplan.segments("us_general"))
-sel.select_phone()
-picked = {s.band for s in sel.selected()}
-check("17m is included", "17m" in picked, sorted(picked))
-check("and 30m is not, because phone is prohibited there",
-      "30m" not in picked, sorted(picked))
-
-print("\nthe working selection, reached the way it is actually reached")
+print("\nSpace is the only way to pick a segment")
+# The bulk operations -- all, none, invert, all-phone, all-CW -- and the
+# per-segment lock that existed to override them were removed 2026-10-23,
+# after the first sweep on the panel. Scrolling twenty-odd rows and
+# pressing Space is fast enough, and with no bulk operation to protect
+# against, a lock protected against nothing.
 segs = bandplan.segments("us_general")
+for gone in ("select_all", "clear", "invert", "select_phone", "select_cw",
+             "toggle_lock", "is_locked", "locked_keys"):
+    check(f"{gone} is gone", not hasattr(bandplan.Selection(segs), gone))
+
+print("\ntoggle reports what the row became")
 sel = bandplan.Selection(segs)
-for key in [s.key for s in segs
-            if s.band in ("160m", "12m") or s.band in ("10m", "6m")]:
-    sel.toggle_lock(key)
-sel.select_phone()
-got = sorted(s.name for s in sel.selected())
-equals("select-all-phone lands on exactly the working bands", got,
-       ["15m (Phone)", "17m (All Modes)", "20m (Phone)",
-        "40m (Phone)", "80m (Phone)"])
-equals("which is 80 memories", sel.memory_count(), 80)
-check("about two minutes at a 1.5 second dwell",
-      1.5 <= sel.seconds(1.5) / 60 <= 2.5, sel.seconds(1.5) / 60)
+key = segs[0].key
+equals("off to on", sel.toggle(key), True)
+check("and it is selected", sel.is_selected(key))
+equals("on to off", sel.toggle(key), False)
+check("and it is not", not sel.is_selected(key))
 
-print("\na lock overrides every bulk operation")
-segs = bandplan.segments("us_general")
-# Each operation gets a victim it WOULD select, proved first against an
-# unlocked selection. Without that proof the check is vacuous: an earlier
-# version locked a CW row and asserted that select_phone left it alone, which
-# it would have done anyway.
-#
-# A fresh Selection per operation, too. Run against one shared object the ops
-# carry state into each other, and `invert` then dropped the locked row
-# because a previous op had put it in the chosen set.
-_phone = [s for s in segs if s.is_phone][0].key
-_cw = [s for s in segs if s.is_cw and not s.is_phone][0].key
-for name, victim in (("select_all", _phone), ("select_phone", _phone),
-                     ("select_cw", _cw), ("invert", _phone)):
-    live = bandplan.Selection(segs)
-    getattr(live, name)()
-    check(f"{name} selects {victim} when it is not locked",
-          live.is_selected(victim), f"{name} never touches this row")
-
-    sel = bandplan.Selection(segs, locked=[victim])
-    getattr(sel, name)()
-    check(f"{name} leaves it out of the chosen set once locked",
-          not sel.is_selected(victim), f"{victim} was chosen by {name}")
-    check(f"{name}: and out of the sweep",
-          victim not in {s.key for s in sel.selected()},
-          [s.key for s in sel.selected()][:3])
-
-print("\ninvert does not flip a locked row either")
-victim = _phone
+print("\na working selection, built one row at a time")
 sel = bandplan.Selection(segs)
-sel.toggle_lock(victim)
-before = sel.is_selected(victim)
-sel.invert()
-equals("still not selected", sel.is_selected(victim), before)
-equals("and still locked", sel.is_locked(victim), True)
+want = [s for s in segs if s.label == bandplan.PHONE
+        and s.band in ("80m", "40m", "20m", "15m", "17m")]
+for s in want:
+    sel.toggle(s.key)
+equals("the phone segments of the bands this antenna works",
+       sorted(x.name for x in sel.selected()),
+       sorted(x.name for x in want))
+check("which is a sweep of a few minutes at 2.5 s",
+      1.0 <= sel.seconds(2.5) / 60 <= 8.0, sel.seconds(2.5) / 60)
 
-print("\nSpace on a locked row does nothing")
-sel = bandplan.Selection(segs)
-sel.toggle_lock(victim)
-equals("the toggle is refused", sel.toggle(victim), False)
-equals("and the row stays unselected", sel.is_selected(victim), False)
-
-print("\nlocking a selected row deselects it")
-sel = bandplan.Selection(segs)
-sel.select_all()
-check("it starts selected", sel.is_selected(victim))
-sel.toggle_lock(victim)
-check("locking removed it from the selection", not sel.is_selected(victim))
-check("and it is gone from the sweep",
-      victim not in {s.key for s in sel.selected()})
-
-print("\nlocks survive being handed back and forth as config")
-sel = bandplan.Selection(segs)
-for k in [s.key for s in segs if s.band in ("10m", "6m")]:
-    sel.toggle_lock(k)
-saved = sel.locked_keys()
-restored = bandplan.Selection(segs, locked=saved)
-equals("the same rows come back locked", restored.locked_keys(), saved)
-restored.select_all()
-check("and select-all still skips them",
-      not any(s.band in ("10m", "6m") for s in restored.selected()),
-      [s.name for s in restored.selected()][:4])
-
-print("\na selection handed in with a locked key does not keep it")
-sel = bandplan.Selection(segs, locked=[victim], chosen=[victim])
-check("the lock wins", not sel.is_selected(victim))
-
-print("\nunlocking restores an ordinary row")
-sel = bandplan.Selection(segs, locked=[victim])
-equals("toggle_lock reports it unlocked", sel.toggle_lock(victim), False)
-equals("and Space works again", sel.toggle(victim), True)
-check("so it reaches the sweep", victim in {s.key for s in sel.selected()})
+print("\na selection handed in at construction is kept")
+sel = bandplan.Selection(segs, chosen=[key])
+check("the chosen row is selected", sel.is_selected(key))
 
 print("\nthe summary line the screen carries")
 sel = bandplan.Selection(segs)

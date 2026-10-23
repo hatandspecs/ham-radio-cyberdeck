@@ -34,11 +34,13 @@ CAT_TUNE_OFF = "AC100;"        # tuner bypassed
 # landed on the frequency before it is asked to match there.
 SETTLE_S = 0.3
 
-# A dwell shorter than this is shorter than any tuner's own cycle and
-# guarantees memories written from an unconverged match -- silently, since
-# there is no completion to check. The floor is a guard against a fat finger
-# on the cycling key, not a judgment about any particular tuner.
-MIN_DWELL_S = 1.0
+# The floor is a guard against a fat finger on the cycling key, not a
+# judgment about any particular tuner. **Half a second is shorter than many
+# tuners' own cycle**, and there is no completion to check, so a dwell this
+# short can write memories from an unconverged match without saying so. It
+# is available because a re-sweep starting near a stored memory really can
+# finish that fast; the operator picks.
+MIN_DWELL_S = 0.5
 MAX_DWELL_S = 15.0
 
 IDLE, RUNNING, DONE, ABORTED, FAILED = "idle", "running", "done", "aborted", "failed"

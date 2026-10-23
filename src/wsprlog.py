@@ -263,6 +263,38 @@ def counts(records, activity="", start=""):
     return len(chosen) - sent, sent
 
 
+def rename_session(path, activity, start, new_name):
+    """Rename one session. Returns how many records were relabeled.
+
+    Mirrors `qsolog.rename_session`, including the part that matters: the
+    START is left alone, so the session keeps its identity and only its name
+    changes. That is what makes this a correction rather than a move, and
+    renaming it back undoes it exactly.
+
+    Through `qsolog._rewrite`, so the whole file is replaced atomically --
+    temp file, fsync, `os.replace`. A pulled plug cannot leave half a night
+    under each name.
+    """
+    new_name = str(new_name or "").strip()
+    if not new_name:
+        return 0
+    records = read(path)
+    mine = for_session(records, activity, start)
+    if not mine:
+        return 0
+    marked = {id(r) for r in mine}
+    out, changed = [], 0
+    for rec in records:
+        if id(rec) in marked and str(rec.get("activity", "")) != new_name:
+            rec = dict(rec)
+            rec["activity"] = new_name
+            changed += 1
+        out.append(rec)
+    if changed:
+        qsolog._rewrite(path, out)
+    return changed
+
+
 def remove_session(path, activity, start=""):
     """Delete one session's records. Returns how many went."""
     records = read(path)
