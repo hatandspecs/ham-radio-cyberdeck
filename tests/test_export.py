@@ -356,8 +356,12 @@ d.screen = cyberdeck.CHAT          # somewhere else entirely
 d._poll_export()
 check("it closed while the operator was on another screen",
       d.export_server is None)
-check("and the transcript says so",
-      "closed itself" in d.session.last_note, d.session.last_note)
+# On the export screen's own line, not the transcript: a file server
+# closing is not something that went over the air.
+check("the export screen says so",
+      "closed itself" in d.export_message, d.export_message)
+check("and the transcript is left alone",
+      "closed itself" not in d.session.last_note, d.session.last_note)
 
 print("\nit is reached from the deck & rig menu")
 import menus

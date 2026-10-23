@@ -654,6 +654,12 @@ class Deck:
         if getattr(self, "export_server", None) is not None:
             self._poll_export()
 
+        # Callbook answers for the danger zone's grid backfill, collected on
+        # the poll rather than waited for: hundreds of lookups at two
+        # seconds each would freeze the panel for the better part of an hour.
+        if getattr(self, "_backfill", None) is not None:
+            self._poll_backfill()
+
         # The end of the over is established before anything is done with
         # `text`, because the poll in which trx_state flips to RX still
         # carries the tail of our own echo: fldigi's echo and its TX state do
@@ -830,7 +836,7 @@ class Deck:
         import btpair
         ok, why = btpair.available()
         if not ok:
-            self.session.note(f"cannot pair here: {why}")
+            self._screen_note(f"cannot pair here: {why}")
             self._close_menu()
             return
         self.pairing = btpair.Pairing()
@@ -838,7 +844,7 @@ class Deck:
         self._pair_refreshed = 0.0
         self._pair_tick = 0
         if not self.pairing.start():
-            self.session.note(f"pairing failed to start: {self.pairing.error}")
+            self._screen_note(f"pairing failed to start: {self.pairing.error}")
             self.pairing = None
             self._close_menu()
             return
@@ -901,7 +907,7 @@ class Deck:
             # Forgetting is what makes a second attempt possible: a half-made
             # bond cannot be replaced, only removed and made again.
             if p.forget(devices[self.pair_sel]):
-                self.session.note("bond removed")
+                self._screen_note("bond removed")
                 p.refresh()
         elif key == "r":
             p.refresh()
@@ -1125,7 +1131,7 @@ class Deck:
             if op.ok:
                 self.wifi_state = "joined"
                 self.wifi_joined = self._wifi.active_ssid() or op.label
-                self.session.note(f"joined {self.wifi_joined}")
+                self._screen_note(f"joined {self.wifi_joined}")
             else:
                 self.wifi_state = "failed"
                 self.wifi_error = op.error or "no reason given"
@@ -1473,8 +1479,6 @@ class Deck:
         if not srv.tick():
             self.export_server = None
             self.export_message = "closed itself — r starts it again"
-            if self.screen != EXPORT:
-                self.session.note("the export page closed itself")
 
     def _draw_export(self, h, w):
         srv = getattr(self, "export_server", None)
@@ -1619,9 +1623,11 @@ class Deck:
             self.cfg["RING_ORDER"] = ",".join(order)
             self._save_state()
             self.screen = SET
-            self.ring_message = ""
-            self.session.note("ring: " + " ".join(
-                AREA_LABELS.get(a, a) for a in self._ring_areas()))
+            # On this screen's own message line rather than the transcript:
+            # the ring is deck configuration and has nothing to do with what
+            # went over the air.
+            self.ring_message = "ring: " + " ".join(
+                AREA_LABELS.get(a, a) for a in self._ring_areas())
             return True
         return True
 
@@ -2385,6 +2391,7 @@ class Deck:
         # lookup is going to happen. A cleared callsign leaves no name behind.
         if self.log_form is not None and call != self._looked_up:
             self.log_form.forget_lookup()
+            self._lookup_extra = {}
         if self.cfg.get("CALLBOOK") != "yes":
             return
         if not self._online():
@@ -2421,9 +2428,22 @@ class Deck:
         # on the form has to be able to replace the previous station's name,
         # which is not empty. What it may never replace is a value the
         # operator typed -- that is a correction, and it outranks a callbook.
+        # **A field the schema does not carry is kept, not dropped.** The
+        # callbook answers with a grid and the general schema has no grid
+        # field, so `form.field("grid")` is None and the answer went
+        # nowhere -- every contact logged under that schema reached the file
+        # with no grid, and the contact map had nothing to plot. The record
+        # format has carried `grid` all along and exports it as
+        # `GRIDSQUARE`; only the route from the lookup to the record was
+        # missing. Found on the deck 2026-10-23.
+        self._lookup_extra = {}
         for key in logform.LOOKUP:
+            if not info.get(key):
+                continue
             field = form.field(key)
-            if field is not None and info.get(key) and not field.touched:
+            if field is None:
+                self._lookup_extra[key] = info[key]
+            elif not field.touched:
                 form.set(key, info[key])
         # Nothing to say when it worked. The fields filling in front of the
         # operator is the message, and printing the answer as well cost more
@@ -3994,7 +4014,8 @@ class Deck:
         self.alloc_sel = max(0, min(getattr(self, "alloc_sel", 0),
                                     max(0, len(segs) - 1)))
         for i, line in enumerate(render.allocation_screen(
-                segs, self.alloc_sel, w, h, self._license_name())):
+                segs, self.alloc_sel, w, h, self._license_name(),
+                message=getattr(self, "alloc_message", ""))):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -4020,8 +4041,13 @@ class Deck:
             self.alloc_sel = min(n - 1,
                                  self.alloc_sel + render.SEGMENTS_PER_PAGE)
         elif ch == 32:                                    # Space
-            self.session.note(f"band plan: {self._license_name()}"
-                              if self._cycle_license() else "")
+            self.alloc_message = ""
+            # **Not `session.note`.** That writes into the keyboard-to-
+            # keyboard transcript, which is a record of what was said on the
+            # air; which license class a reference screen is showing was
+            # never part of that conversation. The header of this screen
+            # already names the class, so there is nothing more to say.
+            self._cycle_license()
             self.alloc_sel = 0
         return True
 
@@ -4173,12 +4199,30 @@ class Deck:
         """
         import wsprmap
         cache = getattr(self, "_map_cache", None)
-        key = (which, self._map_view(), self._map_record_count(which))
+        key = (which, self._map_view(), self._map_stamp(which))
         if cache and cache[0] == key:
             return cache[1]
         sm = self._build_map_now(which)
         self._map_cache = (key, sm)
         return sm
+
+    def _map_stamp(self, which):
+        """A cheap staleness check: the log's size and modification time.
+
+        **Not a record count.** Counting meant reading and parsing the whole
+        spot log on every frame, which is most of the work the cache exists
+        to avoid -- the map still took seconds to open and seconds to change
+        view. `os.stat` is one syscall and changes whenever a spot is
+        appended, which is the only way the map can go stale.
+        """
+        if which != WSPRMAP:
+            return len(self.log_records)
+        import wsprlog
+        try:
+            st = os.stat(wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")))
+            return (st.st_size, st.st_mtime_ns)
+        except OSError:
+            return 0
 
     def _wspr_map_records(self):
         """The spots the map plots: THIS SESSION's, not the whole log.
@@ -4199,25 +4243,24 @@ class Deck:
         start = str(self.cfg.get("WSPR_SESSION_START", "") or "")
         return wsprlog.for_session(records, name, start) if name else records
 
-    def _map_record_count(self, which):
-        """How many records the map would be built from, for the cache."""
-        if which != WSPRMAP:
-            return len(self._log_shown())
-        return len(self._wspr_map_records())
+    def _map_points(self, which, stamp):
+        """`([(lat, lon, band), ...], ungridded)`, cached on the stamp.
 
-    def _build_map_now(self, which):
-        """The projection itself. `_build_map` is the cache in front of it."""
-        import wsprmap
-        base = wsprmap.load(view=self._map_view())
-        home = None
-        locator = self.cfg.get("LOCATOR", "")
-        if locator:
-            import grid
-            if grid.valid(locator):
-                home = grid.to_latlon(locator)
-        sm = wsprmap.SpotMap(base, home=home)
+        **Geocoding is separated from projecting.** Reading the log and
+        turning six thousand Maidenhead squares into latitudes is the
+        expensive half and does not depend on the view; projecting them onto
+        a basemap is the cheap half and is all that changes when `v` is
+        pressed. Together they made opening the map and switching its view
+        both take seconds.
+        """
+        cache = getattr(self, "_map_points_cache", None)
+        if cache and cache[0] == (which, stamp):
+            return cache[1]
+
+        import grid
+        import wsprlog
+        pts, ungridded = [], 0
         if which == WSPRMAP:
-            import wsprlog
             for rec in self._wspr_map_records():
                 # Received spots only. A `tx` record is this station's own
                 # beacon: it carries no remote grid, so it was never a place
@@ -4226,9 +4269,9 @@ class Deck:
                 if rec.get("kind") == wsprlog.TX:
                     continue
                 locator = rec.get("grid") or ""
-                if not locator:
-                    continue
-                sm.add_grid(locator, rec.get("band", ""), wsprmap.HEARD)
+                if locator and grid.valid(locator):
+                    lat, lon = grid.to_latlon(locator)
+                    pts.append((lat, lon, rec.get("band", "")))
         else:
             # Contacts carry a grid when the schema has one or the callbook
             # lookup filled it, and not otherwise. The ones without are
@@ -4237,12 +4280,29 @@ class Deck:
             # map of a quiet weekend.
             for rec in self._log_shown():
                 locator = rec.get("grid") or rec.get("gridsquare") or ""
-                if not locator:
-                    sm.ungridded += 1
-                    continue
-                if not sm.add_grid(locator, rec.get("band", ""),
-                                   wsprmap.HEARD):
-                    sm.ungridded += 1
+                if locator and grid.valid(locator):
+                    lat, lon = grid.to_latlon(locator)
+                    pts.append((lat, lon, rec.get("band", "")))
+                else:
+                    ungridded += 1
+        out = (pts, ungridded)
+        self._map_points_cache = ((which, stamp), out)
+        return out
+
+    def _build_map_now(self, which):
+        """Project the cached points onto the current view."""
+        import grid
+        import wsprmap
+        base = wsprmap.load(view=self._map_view())
+        home = None
+        locator = self.cfg.get("LOCATOR", "")
+        if locator and grid.valid(locator):
+            home = grid.to_latlon(locator)
+        sm = wsprmap.SpotMap(base, home=home)
+        pts, ungridded = self._map_points(which, self._map_stamp(which))
+        for lat, lon, band in pts:
+            sm.add(lat, lon, band, wsprmap.HEARD)
+        sm.ungridded = ungridded
         return sm
 
     def _draw_map(self, which, h, w):
@@ -4294,7 +4354,7 @@ class Deck:
         return self._activity_name() or MASTER_LOG
 
     def _blit_map(self, sm, state):
-        """Put the picture on the panel, below the rows curses owns.
+        """Put the picture on the panel, below the row curses owns.
 
         **Curses and the framebuffer are the same memory, and curses wins.**
         `draw` opens with `scr.erase()`, so a frame drawn before the refresh
@@ -4303,13 +4363,26 @@ class Deck:
         the top of the screen with fragments left behind on the way out.
         Found on the panel 2026-10-23.
 
-        Two things keep them apart now. The blit runs AFTER `scr.refresh()`,
-        from `draw`, so nothing repaints over it; and it starts below the two
-        text rows, so curses never has a cell of its own overwritten. The
-        basemaps are generated 48 rows short of the panel for exactly this
-        -- 800x432 under two 24-pixel rows.
+        Two things keep them apart. The blit runs AFTER `scr.refresh()`, from
+        `draw`, so nothing repaints over it; and it covers only the rows
+        between the summary and the key row, so curses never has a cell of
+        its own overwritten. The basemaps are generated for exactly that
+        band -- 800x432 under one 24-pixel row and above another.
+
+        **The canvas is cached.** Building it walks every pixel of the
+        basemap -- 345,600 of them -- and that was happening five times a
+        second for a picture that had not changed. The cache is keyed on
+        everything the picture depends on: the view, the records, and the
+        colour scheme.
         """
         import fbdraw
+        key = (self._map_view(), self._map_stamp(self.screen), self.scheme,
+               len(sm.points))
+        cached = getattr(self, "_canvas_cache", None)
+        if cached and cached[0] == key:
+            canvas, top, rows = cached[1]
+            return canvas.write(from_row=top, rows=rows)
+
         canvas = fbdraw.canvas_for()
         if canvas is None:
             return False
@@ -4331,12 +4404,12 @@ class Deck:
                 if base.bits[row + x]:
                     coast.append((x, y + top))
         canvas.points(coast, dim)
-        canvas.points([(x, y + top) for x, y, _b, _d
-                       in sm.pixels()], bright)
+        canvas.points([(x, y + top) for x, y, _b, _d in sm.pixels()], bright)
         # This station in the scheme's own bright colour, not white. Its `×`
         # is what tells it apart from the spots, which are all `+`; white is
         # not one of the phosphor colours and read as a fault on the panel.
         canvas.points([(x, y + top) for x, y in sm.home_pixels()], bright)
+        self._canvas_cache = (key, (canvas, top, base.height))
         return canvas.write(from_row=top, rows=base.height)
 
     def _blit_map_now(self):
@@ -4357,6 +4430,7 @@ class Deck:
         blanked first, which reaches the pixels curses cannot.
         """
         self.map_spots = None
+        self._canvas_cache = None
         try:
             import fbdraw
             canvas = fbdraw.canvas_for()
@@ -4432,7 +4506,7 @@ class Deck:
         run.tick()
         if not run.running:
             self.tuner_message = run.message
-            self.session.note(f"auto tuner: {run.message}")
+            self.tuner_message = run.message
 
     def _handle_tuner(self, ch):
         """The auto tuner. Every step of a run is a real transmission."""
@@ -4450,7 +4524,7 @@ class Deck:
         if ch == 24 and run is not None and run.running:       # Ctrl-X
             run.abort("stopped by hand")
             self.tuner_message = "stopped — the tuner is left in circuit"
-            self.session.note("auto tuner stopped")
+
             return True
         if run is not None and run.running:
             # Nothing else does anything while a sweep runs. A keystroke that
@@ -4535,7 +4609,7 @@ class Deck:
             self.tuner_message = self.tuner_run.message
             return False
         self.tuner_message = ""
-        self.session.note(f"auto tuner: {len(freqs)} memories, ^X stops it")
+        self.tuner_message = (f"{len(freqs)} memories — ^X stops it")
         return True
 
     def _handle_wspr_cal(self, ch):
@@ -5131,6 +5205,104 @@ class Deck:
         self._log_note(f"{gone} contact{'' if gone == 1 else 's'} deleted "
                        f"from {name}")
 
+    # -- filling in what the callbook knows and the log does not ----------
+
+    # What the callbook can answer and a contact may lack. The grid is the
+    # one that matters most -- the contact map is built from it -- but the
+    # question the operator asked is "what does HamQTH know that this log
+    # does not", and that is all three.
+    BACKFILL_FIELDS = ("grid", "name", "qth")
+
+    def _backfill_missing(self):
+        """Callsigns in the whole log missing any of those. `{call: n}`."""
+        return qsolog.missing_fields(self.log_records, self.BACKFILL_FIELDS)
+
+    def _ask_backfill(self):
+        """Offer to look up every gridless callsign and fill them in."""
+        missing = self._backfill_missing()
+        if not self._online():
+            self._log_note("no network — this needs HamQTH")
+            self._close_menu()
+            return
+        if not missing:
+            self._log_note("every contact already has what HamQTH knows")
+            self._close_menu()
+            return
+        calls, contacts = len(missing), sum(missing.values())
+        self._ask_confirm(
+            "FILL IN MISSING DETAILS",
+            [f"{calls} callsign{'' if calls == 1 else 's'} missing a grid, "
+             f"name or QTH,",
+             f"across {contacts} contact"
+             f"{'' if contacts == 1 else 's'}.",
+             "",
+             "Each is looked up at HamQTH and what comes back is",
+             "written to the contacts that lack it. Nothing already",
+             "in the log is changed — this fills gaps only.",
+             "",
+             f"About {max(1, calls * 2 // 60)} minute"
+             f"{'' if calls * 2 // 60 <= 1 else 's'} at two seconds a call."],
+            self._start_backfill,
+            footer="Enter starts it   it runs in the background")
+
+    def _start_backfill(self):
+        """Queue every missing callsign. Collected on the poll."""
+        import callbook
+        missing = self._backfill_missing()
+        if not missing:
+            return
+        try:
+            if self._callbook is None:
+                self._callbook = callbook.Background(
+                    cache=callbook.Cache(callbook.cache_path()),
+                    providers=callbook.providers_from(self.cfg))
+            for call in missing:
+                self._callbook.start(call)
+        except Exception as exc:                           # noqa: BLE001
+            self._log_note(f"could not start the lookups: {exc}")
+            return
+        # Collected by `_poll_backfill` on the poll the deck already does.
+        # Answers are written in one pass at the end rather than one rewrite
+        # per callsign: this replaces the whole file atomically, and doing
+        # that once per station would be hundreds of rewrites.
+        self._backfill = {"want": set(missing), "got": {}, "started": True}
+        self._log_note(f"looking up {len(missing)} callsign"
+                       f"{'' if len(missing) == 1 else 's'}…")
+
+    def _poll_backfill(self):
+        """Collect answers; write them once they have all arrived."""
+        job = getattr(self, "_backfill", None)
+        if not job or self._callbook is None:
+            return
+        for call in list(job["want"]):
+            info = self._callbook.take(call)
+            if info is None:
+                continue                  # still running
+            job["want"].discard(call)
+            if info:
+                job["got"][call] = info
+        if job["want"]:
+            return
+        self._backfill = None
+        if not job["got"]:
+            self._log_note("HamQTH knew nothing about any of them")
+            return
+        try:
+            changed, filled = qsolog.fill_missing(
+                self._log_path(), job["got"],
+                fields=self.BACKFILL_FIELDS)
+        except OSError as exc:
+            self._log_note(f"could not write the log: {exc}")
+            return
+        self.log_records = qsolog.read(self._log_path())
+        # The map is built from these records, so its cache is now wrong.
+        self._map_cache = None
+        self._map_points_cache = None
+        self._canvas_cache = None
+        self._log_note(f"filled {filled} field"
+                       f"{'' if filled == 1 else 's'} on {changed} contact"
+                       f"{'' if changed == 1 else 's'}")
+
     def _ask_clear_log(self):
         """Confirm, then empty the log. The whole log, every activity."""
         doomed = len(self.log_records)
@@ -5267,7 +5439,7 @@ class Deck:
 
     def _open_log(self):
         if not self.log_on:
-            self.session.note("logging is off — switch it on from the menu")
+            self._screen_note("logging is off — switch it on from the menu")
             return
         path = self._log_path()
         if self.log_form is None:
@@ -5308,6 +5480,13 @@ class Deck:
                     "exchange_rx", "comment"):
             if values.get(key):
                 parsed[key] = values[key]
+        # What the callbook found and this schema has no field for. The
+        # operator's typing outranks it, so anything already on the form
+        # wins; `grid` is the one that matters, because the map is built
+        # from it.
+        for key, value in (getattr(self, "_lookup_extra", None) or {}).items():
+            if value and not parsed.get(key):
+                parsed[key] = value
 
         watts = 0
         rig = self._log_rig()
@@ -5348,6 +5527,7 @@ class Deck:
 
         self.log_records.append(rec)
         self._looked_up = ""
+        self._lookup_extra = {}
         form.commit()
         form.advance_serial(self.log_records,
                             form.activity_type.serial_start,
@@ -5576,7 +5756,7 @@ class Deck:
             ok, err = self._wifi.set_radio(on)
             self.wifi_error = "" if ok else err
             self.wifi_radio = self._wifi.radio()
-            self.session.note("wifi radio " + ("on" if on else "off"))
+            self._screen_note("wifi radio " + ("on" if on else "off"))
             self._wifi_refresh()
         elif key == "s":
             self._wifi_refresh(rescan=True)
@@ -5588,7 +5768,7 @@ class Deck:
                 ok, err = self._wifi.forget(net.ssid)
                 self.wifi_error = "" if ok else err
                 if ok:
-                    self.session.note(f"forgot {net.ssid}")
+                    self._screen_note(f"forgot {net.ssid}")
                 self._wifi_refresh()
             else:
                 self.wifi_error = "nothing saved for that network"
@@ -5987,7 +6167,9 @@ class Deck:
                 contacts=len(self.log_records),
                 session=len(self._log_shown()) if self._activity_name() else 0,
                 sessions=len(qsolog.sessions_in(self.log_records,
-                                                self._forgotten())))
+                                                self._forgotten())),
+                missing=len(self._backfill_missing()),
+                online=self._online())
         if m == "logging":
             act = (self.log_form.activity_type.name if self.log_form
                    else self.cfg.get("ACTIVITY_TYPE", ""))
@@ -6142,7 +6324,7 @@ class Deck:
             # Any key at all dismisses it: a keystroke arriving IS the proof
             # that the problem it describes has been solved.
             self.screen = CHAT
-            self.session.note("keyboard is working")
+            self._screen_note("keyboard is working")
             return True
 
         if self.screen == PAIR:
@@ -6515,7 +6697,7 @@ class Deck:
             # panel instead of being inferred.
             if self._state_error != str(exc):
                 self._state_error = str(exc)
-                self.session.note(f"cannot save settings: {exc}")
+                self._screen_note(f"cannot save settings: {exc}")
 
     def _apply_scheme(self, name):
         """Switch color scheme and force the whole screen to be repainted.
@@ -7028,6 +7210,8 @@ class Deck:
                 self._ask_clear_session()
             elif key == "m":
                 self._ask_clear_log()
+            elif key == "f":
+                self._ask_backfill()
             return True
 
         if m == "logging":
@@ -7240,9 +7424,18 @@ class Deck:
         """
         # Arming transmit is the half that can be refused. Inhibiting is
         # always allowed: a safety control that can fail to engage is not one.
-        if self.session.inhibited and not self._rig_mode_ok():
+        #
+        # **The data-mode interlock belongs to digimodes and WSPR, and only
+        # to them.** It exists because sending PSK or a WSPR beacon through a
+        # voice mode is wrong. The auto tuner keys the radio to match an
+        # antenna and does not care what mode it is in -- refusing there made
+        # `^B` look dead on a screen whose own header had just been given an
+        # INH indicator to show the state it would not let the operator
+        # change.
+        if (self.session.inhibited and self._area() in (AREA_DIGI, AREA_WSPR)
+                and not self._rig_mode_ok()):
             mode = (self.fldigi.rig_mode() or "?").strip()
-            self.session.note(
+            self._screen_note(
                 f"transmit stays inhibited — the radio is in {mode}, not a "
                 f"data mode. Change it on the radio, then Ctrl-B again.")
             return
@@ -7251,6 +7444,40 @@ class Deck:
         if self.session.inhibited and self._fldigi_sending:
             self.session.note("inhibited — this over still finishes; "
                               "Ctrl-C to stop it now")
+
+    def _screen_note(self, text):
+        """A message on whatever screen is showing. NOT the transcript.
+
+        **The transcript is a record of what went over the air.** It is the
+        conversation screen's message line and nothing else's, and anything
+        about WiFi, Bluetooth, the band plan, the auto tuner or saving
+        settings was never part of that conversation -- it arrived there
+        only because `session.note` is the easiest thing to reach. On the
+        panel it read as the deck talking over the far end.
+
+        The same reasoning `_log_note` records for the logging screens,
+        applied to the rest of them.
+        """
+        if self.screen == SET:
+            self.set_message = text
+        elif self.screen in (WIFI, PAIR, NOKB):
+            self.wifi_message = text
+        elif self.screen in (WSPR, WSPRCAL, WSPRSES):
+            self._wspr_note(text)
+        elif self.screen == TUNER:
+            self.tuner_message = text
+        elif self.screen == ALLOC:
+            self.alloc_message = text
+        elif self.screen == RINGED:
+            self.ring_message = text
+        elif self.screen == EXPORT:
+            self.export_message = text
+        elif self.screen in (WSPRMAP, LOGMAP):
+            self._map_state()["msg"] = text
+        elif self._area() == AREA_LOG:
+            self._log_note(text)
+        else:
+            self.session.note(text)
 
     def _clear_transcript(self):
         """Empty the transcript and fldigi's receive buffer together.

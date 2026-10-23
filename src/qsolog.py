@@ -1371,6 +1371,57 @@ def remove(path, when, call):
     return None
 
 
+def fill_missing(path, answers, fields=("grid", "name", "qth")):
+    """Write looked-up fields onto the contacts that lack them.
+
+    `answers` maps a callsign to a dict of fields. A record is touched only
+    where it has no value of its own: this fills gaps and never corrects an
+    operator, because a callbook is evidence and what was typed at the time
+    is testimony.
+
+    Returns `(records changed, fields filled)`. The whole file is replaced
+    atomically through `_rewrite`, so a pulled plug leaves the old log or
+    the new one and never half of each.
+    """
+    records = read(path)
+    out, changed, filled = [], 0, 0
+    for rec in records:
+        call = str(rec.get("call", "") or "").upper()
+        info = answers.get(call) or {}
+        wanted = {k: v for k, v in info.items()
+                  if k in fields and v and not str(rec.get(k, "") or "").strip()}
+        if wanted:
+            rec = dict(rec)
+            rec.update(wanted)
+            changed += 1
+            filled += len(wanted)
+        out.append(rec)
+    if changed:
+        _rewrite(path, out)
+    return changed, filled
+
+
+def missing_fields(records, fields=("grid", "name", "qth")):
+    """Callsigns in the log missing ANY of `fields`. `{call: contacts}`.
+
+    One entry per CALLSIGN, not per contact: four QSOs with the same station
+    are one lookup, and the answer fills all four.
+
+    ANY rather than all, because the question is "what does the callbook
+    know that this log does not" -- a contact with a name and no grid has
+    something worth fetching, and requiring every field to be empty would
+    skip it.
+    """
+    out = {}
+    for rec in records:
+        call = str(rec.get("call", "") or "").upper()
+        if not call:
+            continue
+        if any(not str(rec.get(f, "") or "").strip() for f in fields):
+            out[call] = out.get(call, 0) + 1
+    return out
+
+
 def rename_session(path, activity, start, new_name):
     """Rename one session. Returns how many contacts were relabeled.
 

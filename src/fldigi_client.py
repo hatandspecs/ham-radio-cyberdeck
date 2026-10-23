@@ -184,7 +184,19 @@ class Fldigi:
         return self.connected
 
     def abort(self):
+        """Drop the carrier now, and throw away what had not gone out yet.
+
+        **`main.abort` alone leaves the TX widget holding the remainder.**
+        `start_over` and `send_more` both `text.add_tx`, which APPENDS, so
+        the next over went out behind whatever the aborted one had not
+        reached -- the operator saw their new message sent after a fragment
+        of the old one. Reported from the panel 2026-10-23.
+
+        Clearing after the abort rather than before: the order that matters
+        is the one that stops the transmitter first.
+        """
         self._call("main.abort")
+        self._call("text.clear_tx")
 
     def receive_only(self, on=True):
         """Inhibit transmit entirely (§9)."""

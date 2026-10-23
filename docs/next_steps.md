@@ -136,6 +136,84 @@ columns of a 12-pixel font -- 792 of the panel's 800 -- so the last 8 pixels
 belong to no cell and `clearok` cannot reach them. Leaving a map now blanks
 the framebuffer first.
 
+## The third hardware session, 2026-10-23
+
+### The tuner stepped through and nothing reached the radio
+
+**`send_cat` and `set_frequency` answer False when rigctld cannot be
+reached. They do not raise, and the sweep ignored what they returned.** So a
+run with no rig behind it stepped through every frequency it had been given,
+counting up on the panel, while the VFO never moved and the tuner never
+keyed. Every CAT call in `tuner.py` is checked now, and a run that cannot
+reach the radio fails on the first command with "no rig control — is
+rigctld running?".
+
+The digimode band change reported `VFO refused` in the same session, and
+that path goes through fldigi rather than rigctld. Two different routes to
+the radio failing together put the cause below both of them.
+
+### The map was slow because the cache was as expensive as the thing it cached
+
+`_map_record_count` read and parsed the whole spot log to decide whether the
+cached map was stale -- which is most of the work the cache existed to
+avoid. It is `os.stat` now: one syscall, and the size and mtime change
+whenever a spot is appended, which is the only way the map can go stale.
+
+Two more caches behind it, because the first open and the view change were
+still seconds apart from each other:
+
+- **Geocoding is separated from projecting.** Turning six thousand
+  Maidenhead squares into latitudes does not depend on the view; projecting
+  them onto a basemap is all that changes when `v` is pressed.
+- **The canvas is cached.** Building it walks all 345,600 pixels of the
+  basemap, and that was happening five times a second for a picture that had
+  not changed.
+
+Measured on a laptop with 6,000 spots: 247 ms to open, 125 ms to change
+view, and nothing at all per frame. It was doing the 247 ms five times a
+second.
+
+### The transcript is for what went over the air
+
+Switching the band plan's license class wrote a line into the keyboard-to-
+keyboard transcript. So did saving a ring order, and the export server
+closing itself. None of them is something a correspondent sent. Each now
+goes to its own screen's message line -- the band plan's header already
+names the class, so that one says nothing at all.
+
+`_log_note` has carried this reasoning since the logging screens were built;
+these three were written without it.
+
+### The callbook's grid was fetched and thrown away
+
+**`logform.LOOKUP` has always asked for a grid and the callbook has always
+answered with one.** But `_lookup_collect` wrote answers into the FORM, and
+the general schema has no grid field -- so `form.field("grid")` was None and
+the value went nowhere. Every contact logged under that schema reached the
+file without a grid, and the contact map had nothing to plot.
+
+The record format has carried `grid` all along and exports it as
+`GRIDSQUARE`. Only the route from the lookup to the record was missing. A
+looked-up field the schema cannot show is now kept aside and written onto
+the record at commit, where the operator's typing still outranks it.
+
+### Filling in what is already logged
+
+The logger's danger zone gained a line that destroys nothing: look up every
+callsign in the log missing a grid, name or QTH, and fill the gaps from
+HamQTH. It is on that menu because it rewrites the whole file in one pass,
+which is what the rest of that screen has in common.
+
+One lookup per CALLSIGN, not per contact -- four QSOs with one station are
+one query and the answer fills all four. Answers are collected on the poll
+the deck already does, because hundreds of lookups at two seconds each would
+otherwise freeze the panel for the better part of an hour. Nothing is
+written until every answer is in, so one atomic rewrite replaces the log
+rather than hundreds.
+
+**It fills gaps and never corrects.** A callbook is evidence; what was typed
+at the time is testimony.
+
 ## The work plan from here
 
 **Before anything new.** The 2026-10-23b round is unverified on hardware and

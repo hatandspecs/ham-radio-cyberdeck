@@ -147,8 +147,12 @@ press(d, ord("1"), ENTER)
 equals("the config holds the new order", d.cfg["RING_ORDER"],
        "alloc,settings,logging,digimodes,wspr")
 equals("and the screen went back to deck & rig", d.screen, A.SET)
-check("the transcript says what the ring is now",
-      "Band plan" in d.session.last_note, d.session.last_note)
+# On the screen's own message line, NOT the transcript: the ring is deck
+# configuration and has nothing to do with what went over the air.
+check("the screen says what the ring is now",
+      "Band plan" in d.ring_message, d.ring_message)
+check("and the transcript is left alone",
+      "Band plan" not in d.session.last_note, d.session.last_note)
 
 d = deck("settings,logging,digimodes")
 sel(d, A.AREA_DIGI)

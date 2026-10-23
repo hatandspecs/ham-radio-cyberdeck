@@ -34,6 +34,17 @@ CAT_TUNE_OFF = "AC100;"        # tuner bypassed
 # landed on the frequency before it is asked to match there.
 SETTLE_S = 0.3
 
+# Reading the dial back rather than guessing how long it takes to get there.
+# The poll is one rigctld round trip, so a fifth of a second is often enough
+# and costs little when it is not. The timeout is what a radio that accepted
+# the command and did not move gets before the run is called a fault; three
+# seconds is far longer than any VFO needs and short enough to notice.
+ARRIVE_POLL_S = 0.2
+ARRIVE_TIMEOUT_S = 3.0
+# The FTX-1 reports to the hertz and `frequencies_for` works in kilohertz,
+# so exact equality would be fine -- this allows for a rig that rounds.
+ARRIVE_TOLERANCE_HZ = 10
+
 # The floor is a guard against a fat finger on the cycling key, not a
 # judgment about any particular tuner. **Half a second is shorter than many
 # tuners' own cycle**, and there is no completion to check, so a dwell this
@@ -77,6 +88,7 @@ class Sweep:
         self.state = IDLE
         self.message = ""
         self._next_at = 0.0
+        self._asked_at = 0.0
         self._phase = "step"
 
     # -- what the screen reads ---------------------------------------------
@@ -130,26 +142,65 @@ class Sweep:
         self._phase = "step"
         return True
 
-    def _put_tuner_in_circuit(self):
+    def _cat(self, command):
+        """Send one CAT string and say whether it went.
+
+        **The return value is checked.** `send_cat` answers False when
+        rigctld cannot be reached, and this swallowed it: the sweep stepped
+        through every frequency it had been given, counting up on the panel,
+        while nothing at all reached the radio. Found on the deck
+        2026-10-23 -- the VFO never moved and the tuner never keyed, and the
+        screen reported a run in progress throughout.
+        """
         try:
-            self.rig.send_cat(CAT_TUNE_IN)
-        except Exception as exc:                       # noqa: BLE001
+            return bool(self.rig.send_cat(command))
+        except Exception:                              # noqa: BLE001
+            return False
+
+    def _put_tuner_in_circuit(self):
+        if not self._cat(CAT_TUNE_IN):
             self.state = FAILED
-            self.message = f"no rig control: {exc}"
+            self.message = "no rig control — is rigctld running?"
             return False
         return True
+
+    def _arrived(self, want):
+        """Whether the radio reports itself on `want`. None if unreadable.
+
+        **None is not False.** A radio whose frequency cannot be read is not
+        a radio known to be on the wrong one, and the sweep treats the two
+        differently: an unreadable rig falls back to the fixed settle, an
+        unmoved one is a fault.
+        """
+        try:
+            got = int(self.rig.frequency() or 0)
+        except Exception:                              # noqa: BLE001
+            return None
+        if got <= 0:
+            return None
+        return abs(got - int(want)) <= ARRIVE_TOLERANCE_HZ
 
     def tick(self):
         """Advance by at most one action. Call it as often as convenient.
 
-        Two phases per frequency. `set_frequency` lands the VFO, then a
-        settle elapses, then the tuner is triggered and the dwell runs. The
-        settle matters: triggering a match before the radio has arrived asks
-        the tuner to match the previous frequency.
+        Three phases per frequency. `set_frequency` commands the VFO; the
+        radio is then READ until it reports itself there; and only then is
+        the tuner triggered and the dwell started.
 
-        Neither phase sleeps. A sweep that slept through its dwell could not
-        read the key that aborts it, during the only part of the run where
-        aborting matters.
+        **The dwell runs from arrival, not from the command.** It used to
+        start after a fixed 0.3 s settle, which is a guess about how long a
+        VFO takes -- too short and the tuner matches the previous frequency,
+        too long and every step pays for the worst case. Reading the dial
+        back costs one rigctld round trip per poll and removes the guess.
+
+        A radio that cannot be read at all falls back to the fixed settle,
+        because refusing to sweep on an absence of evidence would take the
+        tuner away from every rig without frequency readback. One that CAN
+        be read and does not arrive is a fault, and says so.
+
+        No phase sleeps. A sweep that slept through its dwell could not read
+        the key that aborts it, during the only part of a run where aborting
+        matters.
         """
         if self.state != RUNNING:
             return self.state
@@ -157,12 +208,28 @@ class Sweep:
         if now < self._next_at:
             return self.state
 
+        if self._phase == "arrive":
+            want = self.freqs[self.index]
+            there = self._arrived(want)
+            if there is False:
+                if now - self._asked_at >= ARRIVE_TIMEOUT_S:
+                    return self._fail(
+                        "the VFO never reached "
+                        f"{want / 1_000_000:.3f} MHz — nothing tuned there")
+                # Not there yet. Ask again on the next poll.
+                self._next_at = now + ARRIVE_POLL_S
+                return self.state
+            if there is None and now - self._asked_at < self.settle_s:
+                # Unreadable. Give it the fixed settle and go on.
+                self._next_at = now + ARRIVE_POLL_S
+                return self.state
+            self._phase = "settle"
+
         if self._phase == "settle":
-            # The VFO has arrived. Trigger the tuner and start the dwell.
-            try:
-                self.rig.send_cat(CAT_TUNE_START)
-            except Exception as exc:                   # noqa: BLE001
-                return self._fail(f"rig control failed: {exc}")
+            # The VFO is there. Trigger the tuner and start the dwell.
+            if not self._cat(CAT_TUNE_START):
+                return self._fail("rig stopped answering — nothing tuned "
+                                  f"at {self.frequency / 1_000_000:.3f} MHz")
             self._phase = "dwell"
             self._next_at = now + self.dwell_s
             return self.state
@@ -175,12 +242,20 @@ class Sweep:
             self.message = f"tuner memories set on {self.total} frequencies"
             self.finish()
             return self.state
+        # Checked, like every other CAT call here. A VFO that did not move
+        # means the tuner would match the previous frequency.
         try:
-            self.rig.set_frequency(self.freqs[self.index])
-        except Exception as exc:                       # noqa: BLE001
-            return self._fail(f"rig control failed: {exc}")
-        self._phase = "settle"
-        self._next_at = now + self.settle_s
+            went = bool(self.rig.set_frequency(self.freqs[self.index]))
+        except Exception:                              # noqa: BLE001
+            went = False
+        if not went:
+            return self._fail("rig stopped answering — the VFO did not "
+                              f"move to "
+                              f"{self.freqs[self.index] / 1_000_000:.3f} MHz")
+        # Now wait for the radio to say it is there, rather than assuming.
+        self._phase = "arrive"
+        self._asked_at = now
+        self._next_at = now + ARRIVE_POLL_S
         return self.state
 
     def _fail(self, message):
@@ -204,12 +279,10 @@ class Sweep:
         antenna worse than before it started, and that is true whether the run
         completed, was aborted, or died on a CAT error.
         """
-        try:
-            self.rig.send_cat(CAT_TUNE_IN)
-        except Exception:                              # noqa: BLE001
-            # Nothing useful to do: the rig is already unreachable, which is
-            # what the message from the failing step will say.
-            pass
+        # Not checked: the rig may already be unreachable, which is what the
+        # message from the failing step says. There is nothing better to do
+        # than try.
+        self._cat(CAT_TUNE_IN)
         # Then back where the operator was. After the tuner is in circuit,
         # not before: the order that matters is the one that cannot leave the
         # antenna unmatched, and a failed frequency restore is a nuisance

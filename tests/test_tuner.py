@@ -40,24 +40,50 @@ class FakeRig:
         self.sent = []
         self.fail_on = fail_on
         # Where the operator was when the sweep started, which `finish` is
-        # supposed to put back.
+        # supposed to put back. It does not move; `_hz` is the dial.
         self.at_hz = at_hz
+        self._hz = at_hz
+        # How many reads a commanded frequency takes to show up. 0 is a
+        # radio that is simply there when asked, which is the common case.
+        self.lag = 0
+        self._reads = 0
 
     def frequency(self):
+        """The dial, as the radio reports it.
+
+        `set_frequency` moves it, because the sweep READS this back now
+        rather than assuming a fixed settle has been long enough. A fake
+        that answered the same number whatever was commanded would model a
+        radio that never arrives.
+        """
         if self.fail_on == "read":
             raise OSError("no rig")
-        return self.at_hz
+        if self.fail_on == "unreadable":
+            return 0
+        if self._reads < self.lag:
+            self._reads += 1
+            return self.at_hz          # still on the old frequency
+        return self._hz
 
     def set_frequency(self, hz):
         if self.fail_on == "freq":
             raise OSError("no rig")
+        if self.fail_on == "freq_false":
+            return False
         self.freqs.append(hz)
         self.sent.append(("freq", hz))
+        self._hz = hz
+        self._reads = 0
         return True
 
     def send_cat(self, cmd):
         if self.fail_on == "cat" and cmd == tuner.CAT_TUNE_START:
             raise OSError("no rig")
+        # **Answering False is not raising.** This is what `send_cat` really
+        # does when rigctld cannot be reached, and it is the case the sweep
+        # used to walk straight past.
+        if self.fail_on == "cat_false":
+            return False
         self.cat.append(cmd)
         self.sent.append(("cat", cmd))
         return True
@@ -213,6 +239,25 @@ equals("and nothing more was tuned",
 print("\nan aborted run still leaves the tuner in circuit")
 equals("the last command is in-circuit", rig.cat[-1], tuner.CAT_TUNE_IN)
 
+print("\na rig that answers False stops the run, not just one that raises")
+# `send_cat` returns False when rigctld cannot be reached -- it does not
+# raise. The sweep ignored the return and stepped through every frequency
+# it had, counting up on the panel, while nothing reached the radio. Found
+# on the deck 2026-10-23.
+for failing, when in (("cat_false", "the tuner trigger"),
+                      ("freq_false", "the VFO set")):
+    clock = Clock()
+    rig = FakeRig(fail_on=failing)
+    sw = tuner.Sweep(FREQS, rig, dwell_s=5, now=clock)
+    started = sw.start()
+    if started:
+        sw.tick()
+        clock.advance(tuner.SETTLE_S + 0.01)
+        sw.tick()
+    equals(f"{when} answering False fails the run", sw.state, tuner.FAILED)
+    check(f"{when}: and says the rig stopped answering",
+          "answering" in sw.message or "rigctld" in sw.message, sw.message)
+
 print("\na CAT failure stops the run and says so")
 clock = Clock()
 rig = FakeRig(fail_on="cat")
@@ -222,7 +267,7 @@ sw.tick()
 clock.advance(tuner.SETTLE_S + 0.01)
 sw.tick()
 equals("the state is failed", sw.state, tuner.FAILED)
-check("with a reason", "rig control" in sw.message, sw.message)
+check("with a reason", "stopped answering" in sw.message, sw.message)
 equals("and the tuner is still left in circuit",
        rig.cat[-1], tuner.CAT_TUNE_IN)
 
@@ -333,5 +378,154 @@ d = deck_sweeping(running=False)
 d._ring(1)
 check("it leaves the tuner screen", d.screen != cyberdeck.TUNER, d.screen)
 equals("with nothing to explain", d.tuner_message, "")
+
+print("\nthe dwell starts when the VFO arrives, not when it was commanded")
+# A fixed settle is a guess about how long a VFO takes: too short and the
+# tuner matches the previous frequency, too long and every step pays for
+# the worst case. Asked for from the panel 2026-10-23.
+clock = Clock()
+slow = FakeRig()
+slow.lag = 3                      # three reads still on the old frequency
+sw = tuner.Sweep(FREQS, slow, dwell_s=5, now=clock)
+sw.start()
+sw.tick()                                     # commands the first frequency
+equals("the VFO was commanded", slow.freqs[-1], FREQS[0])
+before = slow.cat.count(tuner.CAT_TUNE_START)
+for _ in range(3):                            # while it is still arriving
+    clock.advance(tuner.ARRIVE_POLL_S + 0.01)
+    sw.tick()
+    equals("nothing is tuned while the radio is still moving",
+           slow.cat.count(tuner.CAT_TUNE_START), before)
+clock.advance(tuner.ARRIVE_POLL_S + 0.01)
+sw.tick()
+equals("and the tuner fires once it reports itself there",
+       slow.cat.count(tuner.CAT_TUNE_START), before + 1)
+
+print("\nthe dwell is the full dwell, measured from arrival")
+at_arrival = clock.t
+clock.advance(sw.dwell_s - 0.01)
+sw.tick()
+equals("not moved on a moment early", slow.freqs[-1], FREQS[0])
+clock.advance(0.02)
+sw.tick()
+equals("and moved on once the whole dwell has run", slow.freqs[-1], FREQS[1])
+check("which was measured from arrival, not from the command",
+      clock.t - at_arrival >= sw.dwell_s, clock.t - at_arrival)
+
+print("\na VFO that accepts the command and never moves is a fault")
+clock = Clock()
+stuck = FakeRig()
+stuck.lag = 10_000                # reports the old frequency forever
+sw = tuner.Sweep(FREQS, stuck, dwell_s=5, now=clock)
+sw.start()
+sw.tick()
+for _ in range(80):
+    clock.advance(tuner.ARRIVE_POLL_S + 0.01)
+    if sw.tick() != tuner.RUNNING:
+        break
+equals("the run fails", sw.state, tuner.FAILED)
+check("saying the VFO never got there", "never reached" in sw.message,
+      sw.message)
+check("and nothing was tuned on the wrong frequency",
+      stuck.cat.count(tuner.CAT_TUNE_START) == 0, stuck.cat)
+
+print("\na radio that cannot be read falls back to the fixed settle")
+# Refusing on an absence of evidence would take the tuner away from every
+# rig without frequency readback, which is a worse failure than the one
+# being prevented. The same reasoning as `ptt()` returning None.
+clock = Clock()
+blind = FakeRig(fail_on="unreadable")
+sw = tuner.Sweep(FREQS, blind, dwell_s=5, now=clock)
+sw.start()
+run_to_end(sw, clock)
+equals("it completes", sw.state, tuner.DONE)
+equals("and tuned at every frequency",
+       blind.cat.count(tuner.CAT_TUNE_START), len(FREQS))
+
+print("\nthe data-mode interlock belongs to digimodes and WSPR, not here")
+# `^B` refused to ARM transmit whenever the radio was not in a data mode,
+# on every screen. That is right for digimodes and WSPR -- sending PSK or a
+# beacon through a voice mode is wrong -- and wrong for the auto tuner,
+# which keys the radio to match an antenna and does not care what mode it
+# is in. It made `^B` look dead on the one screen whose header had just
+# been given an INH indicator to show the state it would not let the
+# operator change. Reported from the panel 2026-10-23.
+import session as session_mod
+
+
+class FakeFldigi:
+    def __init__(self, mode):
+        self.mode = mode
+        self.rx_only = None
+
+    def rig_mode(self):
+        return self.mode
+
+    def receive_only(self, on):
+        self.rx_only = on
+
+
+def inhibited_deck(screen, mode):
+    d = cyberdeck.Deck.__new__(cyberdeck.Deck)
+    d.cfg = {"RING_ORDER": ""}
+    d.log_on = True
+    d.screen = screen
+    d.fldigi = FakeFldigi(mode)
+    d.session = session_mod.Session(callsign="KD3CCO")
+    d.session.inhibit(True)          # as the deck starts
+    d._fldigi_sending = False
+    d._rig_mode_held = lambda m: m or ""
+    d.wspr_message = ""
+    d._wspr_note = lambda t: setattr(d, "wspr_message", t)
+    return d
+
+
+for screen, label in ((cyberdeck.TUNER, "the auto tuner"),
+                      (cyberdeck.ALLOC, "the band plan"),
+                      (cyberdeck.LOG, "the log")):
+    d = inhibited_deck(screen, "USB")
+    d._toggle_inhibit()
+    check(f"{label} arms with the radio in USB", not d.session.inhibited)
+    check(f"{label}: and fldigi was told", d.fldigi.rx_only is False)
+
+for screen, label in ((cyberdeck.CHAT, "digimodes"),
+                      (cyberdeck.WSPR, "WSPR")):
+    d = inhibited_deck(screen, "USB")
+    d._toggle_inhibit()
+    check(f"{label} still refuses with the radio in USB",
+          d.session.inhibited)
+    said = d.wspr_message or d.session.last_note
+    check(f"{label}: and says why, where it was pressed",
+          "not a data mode" in said, said)
+    d = inhibited_deck(screen, "PKTUSB")
+    d._toggle_inhibit()
+    check(f"{label} arms once the radio is in a data mode",
+          not d.session.inhibited)
+
+print("\na refusal is readable from whichever screen raised it")
+# `^B` reaches every screen, so its refusal has to as well. It went to the
+# transcript, which most screens do not draw -- a refusal the operator
+# cannot read is a key that looks broken, which is how this was reported.
+for screen, field in ((cyberdeck.CHAT, None),
+                      (cyberdeck.WSPR, "wspr_message"),
+                      (cyberdeck.TUNER, "tuner_message"),
+                      (cyberdeck.ALLOC, "alloc_message"),
+                      (cyberdeck.LOG, "log_message")):
+    d = inhibited_deck(screen, "USB")
+    d.log_message = d.tuner_message = d.alloc_message = ""
+    d.ring_message = d.export_message = ""
+    d.map_states = None
+    d._log_note = lambda t: setattr(d, "log_message", t)
+    d._screen_note("transmit stays inhibited — not a data mode")
+    got = d.session.last_note if field is None else getattr(d, field)
+    check(f"{screen} shows it on its own line", "inhibited" in got, got)
+
+print("\ninhibiting is never refused, whatever the mode or screen")
+# A safety control that can fail to engage is not one.
+for screen in (cyberdeck.CHAT, cyberdeck.WSPR, cyberdeck.TUNER):
+    d = inhibited_deck(screen, "USB")
+    d.session.inhibit(False)         # armed
+    d._toggle_inhibit()
+    check(f"{screen}: it inhibits", d.session.inhibited)
 
 sys.exit(report())

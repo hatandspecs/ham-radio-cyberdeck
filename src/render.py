@@ -2260,7 +2260,7 @@ def _segment_row(seg, width, mark="", box=""):
 
 
 def allocation_screen(segs, selected, width, height, license_name="",
-                      per_page=SEGMENTS_PER_PAGE):
+                      per_page=SEGMENTS_PER_PAGE, message=""):
     """The frequency allocation reference. Read only -- it tunes nothing.
 
     Two columns, band-and-segment then range, the same shape the tuner screen
@@ -2282,9 +2282,13 @@ def allocation_screen(segs, selected, width, height, license_name="",
         out.append([(_segment_row(seg, width, mark),
                      "bright" if i == selected else "")])
 
-    while len(out) < height - 2:
+    while len(out) < height - 3:
         out.append([(" " * width, "")])
     out.append(rule(width))
+    # A message line, because `^B` reaches this screen like every other and
+    # its refusal has to be readable from wherever it was pressed.
+    out.append([((" " + message)[:width].ljust(width),
+                 "bright" if message else "")])
     foot = "Esc back   ↑↓ move   Space license class"
     if pages > 1:
         foot = "Esc back   ↑↓ move   ←→ page   Space license class"

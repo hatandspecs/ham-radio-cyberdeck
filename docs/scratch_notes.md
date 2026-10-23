@@ -1,11 +1,14 @@
 # Scratch notes — pending deploy
 
-**Everything below is tested and uncommitted as of 2026-10-23.** Four rounds
+**Everything below is tested and uncommitted as of 2026-10-23.** Five rounds
 of work are pending and one deploy carries all of them, because the
 procedure replaces the whole directory rather than patching it:
 
-- **2026-10-23c — the second hardware session.** The map simplified down to
-  one key, the tuner's dwell made reachable, the bulk selections and locks
+- **2026-10-23d — the third hardware session.** The tuner's silent CAT
+  failure, the map's performance, the transcript, the callbook's grid, and
+  a grid backfill in the logger's danger zone.
+- **2026-10-23c — the second hardware session.** The map simplified to one
+  key, the tuner's dwell made reachable, the bulk selections and locks
   removed.
 - **2026-10-23b — the first hardware session.** A crash in the auto tuner,
   a map the panel erased, the WSPR session list.
@@ -13,11 +16,10 @@ procedure replaces the whole directory rather than patching it:
 - **2026-10-18 — transmitter safety and a crash fix**, which may or may not
   have reached the deck.
 
-**The 2026-10-23c round has not been through the full automated suite.**
-Every module it touches passes — `bandplan`, `bandscreens`, `wsprmap`,
-`mapscreen`, `fbdraw`, `tuner`, `render`, `menus`, `wsprlog` — and so does
-every other file that runs without a pty. The six pty-driven files have not
-been re-run against it.
+**The 2026-10-23d round is still in the full automated suite as this is
+written.** Every file that runs without a pty passes, including the new
+`test_backfill.py`; the six pty-driven files have not been re-run against
+it.
 
 ## Deploy
 
@@ -154,6 +156,63 @@ journalctl -u cyberdeck-ui -n 60 --no-pager
 ```
 
 ## What this carries
+
+### 2026-10-23d — what the third hardware session found
+
+**The auto tuner stepped through and nothing reached the radio.**
+`send_cat` and `set_frequency` return False when rigctld cannot be reached
+-- they do not raise -- and the sweep ignored what they returned. A run with
+no rig behind it counted up on the panel while the VFO never moved. Every
+CAT call is checked now and a run that cannot reach the radio fails on the
+first command, saying so.
+
+**This does not explain why the radio stopped answering.** The digimode band
+change reported `VFO refused` in the same session, and that path goes
+through fldigi rather than rigctld. Two different routes failing together
+put the cause below both — rigctld, the USB serial link, or the radio. See
+the note at the end of this section.
+
+**The map is fast.** Three caches: the staleness check is `os.stat` rather
+than a full parse of the spot log, geocoding is separated from projecting so
+a view change does not redo it, and the rendered canvas is kept rather than
+rebuilt from 345,600 basemap pixels every frame. Measured with 6,000 spots:
+247 ms to open, 125 ms to change view, nothing per frame. It was doing the
+247 ms five times a second.
+
+**The transcript carries only what went over the air.** Switching the band
+plan's license class, saving a ring order, and the export server closing
+itself each wrote a line into it. Each now goes to its own screen.
+
+**The callbook's grid reaches the log.** `logform.LOOKUP` has always asked
+for a grid and the callbook has always answered with one, but the answer was
+written only into the FORM and the general schema has no grid field -- so
+every contact logged under it reached the file without one, and the contact
+map had nothing to plot. A looked-up field the schema cannot show is kept
+aside and written onto the record at commit.
+
+**The logger's danger zone fills in what is already logged.** `F1` `z` `f`
+looks up every callsign missing a grid, name or QTH and fills the gaps from
+HamQTH. One query per callsign, collected in the background, one atomic
+rewrite at the end. It fills gaps and never corrects: a callbook is
+evidence, what was typed at the time is testimony.
+
+#### If the radio is still not answering
+
+Neither of the two paths to it is in this deploy's control. On the deck:
+
+```bash
+systemctl is-active cyberdeck-rigctld
+```
+
+Should print `active`. Then, with the radio on:
+
+```bash
+rigctl -m 2 -r 127.0.0.1:4532 f
+```
+
+Should print the dial frequency in hertz. An error or a hang is the radio,
+the USB lead or rigctld — not the deck software, and the tuner will now say
+so rather than pretending to sweep.
 
 ### 2026-10-23c — what the second hardware session found
 
@@ -307,7 +366,14 @@ Stop at the first that misbehaves and revert.
    activity, and the line says "contacts".
 5. `F1` `4` from deck & rig opens the ring editor. `Esc` cancels.
 6. `F1` `5` opens the export page.
-7. **`F1` `3` opens the auto tuner.**
+7. **`F1` `z` `f` from the log — fill in missing details.** It says how
+   many callsigns it would look up, asks first, and runs in the background.
+   Nothing already in the log changes. Afterwards `F5` should show contacts
+   on the map that were not there before.
+8. **The transcript carries only on-air traffic.** Cycling the band plan's
+   class, saving a ring order and the export page closing should each leave
+   it untouched.
+9. **`F1` `3` opens the auto tuner.**
    - The header carries `INH` or `INH off`, and `^B` flips it without
      leaving the screen.
    - The footer reads `+ - dwell 5s`. `+` and `-` step it by half a second
@@ -317,6 +383,10 @@ Stop at the first that misbehaves and revert.
    - With the interlock off and rigctld answering, `Enter` sweeps: the VFO
      moves, the progress line counts, `^X` stops it. **One segment for the
      first run.**
+   - **If the radio is not answering it now fails immediately** with "no rig
+     control — is rigctld running?" rather than counting through a sweep
+     that reaches nothing. That message means the rig, not the deck: see the
+     check at the end of the 2026-10-23d section.
 
 ### 2026-10-18 — transmitter safety, a crash fix, three features
 

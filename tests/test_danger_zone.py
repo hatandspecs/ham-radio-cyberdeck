@@ -77,12 +77,18 @@ def deck(keys, label, conf_extra=ON, log_body=SEEDED, settle=2.8):
 
 # -- what the question says ---------------------------------------------
 
-print("the danger zone names its three actions and counts each one")
+print("the danger zone names its actions and counts each one")
 m = menus.danger_menu(activity="Bald Eagle SP", contacts=412, session=37,
                       sessions=4)
 equals("it is titled as what it is", m["title"], "DANGER ZONE")
 keys = [k for k, _label in m["items"]]
-equals("three actions, no more", keys, ["a", "s", "m"])
+# `f` fills gaps from HamQTH and is the one line here that destroys
+# nothing. It is on this menu because it rewrites the whole log in one
+# pass, which is the property the rest of this screen shares.
+equals("three that destroy, and one that fills", keys, ["a", "s", "m", "f"])
+labels = dict(m["items"])
+check("and the filling one says so",
+      labels["f"].startswith("Fill in"), labels["f"])
 text = "\n".join(label for _k, label in m["items"])
 check("the one that destroys nothing is first",
       m["items"][0][1].startswith("Forget all activities"), m["items"][0][1])

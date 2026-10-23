@@ -1076,6 +1076,45 @@ sweep put a 90-second timeout on every file and reported eight "failures",
 all of which were files that needed longer. `run_tests.sh` has no per-file
 timeout for this reason.
 
+### `inactive` rigctld is usually the radio, and it does not come back
+
+**Both of the deck's routes to the radio go through `cyberdeck-rigctld`** --
+raw CAT from `rigctld_client` on port 4532, and fldigi's own frequency
+control. So they fail together, which is what tells this apart from a bug in
+either. On 2026-10-23 that surfaced as an auto tuner counting through a
+sweep while the VFO never moved, and `VFO refused` on the digimode band
+change, in the same session.
+
+Two separate reasons it ends up `inactive`, and the status output tells them
+apart:
+
+- **`Duration:` present and `status=0/SUCCESS`** -- it ran and exited
+  cleanly. **rigctld exits 0 when the serial device disappears**, and the
+  shipped unit says `Restart=on-failure`, so systemd correctly does nothing
+  and it stays dead until something starts it by hand. This is the common
+  one: the radio was switched off mid-session.
+- **"Condition check resulted in ... being skipped"** -- the unit never ran,
+  because `ConditionPathExists` on the CAT device failed at boot.
+
+```bash
+systemctl status cyberdeck-rigctld --no-pager
+ls -l /dev/serial/by-id/          # absent entirely = no USB serial at all
+lsusb                             # is the CP2105 even enumerated?
+```
+
+**`/dev/serial/by-id/` missing as a directory means no USB serial device is
+connected** -- udev creates it only when one is. That is the radio or the
+cable, not the deck.
+
+The durable fix is a drop-in clearing the condition and setting
+`Restart=always` with `RestartSec=10` and `StartLimitIntervalSec=0`, so
+rigctld returns within ten seconds of the radio coming back. It costs a
+retry in the journal every ten seconds while the radio is off.
+
+**Check this before reading the deck's own code.** The tuner now fails on
+its first CAT command with "no rig control — is rigctld running?", which is
+the question this answers.
+
 ### A wedged fldigi looks exactly like a broken deck
 
 **Before believing any pty failure, check that fldigi is still answering.**

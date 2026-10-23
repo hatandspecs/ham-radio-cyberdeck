@@ -170,8 +170,19 @@ Environment=LD_LIBRARY_PATH=/usr/local/lib
 ExecStart=${CFG[DECK_RIGCTLD]:-/usr/local/bin/rigctld} -m ${CFG[DECK_RIG_MODEL]:-1051} \\
   -r ${CFG[DECK_CAT_DEVICE]:-/dev/ttyUSB0} -s ${CFG[DECK_CAT_BAUD]:-38400} \\
   -p ${CFG[DECK_PTT_DEVICE]:-/dev/ttyACM0} -P RIG -t 4532
-Restart=on-failure
+# **`Restart=always`, not `on-failure`.** rigctld exits 0 when the serial
+# device disappears -- the radio switched off mid-session -- so on-failure
+# never fired and it stayed dead until something started it by hand. Both of
+# the deck's routes to the radio go through this, so when it is down the
+# tuner reaches nothing and fldigi reports every frequency change refused.
+#
+# The condition above is checked only at start, so it cannot bring the
+# service back either; the restart loop is what does. `StartLimitIntervalSec=0`
+# stops systemd giving up after five quick retries while the radio is off.
+# The cost is a retry in the journal every ten seconds until it returns.
+Restart=always
 RestartSec=10
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

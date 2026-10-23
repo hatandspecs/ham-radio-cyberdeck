@@ -295,8 +295,10 @@ def activity_type_menu(names, current="", labels=None):
     }
 
 
-def danger_menu(activity="", contacts=0, session=0, sessions=0):
-    """The three ways to throw contacts away, in one place and named.
+def danger_menu(activity="", contacts=0, session=0, sessions=0,
+                missing=0, online=False):
+    """The ways to throw contacts away, in one place and named, plus one
+    that only adds.
 
     Separated from the logging menu for one reason: the logging menu is used
     constantly and these are used while testing and demonstrating. A line that
@@ -319,6 +321,15 @@ def danger_menu(activity="", contacts=0, session=0, sessions=0):
                   f"{session} from {activity or '(no activity)'}"),
             ("m", f"Delete EVERY QSO             "
                   f"{contacts} in the whole log"),
+            # Last, and the only line here that destroys nothing. It is on
+            # this menu rather than the logging one because it rewrites the
+            # whole file in one go, which is the property the rest of this
+            # screen shares -- not because it is dangerous.
+            ("f", "Fill in missing details      "
+                  + (f"{missing} contact{'' if missing == 1 else 's'}, "
+                     "from HamQTH" if missing else "nothing missing")
+                  if online else
+                  "Fill in missing details      needs a network"),
         ],
         "footer": "Esc back   \u2191\u2193 move   Enter select   each one asks",
     }
