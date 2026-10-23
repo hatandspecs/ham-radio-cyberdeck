@@ -407,21 +407,9 @@ selected.
 
 ### Deck & rig
 
-No screenshot yet. `^O` `^O` from the conversation:
+`^O` to it from anywhere on the ring.
 
-```text
- DECK & RIG
-──────────────────────────────────────────────────────────────────
- Callsign      {call}  KD3CCO
- Name          {name}  Donald
- QTH           {qth}   State College, PA
- Locator       {grid}  FN10cs
- Rig           {rig}   FTX-1
- Antenna       {ant}   DIY 75-10m EFHW
- Max power (W)         100
-──────────────────────────────────────────────────────────────────
- ↑↓ pick  Enter edit  F1 menu  F4 color  ^O ^P screen
-```
+![Deck & rig](docs/screens/deck-rig.png)
 
 Every row is edited in place, and each shows the token a message memory
 substitutes it into — the moment you want to know that `{qth}` exists is the
@@ -435,16 +423,80 @@ live power **reading** is deliberately not on this screen — it comes from the
 radio, so a row for typing it would invite setting a number the radio
 immediately contradicts. `{power}` substitutes the reading, not the setting.
 
+### The band plan
+
+Its own stop on the ring, because the point of a reference is being one key
+away while operating. It tunes nothing. `Space` cycles Technician, General
+and Extra; the ranges are from 47 CFR §97.301.
+
+![The band plan](docs/screens/alloc.png)
+
+### The auto tuner
+
+`F1` `3` from deck & rig. Pick segments, press `Enter`, and the deck walks
+them storing a tuner memory at each — 10 kHz apart, 1 kHz inside each band
+edge.
+
+`[*]` is selected, `[ ]` is not, and **`[x]` is locked**: a segment no bulk
+selection can turn back on. 160 m, 12 m, 10 m and 6 m are locked off below,
+so `p` for all-phone does not drag them into an hour-long sweep.
+
+![The auto tuner](docs/screens/tuner.png)
+
+While a sweep runs, every key on the screen is dead except `^X` — and `^O`
+and `^P` are locked, the way WSPR locks them. A sweep keys the transmitter
+for the better part of an hour and nothing outside this screen shows it.
+
+![A sweep in progress](docs/screens/tuner-running.png)
+
+### The function ring editor
+
+`F1` `4` from deck & rig. `Space` takes an application off the ring or puts
+it back, a number moves it, `Enter` saves. The numbers are the walk order,
+which is why only what is on the ring carries one.
+
+![The ring editor](docs/screens/ringed.png)
+
+### Sending the files to a phone
+
+`F1` `5` from deck & rig. Type the address into the phone's browser and tap
+what you want.
+
+![Sending files to a phone](docs/screens/export.png)
+
+### The maps
+
+`m` on the WSPR screen, `F5` on the log screen. The picture goes straight to
+the framebuffer and curses draws the two rows over it. The band digits are
+key caps; `1`–`0` toggle a band, `v` cycles the view, and on the WSPR map `t`
+cycles heard / heard by / both — which is how "am I deaf?" gets asked.
+
+![The WSPR map](docs/screens/wspr-map.png)
+
+The contact map carries one legend reading `worked`, because a QSO that only
+went one way is not a QSO. Contacts with no grid are counted rather than
+dropped — a map showing eleven of forty with nothing saying so reads as a map
+of a quiet weekend.
+
+![The contact map](docs/screens/log-map.png)
+
 ## Keys
 
-The deck is three applications of equal standing — **digimodes**, **the
-log**, and **deck & rig** — and `^O` / `^P` walk between them. `F1` opens the
-menu for whichever one you are in, `F4` cycles the colors from any of them,
-and `F2` / `F3` are that application's own two sub-views.
+The deck is five applications of equal standing — **deck & rig**, **the
+log**, **digimodes**, **WSPR** and **the band plan** — and `^O` / `^P` walk
+between them. `F1` opens the menu for whichever one you are in, `F4` cycles
+the colors from any of them, and `F2` / `F3` are that application's own two
+sub-views.
+
+**The ring order is yours.** `F1` `4` from deck & rig opens an editor:
+`Space` takes an application off the ring or puts it back, a number moves it,
+`Enter` saves. Deck & rig cannot be removed — it holds the system menu, which
+is the way out of a deck configured into a corner. The log leaves the ring on
+its own while logging is switched off.
 
 | Key | Everywhere |
 |---|---|
-| `^O` `^P` | Previous / next application: `deck & rig` ◂▸ `log` ◂▸ `digimodes`, wrapping |
+| `^O` `^P` | Previous / next application, wrapping |
 | `F1` | The menu for the application you are in |
 | `F4` | Cycle the color scheme, five of them |
 | `Ctrl-L` | Redraw the screen |
@@ -464,12 +516,14 @@ and `F2` / `F3` are that application's own two sub-views.
 | `Ctrl-C` | Abort transmit immediately |
 | `Ctrl-B` | Toggle transmit inhibit, from any screen |
 | `Ctrl-X` | Clear the transcript |
+| `Ctrl-G` | Log the station in the last received line; `F1` `5` picks what it does |
 | `PgUp` / `PgDn` | Scroll the transcript — or drag it on the touchscreen |
 
 | Key | The log |
 |---|---|
 | `F2` | Activities — start, resume, rename or forget a session |
 | `F3` | Log schema — select, edit, copy or create one; `Esc` keeps the current one |
+| `F5` | Map of where the contacts are; `F1` `g` reaches it too |
 | `←` `→` | Move between fields on the entry form; `Tab` does too |
 | `↑` `↓` | Pick a logged contact; typing returns to the form |
 | `Enter` | Log the contact — or open the one picked above |
@@ -482,6 +536,18 @@ and `F2` / `F3` are that application's own two sub-views.
 | `↑` `↓` | Pick a station field |
 | `Enter` | Edit it in place |
 | `F2` `F3` | Display, System |
+| `F1` `3` | Auto tuner — pick segments, sweep them, store a memory at each |
+| `F1` `4` | Function ring order |
+| `F1` `5` | Send the files to a phone over WiFi |
+
+| Key | The band plan |
+|---|---|
+| `↑` `↓` | Pick a segment; `PgUp` / `PgDn` by a page |
+| `Space` | Cycle the license class the table shows |
+
+| Key | WSPR, continued |
+|---|---|
+| `m` | Map of who was heard and who heard this station |
 
 | Key | WSPR |
 |---|---|
@@ -491,6 +557,12 @@ and `F2` / `F3` are that application's own two sub-views.
 | `Ctrl-C` | Stop WSPR — the same key that aborts an over |
 | `F1` `a` | Audio levels, and the two calibration screens |
 | `F1` `w` | Start or stop; `d` decode, `t` transmit, `n` transmit next slot |
+
+| Key | Either map |
+|---|---|
+| `1`–`0` | Toggle a band on and off |
+| `v` | Cycle the view: the USA, global, or global with the Antarctic bases |
+| `t` | WSPR map only: heard / heard by this station / both |
 
 Menus take arrow keys as well as their single-key shortcuts: `↑` `↓` move a
 `▸` marker, `Enter` chooses. Transmit starts **inhibited** at every power-on;
@@ -605,6 +677,36 @@ byte as `Tab` — ASCII 9 — so `Tab` armed and inhibited the transmitter,
 including on a form where `Tab` means "next field". `Ctrl-B` was unbound.
 
 ## Getting data off the deck
+
+### From the panel, with a phone
+
+`F1` `5` from deck & rig puts the files on a web page served by the deck
+itself, and shows the address:
+
+```
+http://192.168.1.47:8080/a7f3
+```
+
+Type that into the phone's browser and tap what you want. On offer: the ADIF
+(written on the way in, so it is never stale), the contact log, the WSPR
+spots, the transcript, and `cyberdeck.conf`. **`cyberdeck.secrets` is not on
+the list.**
+
+Nothing is installed on the phone, no account is involved, and it works on a
+field hotspot with no uplink — the deck and the phone see each other whether
+or not anything else does. The page is read-only: no upload, no delete, no
+browsing above those five files.
+
+The address carries a random four-character token, fresh for each export, and
+the server closes itself five minutes after the last download. `Space` issues
+a new address; `Esc` takes it down immediately. The deck prints
+`cyberdeck.local` underneath as the shorter thing to type, but leads with the
+numeric address because Android resolves `.local` inconsistently.
+
+For managing files rather than fetching them, SSH is already on: any Android
+file manager that speaks SFTP can reach the deck today.
+
+### From a laptop, over rsync
 
 The deck records two logs and exports one of them. Both live in
 `~/.local/share/cyberdeck/`, both are append-only `key=value` text, and both
@@ -1033,15 +1135,25 @@ That closes the loop the project set out to prove: a Pi 3A+, a 5" panel, a
 Bluetooth keyboard and an FTX-1, with no window manager, no mouse and nothing
 on the screen but the terminal.
 
-**Since then it has become three applications rather than one.** The contact
+**Since then it has become five applications rather than one.** The contact
 log is reachable from the panel and its grammar is the operator's to define;
-the station's own settings have a screen of their own; and `^O` / `^P` walk
-between the three. That change was not about adding a logbook — it was about
-what the logbook revealed, which is that everything except the digital modes
-had been bolted to the side of the digital modes.
+the station's own settings have a screen of their own; WSPR and the band plan
+each have theirs; and `^O` / `^P` walk between them in an order the operator
+sets. That change was not about adding a logbook — it was about what the
+logbook revealed, which is that everything except the digital modes had been
+bolted to the side of the digital modes.
 
 Written up at **[The Cyberdeck Gets a Logbook, and Three Equal
-Applications](https://hatandspecs.github.io/hamradio/articles/cyberdeck-logger-and-function-ring/)**.
+Applications](https://hatandspecs.github.io/hamradio/articles/cyberdeck-logger-and-function-ring/)**,
+when there were three.
+
+**Added 2026-10-22, and not yet run on the deck**: the ring order is
+editable, the band plan is a reference screen of its own, an auto tuner
+sweeps selected segments and stores a memory at each, `^G` logs the station
+named in the last received line, both logs have a map, and `F1` `5` from deck
+& rig serves the files to a phone over WiFi. All are tested off hardware;
+`docs/next_steps.md` is the specification and records where each
+implementation departed from it.
 
 Working end to end:
 

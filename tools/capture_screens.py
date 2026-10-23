@@ -305,3 +305,112 @@ if __name__ == "__main__":
         print("```")
         print(frame(lines))
         print("```\n")
+
+    # The screens added 2026-10-22. Same arrangement and the same reason:
+    # this file generates `docs/screens.md`, so the prose has to live here.
+    NEW_PROSE = {
+        "alloc": ("## The band plan — `^O` to it, or `F1` `4` from anywhere"
+                  " in deck & rig",
+                  "A reference and nothing else: it tunes nothing and keeps"
+                  " no state but which\nclass is showing. `Space` cycles"
+                  " Technician, General and Extra.\n\nThe ranges are from"
+                  " 47 CFR §97.301 and `bandplans.tsv` carries a"
+                  " `verified_date`\nper row. The mode label is from the"
+                  " regulation too where there is one --"
+                  "\n`30m (CW/Data only)` is a rule, not a convention."),
+        "tuner": ("## The auto tuner — `F1` `3` from deck & rig",
+                  "Pick segments, press Enter, and the deck walks them"
+                  " storing a tuner memory at\neach: 10 kHz apart, 1 kHz"
+                  " inside each band edge.\n\n`[*]` is selected, `[ ]` is"
+                  " not, and **`[x]` is LOCKED** -- a segment no bulk"
+                  "\nselection can turn back on. 160 m, 12 m, 10 m and 6 m"
+                  " are locked off here\nbecause this station does not work"
+                  " phone on them, so `p` for all-phone does\nnot drag them"
+                  " into an hour-long sweep.\n\nThe footer line counts"
+                  " what the run will cost before it starts."),
+        "tuner-running": ("## A sweep in progress",
+                          "The summary line becomes the progress line, because"
+                          " while a sweep runs what\nmatters is where it is"
+                          " and that it can be stopped.\n\n**Every other key"
+                          " on the screen is dead while it runs**, including"
+                          " `Esc`, and\n`^O` and `^P` are locked the way WSPR"
+                          " locks them. A sweep keys the\ntransmitter for"
+                          " the better part of an hour and nothing outside this"
+                          " screen\nshows that it is running.\n\n**The"
+                          " radio cannot report that an external tuner has"
+                          " finished** -- the `RI`\nbit never clears -- so"
+                          " each frequency gets a fixed dwell. Too short fails"
+                          "\nsilently, which is why the floor is one second."),
+        "ringed": ("## The ring editor — `F1` `4` from deck & rig",
+                   "Which applications `^O` and `^P` walk, and in what order."
+                   " `Space` takes one off\nthe ring or puts it back, a"
+                   " number moves it, `Enter` saves.\n\nThe numbers are the"
+                   " walk order, which is why only the applications on the"
+                   "\nring carry one. **Deck & rig cannot be removed** -- it"
+                   " holds the system menu,\nincluding the way out of a deck"
+                   " configured into a corner -- though it can be\nmoved."
+                   "\n\nThe log leaves the ring on its own while logging is"
+                   " switched off, which is a\ndifferent fact from being"
+                   " taken off it: this screen reads the configured"
+                   "\norder, so editing it with logging off does not drop"
+                   " logging."),
+        "export": ("## Sending the files to a phone — `F1` `5` from deck"
+                   " & rig",
+                   "Type the address into the phone's browser and tap what you"
+                   " want. No account,\nnothing installed, and it works on a"
+                   " field hotspot with no uplink.\n\n**The numeric address"
+                   " leads** because Android resolves `.local`"
+                   " inconsistently;\n`cyberdeck.local` is printed underneath"
+                   " as the shorter thing to type when it\nhappens to work."
+                   "\n\nThe four characters at the end are a fresh random"
+                   " token per export, so an\naddress read out loud stops"
+                   " working when the export does. `Space` issues a"
+                   "\nnew one. The server closes itself five minutes after"
+                   " the last download.\n\n**`cyberdeck.secrets` is not on"
+                   " the list**, and the request names a position in\nthat"
+                   " list rather than a filename -- there is no path in it to"
+                   " traverse."),
+        "wspr-map": ("## The WSPR map — `m` from the WSPR screen",
+                     "The two rows curses draws over the picture. The map"
+                     " itself goes straight to\nthe framebuffer, so only the"
+                     " rows are here -- `docs/screens/wspr-map.png` has the"
+                     "\nwhole screen."
+                     "\n\nThe band digits are **key caps, drawn in reverse"
+                     " video**; an ASCII capture\ncannot show that, which is"
+                     " why `180m 240m` below is `1` `80m` `2` `40m`."
+                     "\n\n`+` is a station that heard this one and `×` one"
+                     " this station heard. `t` cycles\nbetween them and both,"
+                     " which is how \"am I deaf?\" gets asked: a night where"
+                     "\nthirty stations heard the deck and the deck heard four"
+                     " is a receive problem.\n\nThe count of spots the view"
+                     " is clipping is on the line because the USA view\nclips"
+                     " hard, and a map quietly dropping a third of the night"
+                     " would answer\n\"where am I being heard\" with a"
+                     " lie."),
+        "log-map": ("## The contact map — `F5` from the log screen",
+                    "The same map pointed at the contact log. One legend"
+                    " reading `worked`, not the\nWSPR map's two: a QSO that"
+                    " only went one way is not a QSO, so the direction"
+                    "\nfilter would have a position that is always empty."
+                    "\n\n**Contacts with no grid are counted, not dropped.**"
+                    " A grid arrives when the\nschema has one or the callbook"
+                    " lookup filled it, and not otherwise. A map\nshowing"
+                    " eleven of forty contacts with nothing on screen saying so"
+                    " reads as a\nmap of a quiet weekend.\n\nThat is a"
+                    " different absence from a clipped one: `v` fixes a clipped"
+                    " point and\nnothing on this screen fixes a missing"
+                    " grid."),
+    }
+    # The maps' PICTURE goes to the framebuffer and only the two rows come
+    # through curses, so this file can show the rows and `docs/screens/*.png`
+    # shows the whole screen. The prose says so rather than leaving a reader
+    # to wonder where the map went.
+    shots = list(_w.new_screens(W, H))
+    shots += [(name, rows) for name, _sm, rows in _w.maps(W, H)]
+    for name, lines in shots:
+        heading, prose = NEW_PROSE[name]
+        print(heading + "\n")
+        print(prose + "\n")
+        print("```")
+        print(frame(lines))
+        print("```\n")

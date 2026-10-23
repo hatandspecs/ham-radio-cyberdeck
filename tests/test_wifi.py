@@ -344,4 +344,46 @@ if __name__ == "__main__":
         check("Ctrl-R shows the passphrase", "secr3t" in body, body[:300])
         check("and the hint now offers to hide it", "hide" in body, body[:400])
 
+    print("\nThe interface's own address, which the export server binds to")
+    # Real `nmcli -t -f GENERAL.TYPE,GENERAL.DEVICE,IP4.ADDRESS device show`
+    # output, blocks and blank lines as it prints them. The wifi device is
+    # not first and is not the only one with an address, which is the whole
+    # difficulty: a parser that took the first IP4.ADDRESS it saw would bind
+    # the file server to a docker bridge.
+    real_run = wifi._run
+    try:
+        wifi._run = lambda *a, **k: (True,
+            "GENERAL.TYPE:bridge\n"
+            "GENERAL.DEVICE:docker0\n"
+            "IP4.ADDRESS[1]:172.17.0.1/16\n"
+            "\n"
+            "GENERAL.TYPE:wifi\n"
+            "GENERAL.DEVICE:wlan0\n"
+            "IP4.ADDRESS[1]:192.168.1.47/24\n"
+            "\n"
+            "GENERAL.TYPE:loopback\n"
+            "GENERAL.DEVICE:lo\n"
+            "IP4.ADDRESS[1]:127.0.0.1/8\n", "")
+        equals("the wifi device's address, not the first one listed",
+               wifi.address(), "192.168.1.47")
+
+        # A deck with the WiFi radio off, or not yet associated: the device
+        # is there and has no address. Nothing to serve to, and the export
+        # screen says so rather than binding to 0.0.0.0.
+        wifi._run = lambda *a, **k: (True,
+            "GENERAL.TYPE:wifi\n"
+            "GENERAL.DEVICE:wlan0\n"
+            "\n"
+            "GENERAL.TYPE:ethernet\n"
+            "GENERAL.DEVICE:eth0\n"
+            "IP4.ADDRESS[1]:10.0.0.9/24\n", "")
+        equals("an unassociated radio has no address, and ethernet is not it",
+               wifi.address(), "")
+
+        wifi._run = lambda *a, **k: (False, "", "nmcli is not installed")
+        equals("and an unanswerable question invents no address",
+               wifi.address(), "")
+    finally:
+        wifi._run = real_run
+
     sys.exit(report())

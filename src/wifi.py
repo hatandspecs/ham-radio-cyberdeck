@@ -124,6 +124,43 @@ def active_ssid():
     return ""
 
 
+def address(device=""):
+    """This station's IPv4 address on the WiFi interface, or ''.
+
+    Asked of NetworkManager rather than of the routing table, because the
+    interface matters: the export server binds to the address of the network
+    the operator is actually looking at, and a deck on a hotspot with no
+    uplink has a WiFi address and no default route at all. The socket trick
+    that finds "the address packets would leave from" answers the wrong
+    question there and answers nothing when there is no route.
+    """
+    args = ["-t", "-f", "GENERAL.TYPE,GENERAL.DEVICE,IP4.ADDRESS",
+            "device", "show"]
+    if device:
+        args.append(device)
+    ok, out, _err = _run(args, timeout=6)
+    if not ok:
+        return ""
+    # One block per device, separated by a blank line. Split on the blank
+    # line rather than on whichever key happens to come first: `nmcli -f`
+    # prints the fields in the order they were ASKED for, so a parser that
+    # treated one of them as the block boundary would break on a reordered
+    # argument -- which is how the first version of this was wrong.
+    for block in out.split("\n\n"):
+        kind, addr = "", ""
+        for line in block.splitlines():
+            key, _sep, value = line.partition(":")
+            key, value = key.strip(), value.strip()
+            if key == "GENERAL.TYPE":
+                kind = value
+            elif key.startswith("IP4.ADDRESS") and not addr:
+                # `192.168.1.47/24` -- the prefix length is not wanted here.
+                addr = value.split("/")[0]
+        if kind == "wifi" and addr:
+            return addr
+    return ""
+
+
 def saved_ssids():
     """SSIDs NetworkManager already holds a profile for."""
     ok, out, _err = _run(["-t", "-f", "NAME,TYPE", "connection", "show"], timeout=6)

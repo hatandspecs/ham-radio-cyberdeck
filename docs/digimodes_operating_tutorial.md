@@ -763,6 +763,7 @@ bond cannot be replaced, only removed and made again.
 | `Ctrl-C` | **Abort** — drop PTT immediately |
 | `Ctrl-B` | Transmit inhibit on/off, from any screen |
 | `Ctrl-X` | Clear the transcript |
+| `Ctrl-G` | **Log the station you are working** — see below |
 | `Ctrl-L` | Redraw the screen |
 | `Ctrl-Q` | Restart the terminal — asks you to press it again to confirm |
 | `←` `→` | Move the cursor in the line you are typing |
@@ -778,7 +779,49 @@ bond cannot be replaced, only removed and made again.
 
 The four tuning keys are not on the hint line at the bottom of the screen —
 there was not room, and they are listed in **Tune Settings** (`F1` → `2`)
-instead.
+instead. `Ctrl-G` is not on it either, for the same reason, and is named on
+the menu as item 5.
+
+### `Ctrl-G` — logging the station without retyping the call
+
+The callsign is already on the screen. `Ctrl-G` reads it off the most recent
+**received** line and puts it in the log, along with the mode, frequency,
+band, time and configured power.
+
+It takes the token after `DE`, which on a line you received is the other
+station:
+
+```
+KD3CCO DE K2ABC K          ->  K2ABC
+```
+
+Three things it will not do, each with a reason on the transcript rather than
+a key that appears dead:
+
+- **A line you sent is not a source.** It proves somebody was called, not
+  that anybody answered.
+- **A CQ is refused.** `CQ CQ DE K2ABC` is a station calling into the air.
+  Logging it would invent a contact that has not happened.
+- **Two other stations working each other is refused.** `W9XYZ DE K2ABC`
+  lands in the same transcript and is nobody's contact here. The call before
+  `DE` has to be yours.
+
+`F1` → `5` cycles what the key does:
+
+| Setting | What happens |
+|---|---|
+| **log it, stay here** | The contact is written and you stay on the conversation |
+| **prefill and switch to the log** | The entry form is filled and the log screen opens — the default |
+| **prefill, stay here** | The form is filled; you stay where you are |
+
+The callsign goes in as a **prefill**, not as typing, which is what makes a
+misdecoded call cheap: `Ctrl-Z` on the log screen offers to replace it, the
+same as it does for a callbook lookup. Press `Ctrl-G` again to step back to
+an earlier received line if the newest one is not the station you meant.
+
+There is no duplicate check on this key. That belongs to the log screen,
+which can show you the earlier contact; a hotkey that silently declined would
+look broken at exactly the moment you were relying on it.
 
 ### Menu (`F1`)
 
@@ -788,6 +831,7 @@ instead.
 | `2` | Tune Settings | `a` AFC · `s` squelch · `+`/`-` level · `r` RSID · `t` TXID · `v` reverse · `c` park carrier |
 | `3` | Band | `1`–`9`, `0`, `a` — eleven presets, 80 m up to 70 cm |
 | `4` | Display | `1` Hal · `2` Deckard · `3` Matrix · `4` Tron · `5` Ripley · `t` timestamps |
+| `5` | `^G` behaviour | Cycles: log it and stay · prefill and switch to the log · prefill and stay |
 | `5` | Memories | The eight message memories; `Enter` edits one in place |
 | `6` | Station | Callsign, name, QTH, grid, rig — `Enter` edits one in place |
 | `7` | System | `b` pair a keyboard · `w` WiFi · `i` inhibit · `c` clear transcript · `q` quit |

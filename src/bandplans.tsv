@@ -1,0 +1,70 @@
+license_id	license_name	country_group	band	start_hz	end_hz	notes	source	verified_date
+us_technician	US Technician	US	80m	3525000	3600000	CW/data only	47 CFR 97.301(e)	2026-08-01
+us_technician	US Technician	US	40m	7025000	7125000	CW/data only	47 CFR 97.301(e)	2026-08-01
+us_technician	US Technician	US	15m	21025000	21200000	CW/data only	47 CFR 97.301(e)	2026-08-01
+us_technician	US Technician	US	10m	28000000	28500000	CW/data 28.000-28.300, phone 28.300-28.500	47 CFR 97.301(e)	2026-08-01
+us_technician	US Technician	US	6m	50000000	54000000	Full band, all modes	47 CFR 97.301(a)	2026-08-01
+us_general	US General	US	160m	1800000	2000000	Full band, all modes	47 CFR 97.301(a)	2026-08-01
+us_general	US General	US	80m	3525000	3600000	CW/data segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	80m	3800000	4000000	Phone/image segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	40m	7025000	7125000	CW/data segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	40m	7175000	7300000	Phone/image segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	30m	10100000	10150000	Full band, CW/data only (no phone permitted, any class)	47 CFR 97.301(a)	2026-08-01
+us_general	US General	US	20m	14025000	14150000	CW/data segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	20m	14225000	14350000	Phone/image segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	17m	18068000	18168000	Full band, no class restriction	47 CFR 97.301(a)	2026-08-01
+us_general	US General	US	15m	21025000	21200000	CW/data segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	15m	21275000	21450000	Phone/image segment	47 CFR 97.301(d)	2026-08-01
+us_general	US General	US	12m	24890000	24990000	Full band, no class restriction	47 CFR 97.301(a)	2026-08-01
+us_general	US General	US	10m	28000000	29700000	Full band, no class restriction	47 CFR 97.301(a)	2026-08-01
+us_general	US General	US	6m	50000000	54000000	Full band, all modes	47 CFR 97.301(a)	2026-08-01
+us_extra	US Extra	US	160m	1800000	2000000	Full band	47 CFR 97.301(a)	2026-08-01
+us_extra	US Extra	US	80m	3500000	4000000	Full band (all Extra sub-segments combined)	47 CFR 97.301(b)	2026-08-01
+us_extra	US Extra	US	40m	7000000	7300000	Full band	47 CFR 97.301(b)	2026-08-01
+us_extra	US Extra	US	30m	10100000	10150000	Full band	47 CFR 97.301(a)	2026-08-01
+us_extra	US Extra	US	20m	14000000	14350000	Full band	47 CFR 97.301(b)	2026-08-01
+us_extra	US Extra	US	17m	18068000	18168000	Full band	47 CFR 97.301(a)	2026-08-01
+us_extra	US Extra	US	15m	21000000	21450000	Full band	47 CFR 97.301(b)	2026-08-01
+us_extra	US Extra	US	12m	24890000	24990000	Full band	47 CFR 97.301(a)	2026-08-01
+us_extra	US Extra	US	10m	28000000	29700000	Full band	47 CFR 97.301(a)	2026-08-01
+us_extra	US Extra	US	6m	50000000	54000000	Full band	47 CFR 97.301(a)	2026-08-01
+ca_basic	Canada (Basic, no HF)	Canada	6m	50000000	54000000	Basic Qualification alone: privileges above 30 MHz only, no HF	ISED RIC-3	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	160m	1800000	2000000	No sub-band split by qualification confirmed; band edges assumed to match ITU Region 2 allocation	ISED RIC-3 (confirms full HF access + no class sub-band split; exact edges not published there, assumed per ITU Region 2)	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	80m	3500000	4000000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	40m	7000000	7300000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	30m	10100000	10150000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	20m	14000000	14350000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	17m	18068000	18168000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	15m	21000000	21450000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	12m	24890000	24990000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	10m	28000000	29700000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+ca_basic_hon_adv	Canada (Basic w/ Honours, or Advanced)	Canada	6m	50000000	54000000	Assumed to match ITU Region 2 allocation - verify against RBR-4	ISED RIC-3 / assumed ITU Region 2	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	160m	1810000	1850000	OUTER BOUND ONLY - no single European licence class table exists (CEPT reciprocity is defined per visited country, not one fixed band plan); actual permitted segments, power, and class privileges vary by country - verify locally	47 CFR 97.301 ITU Region 1 column (FCC's reproduction of the ITU international allocation table)	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	80m	3500000	3800000	OUTER BOUND ONLY - Region 1 has no amateur allocation above 3.800 MHz at all; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	40m	7000000	7200000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	30m	10100000	10150000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	20m	14000000	14350000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	17m	18068000	18168000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	15m	21000000	21450000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	12m	24890000	24990000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+eu_region1_ref	Europe / ITU Region 1 (reference allocation only)	Europe	10m	28000000	29700000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 1 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	160m	1800000	2000000	OUTER BOUND ONLY - JARL's exact per-class (1st-4th) sub-bands and power limits not verified; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	80m	3500000	3900000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	40m	7000000	7200000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	30m	10100000	10150000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	20m	14000000	14350000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	17m	18068000	18168000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	15m	21000000	21450000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	12m	24890000	24990000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	10m	28000000	29700000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+jp_region3_ref	Japan / ITU Region 3 (reference allocation only)	Japan	6m	50000000	54000000	OUTER BOUND ONLY; verify with JARL	47 CFR 97.301 ITU Region 3 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	160m	1800000	2000000	OUTER BOUND ONLY - exact national license-class privileges vary by country (Brazil, Mexico, Argentina, etc.); verify with your national regulator	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	80m	3500000	4000000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	40m	7000000	7300000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	30m	10100000	10150000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	20m	14000000	14350000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	17m	18068000	18168000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	15m	21000000	21450000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	12m	24890000	24990000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	10m	28000000	29700000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01
+sa_region2_ref	Central & South America / ITU Region 2 (reference allocation only)	Central/South America	6m	50000000	54000000	OUTER BOUND ONLY; verify locally	47 CFR 97.301 ITU Region 2 column	2026-08-01

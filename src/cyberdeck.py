@@ -91,7 +91,61 @@ WSPRCAL = "wsprcal"
 
 AREA_SETTINGS, AREA_LOG, AREA_DIGI = "settings", "logging", "digimodes"
 AREA_WSPR = "wspr"
-RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI, AREA_WSPR)
+
+# The band plan, as a reference display. Its own area rather than a screen
+# inside deck & rig, because the point of a reference is being one key away
+# while operating -- three keystrokes into a menu is a thing looked up on a
+# phone instead.
+ALLOC = "alloc"
+AREA_ALLOC = "alloc"
+
+# The auto tuner. NOT an area: it is a sub-screen of deck & rig, because it
+# is a thing done once to an antenna rather than a place to operate from, and
+# because a screen that keys the transmitter for an hour should not be one
+# `^O` away from everything else.
+TUNER = "tuner"
+
+# The maps. One screen each for WSPR and the log, because they draw the same
+# picture from different records and an operator on the WSPR screen wants the
+# WSPR one without walking the ring to find it.
+WSPRMAP, LOGMAP = "wsprmap", "logmap"
+
+# The ring `^O` and `^P` walk, in its default order. **The order is the
+# operator's** -- `RING_ORDER` in the config overrides this, and the ring
+# editor writes it. Deck & rig is excluded from reordering and never leaves
+# the ring: it holds the station settings and the system menu, including the
+# way out of a deck configured into a corner.
+RING = (AREA_SETTINGS, AREA_LOG, AREA_DIGI, AREA_WSPR, AREA_ALLOC)
+
+# Everything the ring can hold, for validating a configured order. An area
+# named here that the config omits simply is not on the ring.
+RING_AREAS = RING
+
+# Reordering may not remove this one.
+RING_FIXED = AREA_SETTINGS
+
+# What the ring editor calls each area. The area constants are what the code
+# and the config file use; these are what the panel shows, and the two are
+# deliberately different -- `settings` is the key an operator types into
+# `cyberdeck.conf`, "Deck & rig" is the name on the menu they are choosing
+# from.
+AREA_LABELS = {
+    AREA_SETTINGS: "Deck & rig",
+    AREA_LOG: "Logging",
+    AREA_DIGI: "Digimodes",
+    AREA_WSPR: "WSPR",
+    AREA_ALLOC: "Band plan",
+}
+
+# The ring editor, a sub-screen of deck & rig. Not an area of its own: it is
+# a thing done once and then lived with.
+RINGED = "ringed"
+
+# Getting the files off the deck: a web page served to a phone on the same
+# network, for a few minutes. A sub-screen of deck & rig because the files it
+# offers come from every area -- the transcript, the contact log, the WSPR
+# spots, the settings -- so it belongs to none of them.
+EXPORT = "export"
 # Ctrl-O and Ctrl-P: adjacent keys, O left of P, so back and forward map onto
 # the ring the way they sit under the hand. Both were unbound, which is what
 # makes them the cheap answer -- PgUp and PgDn keep the paging and scrolling
@@ -128,7 +182,14 @@ AREA_OF = {
     LOG: AREA_LOG, ACTS: AREA_LOG, ENTRY: AREA_LOG,
     FIELDS: AREA_LOG, ORDER: AREA_LOG,
     CHAT: AREA_DIGI, TUNE: AREA_DIGI,
-    WSPR: AREA_WSPR, WSPRCAL: AREA_WSPR,
+    WSPR: AREA_WSPR, WSPRCAL: AREA_WSPR, WSPRMAP: AREA_WSPR,
+    LOGMAP: AREA_LOG,
+    ALLOC: AREA_ALLOC,
+    # The tuner belongs to deck & rig, so `^O` out of it lands where deck &
+    # rig was left rather than somewhere unrelated.
+    TUNER: AREA_SETTINGS,
+    RINGED: AREA_SETTINGS,
+    EXPORT: AREA_SETTINGS,
 }
 
 # Screens the ring must not leave. A question has to be answered and a field
@@ -142,6 +203,13 @@ AREA_LOCKED = (CONFIRM, PAIR, WIFI, NOKB)
 # silently reverts, which reads as the panel forgetting rather than as a bug.
 _REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
                "MY_PARK", "EXCHANGE_TX",
+               # The ring order, the band plan in use, and the tuner's locks
+               # and dwell. All four are set from a screen, which is the rule
+               # this tuple follows -- without them the ring order and every
+               # lock would go back to the conf file on the next power cycle,
+               # which reads as the deck forgetting rather than as a bug.
+               "RING_ORDER", "LICENSE_CLASS", "TUNER_LOCKED",
+               "TUNER_DWELL_S", "MAP_VIEW", "LOG_HOTKEY",
                # **Every WSPR setting, because not one of them was here.**
                # They are all reached from a WSPR menu or a calibration
                # screen, which is the rule this tuple follows -- and without
@@ -297,7 +365,7 @@ class Deck:
         # Where each area was left, so arriving back lands where the operator
         # was rather than resetting. This is what makes the ring feel like tabs
         # instead of three buttons.
-        self.area_screen = {AREA_SETTINGS: SET, AREA_LOG: LOG,
+        self.area_screen = {AREA_ALLOC: ALLOC, AREA_SETTINGS: SET, AREA_LOG: LOG,
                             AREA_DIGI: CHAT}
         # The settings screen's own message line, and which row its cursor is
         # on. Row 1, because row 0 is a heading.
@@ -557,6 +625,20 @@ class Deck:
         # is collected here, on the poll the deck is already doing.
         if self.wspr is not None:
             self._wspr_poll()
+
+        # A tuner sweep, if one is running. Same place and same reason: every
+        # step is collected on the poll the deck is already doing, so the key
+        # that aborts stays readable throughout.
+        if getattr(self, "tuner_run", None) is not None:
+            self._poll_tuner()
+
+        # The export page, if one is up. Here for the same reason, and for
+        # one more: this is the poll that closes it. A file server that only
+        # expired while its own screen was being drawn would stay up for as
+        # long as the operator was anywhere else on the deck, which is
+        # exactly the situation the timer exists for.
+        if getattr(self, "export_server", None) is not None:
+            self._poll_export()
 
         # The end of the over is established before anything is done with
         # `text`, because the poll in which trx_state flips to RX still
@@ -1223,6 +1305,312 @@ class Deck:
         """Which area the deck is in now."""
         return AREA_OF.get(self.screen, AREA_DIGI)
 
+    def _ring_areas(self):
+        """The ring as it stands now: configured order, minus what is absent.
+
+        **Deck & rig is always present and always first if the order does not
+        place it.** It holds the station settings and the system menu,
+        including the way out of a deck configured into a corner, so no
+        configuration may remove it.
+
+        Logging leaves the ring when it is switched off, as it always has --
+        when off it has no form and no file, and an area with nothing to show
+        is a stop that wastes a keypress.
+        """
+        return [a for a in self._ring_order()
+                if not (a == AREA_LOG and not self.log_on)] or [RING_FIXED]
+
+    def _ring_order(self):
+        """The CONFIGURED order: everything the operator put on the ring.
+
+        `_ring_areas` is this with the areas that have nothing to show today
+        taken out. The editor reads this one, because an order edited while
+        logging is off must not come back with logging dropped from it -- the
+        log leaves the ring when it is switched off and rejoins when it is
+        switched on, and that is a different fact from being off the ring.
+        """
+        want = self.cfg.get("RING_ORDER", "")
+        order = [a.strip() for a in str(want).split(",") if a.strip()]
+        order = [a for a in order if a in RING_AREAS]
+        if not order:
+            order = list(RING)
+        if RING_FIXED not in order:
+            order.insert(0, RING_FIXED)
+        seen, out = set(), []
+        for area in order:
+            if area in seen:
+                continue
+            seen.add(area)
+            out.append(area)
+        return out
+
+    # -- getting the files off the deck ------------------------------------
+
+    def _export_dir(self):
+        path = os.path.expanduser(str(self.cfg.get("EXPORT_DIR", "")
+                                      or "~/.local/share/cyberdeck/export"))
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _write_transcript(self):
+        """The conversation, as text, into the export directory.
+
+        The transcript lives in memory and has never been written anywhere --
+        it is a record of what was said on the air, which the operator may
+        well want off the deck, and until now the only way to keep it was a
+        photograph of the panel.
+        """
+        path = os.path.join(self._export_dir(), "transcript.txt")
+        lines = []
+        for entry in self.session.entries:
+            when = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(entry.when)) \
+                if getattr(entry, "when", None) else ""
+            lines.append(f"{when}  {entry.who:<8} {entry.text}".rstrip())
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + ("\n" if lines else ""))
+            return path
+        except OSError:
+            return ""
+
+    def _export_files(self):
+        """The five files on offer, as `(label, path)`.
+
+        **`cyberdeck.secrets` is not among them and never will be.** The
+        settings file is offered because it is the deck's configuration; the
+        secrets are a separate file for exactly this reason, and the export
+        list is one of the places that separation has to be honored
+        deliberately rather than relied upon.
+        """
+        out = []
+
+        log = self._log_path()
+        # Written on the way in rather than offered stale: the ADIF is
+        # generated on demand everywhere else on the deck, so the copy beside
+        # the log may be from a previous session.
+        try:
+            records = qsolog.read(log)
+        except Exception:                                  # noqa: BLE001
+            records = []
+        if records:
+            self._export_adif()
+            adif = qsolog.export_path(log)
+            if os.path.isfile(adif):
+                out.append((os.path.basename(adif), adif))
+        if os.path.isfile(log):
+            out.append((os.path.basename(log), log))
+
+        try:
+            import wsprlog
+            spots = wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", ""))
+            if os.path.isfile(spots):
+                out.append((os.path.basename(spots), spots))
+        except Exception:                                  # noqa: BLE001
+            pass
+
+        transcript = self._write_transcript()
+        if transcript:
+            out.append(("transcript.txt", transcript))
+
+        conf = configmod.DEFAULT_PATH
+        if os.path.isfile(conf):
+            out.append((os.path.basename(conf), conf))
+        return out
+
+    def _open_export(self):
+        """Start the server and show the address. Says why when it cannot."""
+        import export
+        import wifi
+        if getattr(self, "export_server", None) is not None:
+            self.export_server.stop()
+            self.export_server = None
+
+        address = wifi.address()
+        port = export.free_port(address or "127.0.0.1",
+                                int(self.cfg.get("EXPORT_PORT",
+                                                 export.PORT) or export.PORT))
+        idle = max(1, int(self.cfg.get("EXPORT_IDLE_MIN", 5) or 5)) * 60.0
+        srv = export.Server(self._export_files(), address=address, port=port,
+                            idle_s=idle,
+                            title=f"{self.cfg.get('CALLSIGN', '')} files"
+                                  .strip() or "Cyberdeck files")
+        self.export_message = "" if srv.start() else srv.error
+        self.export_server = srv if srv.running() else None
+        self._close_menu()
+        self.screen = EXPORT
+
+    def _close_export(self):
+        srv = getattr(self, "export_server", None)
+        if srv is not None:
+            srv.stop()
+        self.export_server = None
+        self.export_message = ""
+
+    def _poll_export(self):
+        """From the main loop. Closes the server on its own idle timer.
+
+        Polled rather than timed from inside the server, so the one place
+        that decides the panel is up to date is the same place that decides
+        the server is.
+        """
+        srv = getattr(self, "export_server", None)
+        if srv is None:
+            return
+        if not srv.tick():
+            self.export_server = None
+            self.export_message = "closed itself — r starts it again"
+            if self.screen != EXPORT:
+                self.session.note("the export page closed itself")
+
+    def _draw_export(self, h, w):
+        srv = getattr(self, "export_server", None)
+        urls = srv.urls() if srv is not None else ("", "")
+        rows = srv.rows() if srv is not None else []
+        for i, line in enumerate(render.export_screen(
+                urls, rows, w, h,
+                remaining=srv.remaining() if srv is not None else 0.0,
+                downloads=srv.downloads if srv is not None else 0,
+                message=getattr(self, "export_message", ""))):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_export(self, ch):
+        if ch == 27:
+            self._close_export()
+            self.screen = SET
+        elif ch in (ord("r"), ord("R"), 10, 13, curses.KEY_ENTER):
+            # Refresh: rewrite the ADIF and the transcript and serve the new
+            # sizes. Same token and same address, so a page already open on
+            # the phone keeps working.
+            srv = getattr(self, "export_server", None)
+            if srv is None:
+                self._open_export()
+            else:
+                srv.files = [(str(a), str(b)) for a, b in
+                             self._export_files()]
+                self.export_message = ""
+        elif ch == 32:
+            # A new address, for when the old one has been read out loud
+            # or the deck has changed networks. Restarting IS the new
+            # address: a fresh `Server` makes a fresh token.
+            self._open_export()
+        return True
+
+    # -- the ring editor ---------------------------------------------------
+
+    def _open_ring_editor(self):
+        """Working copy of the ring: the areas on it, then the ones left off.
+
+        A copy, not the configuration. Esc has to be able to discard, and an
+        editor that wrote through to `RING_ORDER` as the arrows moved would
+        reorder the ring under the operator while they were deciding.
+        """
+        on = self._ring_order()
+        off = [a for a in RING_AREAS if a not in on]
+        self.ring_rows = [[a, True] for a in on] + [[a, False] for a in off]
+        self.ring_sel = 0
+        self.ring_message = ""
+        self._close_menu()
+        self.screen = RINGED
+        return self.ring_rows
+
+    def _ring_working(self):
+        """The working copy, built on first use.
+
+        The screen is reachable without the menu -- `^O` back into deck & rig
+        lands where deck & rig was left, which may be here -- so the copy
+        cannot be something only `_open_ring_editor` creates.
+        """
+        if not getattr(self, "ring_rows", None):
+            self._open_ring_editor()
+        return self.ring_rows
+
+    def _ring_screen_rows(self):
+        """`rows` for `render.ring_screen`, numbered 1..N down the on-rows."""
+        rows, n = [], 0
+        for area, on in self._ring_working():
+            if on:
+                n += 1
+            rows.append((n if on else 0, area,
+                         AREA_LABELS.get(area, area), on,
+                         area == RING_FIXED))
+        return rows
+
+    def _draw_ring_editor(self, h, w):
+        for i, line in enumerate(render.ring_screen(
+                self._ring_screen_rows(), self.ring_sel, w, h,
+                message=self.ring_message)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_ring_editor(self, ch):
+        rows = self._ring_working()
+        if ch == 27:
+            self.ring_message = ""
+            self.screen = SET
+            return True
+        if ch == curses.KEY_UP:
+            self.ring_sel = (self.ring_sel - 1) % len(rows)
+            self.ring_message = ""
+            return True
+        if ch == curses.KEY_DOWN:
+            self.ring_sel = (self.ring_sel + 1) % len(rows)
+            self.ring_message = ""
+            return True
+        if ch == 32:                                      # Space
+            area, on = rows[self.ring_sel]
+            if area == RING_FIXED:
+                # The same shape as the schema editor's refusal on row 0: a
+                # key that cannot act says why rather than doing nothing.
+                self.ring_message = (f"{AREA_LABELS[RING_FIXED]} holds the "
+                                     "system menu — it cannot leave the ring")
+                return True
+            rows[self.ring_sel][1] = not on
+            self.ring_message = ""
+            # An area switched on joins at the end of the ring, which is
+            # where the numbering already puts it: the rows do not move, so
+            # the selection stays on the area the operator just toggled.
+            return True
+        if ch == 48:                                      # 0
+            self.ring_message = "the ring starts at 1"
+            return True
+        if 49 <= ch <= 57:                                # 1-9
+            area, on = rows[self.ring_sel]
+            if not on:
+                self.ring_message = (f"{AREA_LABELS.get(area, area)} is not "
+                                     "on the ring — Space puts it there")
+                return True
+            # Among the ON rows only. Out of range is clamped rather than
+            # refused, as on the schema editor: a single digit typed at a
+            # list of four plainly means last.
+            on_rows = [r for r in rows if r[1]]
+            off_rows = [r for r in rows if not r[1]]
+            on_rows.remove(rows[self.ring_sel])
+            at = max(0, min(ch - 49, len(on_rows)))
+            on_rows.insert(at, rows[self.ring_sel])
+            self.ring_rows = on_rows + off_rows
+            # Follow the row that moved, so a second number keeps working on
+            # the same area rather than on whatever slid into its place.
+            self.ring_sel = at
+            self.ring_message = ""
+            return True
+        if ch in (10, 13, curses.KEY_ENTER):
+            order = [a for a, on in rows if on]
+            self.cfg["RING_ORDER"] = ",".join(order)
+            self._save_state()
+            self.screen = SET
+            self.ring_message = ""
+            self.session.note("ring: " + " ".join(
+                AREA_LABELS.get(a, a) for a in self._ring_areas()))
+            return True
+        return True
+
     def _ring(self, step):
         """Move to the next area, landing where that area was left.
 
@@ -1254,9 +1642,23 @@ class Deck:
             self._wspr_note("WSPR is running — ^C stops it, or F1 then w")
             self.screen = WSPR
             return
-        ring = [a for a in RING if a != AREA_LOG or self.log_on]
+        # **A tuner sweep locks the ring too**, and for a plainer reason than
+        # WSPR's: it keys the transmitter for the better part of an hour, and
+        # nothing outside its own screen shows that it is running. `Esc` and
+        # every other key on that screen are already swallowed while a sweep
+        # runs; `^O` and `^P` are read before the per-screen handlers, so
+        # they were the one way to walk away from a transmitting deck.
+        #
+        # Same shape as WSPR's refusal: the key says what is in the way and
+        # names the key that clears it, rather than doing nothing.
+        run = getattr(self, "tuner_run", None)
+        if run is not None and run.running:
+            self.tuner_message = "a tuner sweep is running — ^X stops it"
+            self.screen = TUNER
+            return
+        ring = self._ring_areas()
         if here not in ring:
-            here = AREA_DIGI
+            here = AREA_DIGI if AREA_DIGI in ring else ring[0]
         where = ring[(ring.index(here) + step) % len(ring)]
         self.screen = self.area_screen.get(where, CHAT)
         if where == AREA_LOG:
@@ -3533,6 +3935,493 @@ class Deck:
         except curses.error:
             pass
 
+    # -- the band plan, and the auto tuner ---------------------------------
+
+    def _license(self):
+        """Which band plan is in use. An unknown name falls back rather than
+        leaving the deck with no plan at all."""
+        import bandplan
+        want = str(self.cfg.get("LICENSE_CLASS", "us_general"))
+        return want if want in bandplan.licenses() else "us_general"
+
+    def _license_name(self):
+        import bandplan
+        return bandplan.licenses().get(self._license(), self._license())
+
+    def _alloc_segments(self):
+        import bandplan
+        return bandplan.segments(self._license())
+
+    def _cycle_license(self):
+        """Space on either screen. Cycles the plans the file actually holds,
+        so a deck carrying a Canadian plan can reach it without a new key."""
+        import bandplan
+        names = sorted(bandplan.licenses())
+        here = self._license()
+        nxt = names[(names.index(here) + 1) % len(names)] if here in names \
+            else "us_general"
+        self.cfg["LICENSE_CLASS"] = nxt
+        self._save_state()
+        # The selection is built from the old plan and its segment keys may
+        # not exist in the new one, so it is dropped rather than carried.
+        self.tuner_sel = None
+        return nxt
+
+    def _draw_alloc(self, h, w):
+        segs = self._alloc_segments()
+        self.alloc_sel = max(0, min(getattr(self, "alloc_sel", 0),
+                                    max(0, len(segs) - 1)))
+        for i, line in enumerate(render.allocation_screen(
+                segs, self.alloc_sel, w, h, self._license_name())):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _handle_alloc(self, ch):
+        """The band plan reference. It reads; it never touches the radio."""
+        segs = self._alloc_segments()
+        n = max(1, len(segs))
+        self.alloc_sel = getattr(self, "alloc_sel", 0)
+        if ch == 27:
+            # Esc returns to the deck & rig screen rather than quitting the
+            # area, because a reference display has nothing to cancel.
+            self.screen = SET
+        elif ch == curses.KEY_UP:
+            self.alloc_sel = (self.alloc_sel - 1) % n
+        elif ch == curses.KEY_DOWN:
+            self.alloc_sel = (self.alloc_sel + 1) % n
+        elif ch in (curses.KEY_LEFT, curses.KEY_PPAGE):
+            self.alloc_sel = max(0, self.alloc_sel - render.SEGMENTS_PER_PAGE)
+        elif ch in (curses.KEY_RIGHT, curses.KEY_NPAGE):
+            self.alloc_sel = min(n - 1,
+                                 self.alloc_sel + render.SEGMENTS_PER_PAGE)
+        elif ch == 32:                                    # Space
+            self.session.note(f"band plan: {self._license_name()}"
+                              if self._cycle_license() else "")
+            self.alloc_sel = 0
+        return True
+
+    def _log_from_transcript(self):
+        """`^G`: log the station named in the most recent received line.
+
+        Three behaviours, cycled from the digimodes menu, because the right
+        one depends on whether the operator is mid-conversation or mopping up
+        afterwards. All three read the same source -- a RECEIVED line, where
+        the token after `DE` is the other station. A transmitted line names
+        this station there, and logging that would log ourselves.
+        """
+        import decall
+        if not self.log_on:
+            self.session.note("logging is off -- F1 then l switches it on")
+            return False
+        found = decall.candidates(list(self.session.entries),
+                                  self.cfg.get("CALLSIGN", ""))
+        if not found:
+            self.session.note("no received line names a station -- "
+                              "nothing like 'MYCALL DE THEIRS'")
+            return False
+        mode = str(self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH))
+        if mode not in decall.MODES:
+            mode = decall.PREFILL_SWITCH
+
+        # Pressed again with the call this key last supplied still on the
+        # form: step back to the next older received line. The specification
+        # gave this to the arrows, and the arrows on the conversation screen
+        # are over history recall, which is used far more often than this.
+        #
+        # No state of its own. The form IS the state -- whatever is in the
+        # callsign field says which candidate was last offered, so typing
+        # over it starts again from the newest, which is the right answer
+        # anyway.
+        at = 0
+        if mode != decall.LOG_NOW and self.log_form is not None:
+            here = self.log_form.value("call").strip().upper()
+            for i, (_idx, cand, _txt) in enumerate(found):
+                if cand == here:
+                    at = (i + 1) % len(found)
+                    break
+        _i, call, _text = found[at]
+
+        # `_open_log` ends on the log screen, which is right for one of the
+        # three behaviours and wrong for the other two. The screen is put
+        # back, and the move to LOG made below where it is meant.
+        if self.log_form is None:
+            here = self.screen
+            self._open_log()
+            self.screen = here
+        form = self.log_form
+        if form is None:
+            self.session.note("the log is not ready")
+            return False
+
+        if not self._prefill_log(form, call):
+            return False
+
+        if mode == decall.LOG_NOW:
+            # Through `_log_commit`, the same path the log screen's Enter
+            # takes: it writes the file, re-reads nothing, advances the
+            # serial and clears the form. Committing the form without
+            # appending would throw the contact away.
+            before = len(self.log_records)
+            self._log_commit()
+            if len(self.log_records) > before:
+                self.session.note(f"logged {call}")
+                return True
+            # `_log_commit` already said why, on a surface this screen does
+            # not draw. Repeat it where it can be read.
+            self.session.note(self.log_message.lstrip("- ").strip()
+                              or f"could not log {call}")
+            return False
+
+        # Which of them, when there is more than one. Pressing `^G` again
+        # steps back, and a note that did not say where in the list it had
+        # got to would make that key feel like it had stopped working on the
+        # last candidate.
+        where = f"  ({at + 1} of {len(found)})" if len(found) > 1 else ""
+        self.session.note(f"{call} on the log form{where}")
+        if mode == decall.PREFILL_SWITCH:
+            self.screen = LOG
+            form.focus("call")
+        return True
+
+    def _prefill_log(self, form, call):
+        """Put the callsign on the entry form, leaving the rest to the form.
+
+        Through `LogForm.set`, which counts it a prefill -- so `Ctrl-Z`
+        offers to replace it, exactly as it does for a callbook lookup. A
+        callsign the deck read off the transcript is not the operator's
+        typing, and a misdecoded one has to be easy to get rid of.
+        """
+        if not form.set("call", call):
+            self.session.note(f"{call}: this activity's form has no call "
+                              "field")
+            return False
+        # The radio fields, from the same source the log screen's own draw
+        # uses. `from_radio` skips anything the operator has already
+        # corrected, so this cannot overwrite typing.
+        freq, radio_mode, power = self._radio_now()
+        form.from_radio(freq=freq, mode=radio_mode, power=power)
+        form.from_station(rig=self.cfg.get("RIG", ""),
+                          antenna=self.cfg.get("ANTENNA", ""))
+        return True
+
+    # -- the maps ----------------------------------------------------------
+
+    def _map_view(self):
+        import wsprmap
+        want = str(self.cfg.get("MAP_VIEW", wsprmap.DEFAULT_VIEW))
+        return want if want in wsprmap.VIEWS else wsprmap.DEFAULT_VIEW
+
+    def _map_state(self):
+        """Per-screen map state, built lazily and kept across visits."""
+        if getattr(self, "map_state", None) is None:
+            self.map_state = {"bands": None, "dirs": None, "msg": "",
+                              "drawn": False}
+        return self.map_state
+
+    def _build_map(self, which):
+        """Plot the records onto the current view.
+
+        Rebuilt on every draw request rather than cached: a map is looked at
+        after something has happened, and a stale picture of a live band is
+        worse than a pause.
+        """
+        import wsprmap
+        base = wsprmap.load(view=self._map_view())
+        home = None
+        locator = self.cfg.get("LOCATOR", "")
+        if locator:
+            import grid
+            if grid.valid(locator):
+                home = grid.to_latlon(locator)
+        sm = wsprmap.SpotMap(base, home=home)
+        if which == WSPRMAP:
+            import wsprlog
+            try:
+                records = wsprlog.read(wsprlog.log_path(
+                    self.cfg.get("WSPR_LOG_PATH", "")))
+            except Exception:
+                records = []
+            for rec in records:
+                locator = rec.get("grid") or ""
+                if not locator:
+                    continue
+                direction = (wsprmap.HEARD if rec.get("kind") == "rx"
+                             else wsprmap.HEARD_BY)
+                sm.add_grid(locator, rec.get("band", ""), direction)
+        else:
+            # Contacts carry a grid when the schema has one or the callbook
+            # lookup filled it, and not otherwise. The ones without are
+            # COUNTED rather than quietly dropped: a map showing eleven of
+            # forty contacts, with nothing on screen saying so, reads as a
+            # map of a quiet weekend.
+            for rec in self.log_records:
+                locator = rec.get("grid") or rec.get("gridsquare") or ""
+                if not locator:
+                    sm.ungridded += 1
+                    continue
+                if not sm.add_grid(locator, rec.get("band", ""),
+                                   wsprmap.HEARD_BY):
+                    sm.ungridded += 1
+        return sm
+
+    def _draw_map(self, which, h, w):
+        """The picture to the framebuffer, the two text rows through curses.
+
+        **The picture is written once, not every frame.** The framebuffer is
+        the same memory the text console draws on, so every write fights the
+        curses redraw; drawing it on entry and on change, and letting curses
+        own the two rows it needs, is what keeps both legible.
+        """
+        import wsprmap
+        state = self._map_state()
+        sm = self._build_map(which)
+        self.map_spots = sm
+
+        if not state.get("drawn"):
+            state["drawn"] = self._blit_map(sm, state)
+
+        bands = sm.bands()
+        dirs = self._map_dirs(which, state)
+        summary = sm.summary()
+        if not state.get("drawn"):
+            summary = "no framebuffer on this machine — map unavailable"
+        lines = render.map_overlay(summary, bands, state["bands"],
+                                   self._map_view(), w, directions=dirs,
+                                   message=state.get("msg", ""))
+        for i, line in enumerate(lines):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _map_dirs(self, which, state):
+        """The direction legend: what each glyph means and whether it is lit.
+
+        Two entries on the WSPR map, one on the log map. A worked contact is
+        two-way by definition -- both stations copied each other, or there
+        would be no entry -- so offering the heard / heard-by filter there
+        would offer a distinction the data does not make, and one of its two
+        positions would always show an empty map.
+        """
+        import wsprmap
+        if which == LOGMAP:
+            return [("worked", "+", True)]
+        return [("heard", "+", state["dirs"] is None
+                 or wsprmap.HEARD_BY in state["dirs"]),
+                ("by me", "x", state["dirs"] is None
+                 or wsprmap.HEARD in state["dirs"])]
+
+    def _blit_map(self, sm, state):
+        """Put the picture on the panel. False where there is no panel."""
+        import fbdraw
+        canvas = fbdraw.canvas_for()
+        if canvas is None:
+            return False
+        dim, bright = colors.map_colors(self.scheme)
+        base = sm.base
+        coast = []
+        for y in range(base.height):
+            row = y * base.width
+            for x in range(base.width):
+                if base.bits[row + x]:
+                    coast.append((x, y))
+        canvas.points(coast, dim)
+        canvas.points([(x, y) for x, y, _b, _d
+                       in sm.pixels(state["bands"], state["dirs"])], bright)
+        canvas.points(sm.home_pixels(), 0xFFFFFF)
+        return canvas.write()
+
+    def _handle_map(self, which, ch):
+        import wsprmap
+        state = self._map_state()
+        sm = getattr(self, "map_spots", None)
+        bands = sm.bands() if sm else []
+        key = chr(ch).lower() if 32 <= ch < 127 else ""
+        state["msg"] = ""
+
+        if ch == 27:
+            self.map_state = None
+            self.screen = WSPR if which == WSPRMAP else LOG
+        elif key == "v":
+            self.cfg["MAP_VIEW"] = wsprmap.next_view(self._map_view())
+            self._save_state()
+            self.map_state = None          # the picture must be redrawn
+        elif key in render.MAP_BAND_KEYS and bands:
+            i = render.MAP_BAND_KEYS.index(key)
+            if i < len(bands):
+                on = set(bands if state["bands"] is None else state["bands"])
+                band = bands[i]
+                on.discard(band) if band in on else on.add(band)
+                state["bands"] = on
+                state["drawn"] = False
+        elif key == "t" and which == LOGMAP:
+            state["msg"] = "every contact is two-way — nothing to filter"
+        elif key == "t":
+            # The two directions, which is how "am I deaf" gets asked.
+            order = (None, {wsprmap.HEARD_BY}, {wsprmap.HEARD})
+            here = state["dirs"]
+            nxt = order[(order.index(here) + 1) % len(order)] \
+                if here in order else None
+            state["dirs"] = nxt
+            state["drawn"] = False
+        elif key == "r":
+            state["drawn"] = False
+        return True
+
+    def _tuner_selection(self):
+        """The selection, built once per license and kept across visits."""
+        import bandplan
+        if getattr(self, "tuner_sel", None) is None:
+            locked = [k.strip() for k in
+                      str(self.cfg.get("TUNER_LOCKED", "")).split(",")
+                      if k.strip()]
+            self.tuner_sel = bandplan.Selection(self._alloc_segments(),
+                                                locked=locked)
+            self.tuner_row = 0
+        return self.tuner_sel
+
+    def _tuner_dwell(self):
+        import tuner as tunermod
+        return tunermod.clamp_dwell(self.cfg.get("TUNER_DWELL_S", 5.0))
+
+    def _save_locks(self):
+        self.cfg["TUNER_LOCKED"] = ",".join(self._tuner_selection().locked_keys())
+        self._save_state()
+
+    def _draw_tuner(self, h, w):
+        sel = self._tuner_selection()
+        rows = sel.rows()
+        self.tuner_row = max(0, min(getattr(self, "tuner_row", 0),
+                                    max(0, len(rows) - 1)))
+        run = getattr(self, "tuner_run", None)
+        for i, line in enumerate(render.tuner_screen(
+                sel, self.tuner_row, w, h, self._license_name(),
+                dwell_s=self._tuner_dwell(),
+                message=getattr(self, "tuner_message", ""),
+                running=run.progress() if run else None)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _poll_tuner(self):
+        """One step of a sweep, from the poll loop. Never blocks."""
+        run = getattr(self, "tuner_run", None)
+        if run is None or not run.running:
+            return
+        run.tick()
+        if not run.running:
+            self.tuner_message = run.message
+            self.session.note(f"auto tuner: {run.message}")
+
+    def _handle_tuner(self, ch):
+        """The auto tuner. Every step of a run is a real transmission."""
+        import tuner as tunermod
+        sel = self._tuner_selection()
+        rows = sel.rows()
+        n = max(1, len(rows))
+        self.tuner_row = getattr(self, "tuner_row", 0)
+        run = getattr(self, "tuner_run", None)
+        key = chr(ch).lower() if 32 <= ch < 127 else ""
+
+        # **The abort is read first, and works from anywhere on this screen.**
+        # It exists to stop transmitting on top of somebody already using the
+        # frequency, so nothing may sit in front of it.
+        if ch == 24 and run is not None and run.running:       # Ctrl-X
+            run.abort("stopped by hand")
+            self.tuner_message = "stopped — the tuner is left in circuit"
+            self.session.note("auto tuner stopped")
+            return True
+        if run is not None and run.running:
+            # Nothing else does anything while a sweep runs. A keystroke that
+            # changed the selection mid-run would describe a sweep that is
+            # not the one going out.
+            return True
+
+        if ch == 27:
+            self.screen = SET
+        elif ch == curses.KEY_UP:
+            self.tuner_row = (self.tuner_row - 1) % n
+        elif ch == curses.KEY_DOWN:
+            self.tuner_row = (self.tuner_row + 1) % n
+        elif ch in (curses.KEY_LEFT, curses.KEY_PPAGE):
+            self.tuner_row = max(0, self.tuner_row - render.SEGMENTS_PER_PAGE)
+        elif ch in (curses.KEY_RIGHT, curses.KEY_NPAGE):
+            self.tuner_row = min(n - 1,
+                                 self.tuner_row + render.SEGMENTS_PER_PAGE)
+        elif ch == 32 and rows:                                # Space
+            if not sel.toggle(rows[self.tuner_row].key):
+                self.tuner_message = "that segment is locked — l unlocks it"
+            else:
+                self.tuner_message = ""
+        elif key == "l" and rows:
+            locked = sel.toggle_lock(rows[self.tuner_row].key)
+            self.tuner_message = ("locked — bulk selections will skip it"
+                                  if locked else "unlocked")
+            self._save_locks()
+        elif key == "a":
+            sel.select_all()
+            self.tuner_message = ""
+        elif key == "n":
+            sel.clear()
+            self.tuner_message = ""
+        elif key == "i":
+            sel.invert()
+            self.tuner_message = ""
+        elif key == "p":
+            sel.select_phone()
+            self.tuner_message = ""
+        elif key == "c":
+            sel.select_cw()
+            self.tuner_message = ""
+        elif key == "d":
+            # Cycles rather than prompts, as the transmit percent does. The
+            # right value is found by watching a sweep, not known in advance.
+            order = (1.5, 2.0, 3.0, 5.0, 8.0)
+            now = self._tuner_dwell()
+            nxt = order[(order.index(now) + 1) % len(order)] \
+                if now in order else 5.0
+            self.cfg["TUNER_DWELL_S"] = nxt
+            self._save_state()
+            self.tuner_message = f"dwell {nxt} s"
+        elif key == "k":
+            self._cycle_license()
+            self.tuner_message = f"band plan: {self._license_name()}"
+            self.tuner_row = 0
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._start_tuner_sweep()
+        return True
+
+    def _start_tuner_sweep(self):
+        """Begin a run, if transmitting is allowed and something is selected.
+
+        **The inhibit is honored here as everywhere else.** A sweep is a long
+        series of deliberate transmissions, and an inhibited deck does not
+        make them because a different screen asked.
+        """
+        import tuner as tunermod
+        sel = self._tuner_selection()
+        if self.session.inhibited:
+            self.tuner_message = "transmit is inhibited — ^B arms it"
+            return False
+        freqs = sel.sweep_frequencies()
+        if not freqs:
+            self.tuner_message = "nothing selected"
+            return False
+        self.tuner_run = tunermod.Sweep(freqs, self.rig,
+                                        dwell_s=self._tuner_dwell())
+        if not self.tuner_run.start():
+            self.tuner_message = self.tuner_run.message
+            return False
+        self.tuner_message = ""
+        self.session.note(f"auto tuner: {len(freqs)} memories, ^X stops it")
+        return True
+
     def _handle_wspr_cal(self, ch):
         key = chr(ch).lower() if 32 <= ch < 127 else ""
         # Both spellings of each: the console has no keypad distinction and
@@ -3606,6 +4495,9 @@ class Deck:
                 self._wspr_stop("stopped by hand")
             else:
                 self._wspr_note("WSPR is not running")
+        elif ch == 109:                                 # m, the map
+            self.map_state = None
+            self.screen = WSPRMAP
         elif ch in (curses.KEY_UP, curses.KEY_DOWN):
             self._wspr_move(-1 if ch == curses.KEY_UP else 1)
         elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
@@ -4148,6 +5040,14 @@ class Deck:
         # whole create-and-copy flow now lives.
         elif ch == curses.KEY_F3:
             self._open_menu("activity")
+        # F5 is the map of where the contacts are. A function key rather than
+        # a letter because every printable key on this screen types into the
+        # entry form -- the WSPR screen can afford `m` for the same thing and
+        # this one cannot. F4 is the deck-wide color cycle, so F5 is the next
+        # one free.
+        elif ch == curses.KEY_F5:
+            self.map_state = None
+            self.screen = LOGMAP
         elif ch == 9:                                   # Tab
             # Leaving the callsign is the moment it is worth asking about.
             if form.current is not None and form.current.name == "call":
@@ -4535,6 +5435,16 @@ class Deck:
                 curses.curs_set(0)
             except curses.error:
                 pass
+        elif self.screen in (WSPRMAP, LOGMAP):
+            self._draw_map(self.screen, h, w)
+        elif self.screen == ALLOC:
+            self._draw_alloc(h, w)
+        elif self.screen == TUNER:
+            self._draw_tuner(h, w)
+        elif self.screen == RINGED:
+            self._draw_ring_editor(h, w)
+        elif self.screen == EXPORT:
+            self._draw_export(h, w)
         elif self.screen == PAIR:
             self._draw_pair(h, w)
         elif self.screen == WIFI:
@@ -4639,7 +5549,9 @@ class Deck:
     def _current_menu(self, w, h):
         f, m = self.fldigi, self.menu
         if m in ("digi", "root"):
-            return menus.DIGI
+            import decall
+            return menus.digi_menu(
+                self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH))
         if m == "deck":
             return menus.DECK
         if m == "display":
@@ -4899,6 +5811,21 @@ class Deck:
 
         if self.screen == WSPRCAL:
             return self._handle_wspr_cal(ch)
+        if self.screen in (WSPRMAP, LOGMAP):
+            return self._handle_map(self.screen, ch)
+
+        if self.screen == ALLOC:
+            return self._handle_alloc(ch)
+
+        if self.screen == TUNER:
+            return self._handle_tuner(ch)
+
+        if self.screen == RINGED:
+            return self._handle_ring_editor(ch)
+
+        if self.screen == EXPORT:
+            return self._handle_export(ch)
+
         if self.screen == WSPR:
             return self._handle_wspr(ch)
 
@@ -4960,6 +5887,8 @@ class Deck:
             if partial:
                 self.session.note(f"aborted — sent: {partial}")
             self._tx_echo = ""
+        elif ch == 7:                        # Ctrl-G, log the station heard
+            self._log_from_transcript()
         elif ch == 12:                       # Ctrl-L
             self.scr.clearok(True)
         elif ch == 24:                       # Ctrl-X
@@ -5370,6 +6299,15 @@ class Deck:
         # the digimode menu so that anything still asking for it by that name
         # gets the menu it used to get rather than nothing.
         if m in ("digi", "root"):
+            if key == "5":
+                import decall
+                nxt = decall.next_mode(
+                    str(self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH)))
+                self.cfg["LOG_HOTKEY"] = nxt
+                # The menu stays open: cycling three behaviours by reopening
+                # the menu between each press is two keystrokes of noise per
+                # step. The label redraws with the new one.
+                return True
             dest = {"1": "mode", "2": "tuning", "3": "radio",
                     "4": "memories"}.get(key)
             if dest:
@@ -5377,6 +6315,16 @@ class Deck:
             return True
 
         if m == "deck":
+            if key == "3":
+                self._close_menu()
+                self.screen = TUNER
+                return True
+            if key == "4":
+                self._open_ring_editor()
+                return True
+            if key == "5":
+                self._open_export()
+                return True
             dest = {"1": "display", "2": "system"}.get(key)
             if dest:
                 self._open_menu(dest)
@@ -5719,6 +6667,11 @@ class Deck:
             return True
 
         if m == "logging":
+            if key == "g":
+                self._close_menu()
+                self.map_state = None
+                self.screen = LOGMAP
+                return True
             if key == "l":
                 self.log_on = not self.log_on
                 self.cfg["LOGGING"] = "yes" if self.log_on else "no"
@@ -6541,6 +7494,14 @@ def main(stdscr, settings):
         # here would mask the one that brought us here.
         try:
             deck.fldigi.abort()
+        except Exception:
+            pass
+        # And do not leave a file server listening. The deck's exit is a
+        # systemd restart, so a socket still bound here is a socket the next
+        # process cannot have -- and a server outliving the screen that said
+        # it was up is the one thing this feature must not do.
+        try:
+            deck._close_export()
         except Exception:
             pass
         # Give fldigi its modem back. The decoder may be parked on `NULL`

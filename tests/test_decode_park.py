@@ -142,7 +142,11 @@ from test_screen import run
 # settings | log | digimodes | WSPR -- so one `^O` back from the boot
 # screen now wraps onto WSPR and every scenario below read the wrong
 # screen. Named here so the next area costs one edit per file.
-TO_CHAT = "\x0f\x0f"
+TO_CHAT = "\x0f\x0f\x0f"
+# Three hops: the ring is five areas now (the band plan joined it),
+# and `^O` x3 lands on the conversation whether or not logging is on --
+# which is the property the old two-hop constant had. See the ring-hop
+# trap in AGENTS.md.
 
 _PROJECT = os.path.dirname(_HERE)
 

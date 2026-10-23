@@ -237,7 +237,7 @@ room for the values this menu exists to show.
 │  e  Session                      general                         │
 │  b  Band                         20 m                            │
 │  p  Transmit percent             20%                             │
-│  o  Session ToT                  60 min                          │
+│  o  Session ToT                  1 h                             │
 │  u  Upload spots                 on                              │
 │  f  Spot log                     wspr.log                        │
 │  x  Export this session          455 heard, 1 sent               │
@@ -376,6 +376,241 @@ owns the codec while it runs, and put back when the session ends.
 │                                                                  │
 │                                                                  │
 │  + - level   ^B inhibit   Esc back                               │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## The band plan — `^O` to it, or `F1` `4` from anywhere in deck & rig
+
+A reference and nothing else: it tunes nothing and keeps no state but which
+class is showing. `Space` cycles Technician, General and Extra.
+
+The ranges are from 47 CFR §97.301 and `bandplans.tsv` carries a `verified_date`
+per row. The mode label is from the regulation too where there is one --
+`30m (CW/Data only)` is a rule, not a convention.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ BAND PLAN — General                                          1/2 │
+│──────────────────────────────────────────────────────────────────│
+│  160m (All Modes)                                  1.800 - 2.000 │
+│  80m (CW/Data)                                     3.525 - 3.600 │
+│  80m (Phone)                                       3.800 - 4.000 │
+│  40m (CW/Data)                                     7.025 - 7.125 │
+│  40m (Phone)                                       7.175 - 7.300 │
+│  30m (CW/Data only)                              10.100 - 10.150 │
+│▸ 20m (CW/Data)                                   14.025 - 14.150 │
+│  20m (Phone)                                     14.225 - 14.350 │
+│  17m (All Modes)                                 18.068 - 18.168 │
+│  15m (CW/Data)                                   21.025 - 21.200 │
+│  15m (Phone)                                     21.275 - 21.450 │
+│  12m (All Modes)                                 24.890 - 24.990 │
+│  10m (CW/Data)                                   28.000 - 28.300 │
+│  10m (SSB)                                       28.300 - 28.600 │
+│                                                                  │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ Esc back   ↑↓ move   ←→ page   Space license class               │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## The auto tuner — `F1` `3` from deck & rig
+
+Pick segments, press Enter, and the deck walks them storing a tuner memory at
+each: 10 kHz apart, 1 kHz inside each band edge.
+
+`[*]` is selected, `[ ]` is not, and **`[x]` is LOCKED** -- a segment no bulk
+selection can turn back on. 160 m, 12 m, 10 m and 6 m are locked off here
+because this station does not work phone on them, so `p` for all-phone does
+not drag them into an hour-long sweep.
+
+The footer line counts what the run will cost before it starts.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ AUTO TUNER — General                                         1/2 │
+│──────────────────────────────────────────────────────────────────│
+│  [x] 160m (All Modes)                              1.800 - 2.000 │
+│  [ ] 80m (CW/Data)                                 3.525 - 3.600 │
+│▸ [*] 80m (Phone)                                   3.800 - 4.000 │
+│  [ ] 40m (CW/Data)                                 7.025 - 7.125 │
+│  [*] 40m (Phone)                                   7.175 - 7.300 │
+│  [ ] 30m (CW/Data only)                          10.100 - 10.150 │
+│  [ ] 20m (CW/Data)                               14.025 - 14.150 │
+│  [*] 20m (Phone)                                 14.225 - 14.350 │
+│  [*] 17m (All Modes)                             18.068 - 18.168 │
+│  [ ] 15m (CW/Data)                               21.025 - 21.200 │
+│  [*] 15m (Phone)                                 21.275 - 21.450 │
+│  [x] 12m (All Modes)                             24.890 - 24.990 │
+│  [ ] 10m (CW/Data)                               28.000 - 28.300 │
+│  [x] 10m (SSB)                                   28.300 - 28.600 │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ selected: 5 segments   80 memories   about 4 min                 │
+│ Esc back  ↑↓ move  Space pick  l lock  p phone  Enter run        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## A sweep in progress
+
+The summary line becomes the progress line, because while a sweep runs what
+matters is where it is and that it can be stopped.
+
+**Every other key on the screen is dead while it runs**, including `Esc`, and
+`^O` and `^P` are locked the way WSPR locks them. A sweep keys the
+transmitter for the better part of an hour and nothing outside this screen
+shows that it is running.
+
+**The radio cannot report that an external tuner has finished** -- the `RI`
+bit never clears -- so each frequency gets a fixed dwell. Too short fails
+silently, which is why the floor is one second.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ AUTO TUNER — General                                         1/2 │
+│──────────────────────────────────────────────────────────────────│
+│  [x] 160m (All Modes)                              1.800 - 2.000 │
+│  [ ] 80m (CW/Data)                                 3.525 - 3.600 │
+│▸ [*] 80m (Phone)                                   3.800 - 4.000 │
+│  [ ] 40m (CW/Data)                                 7.025 - 7.125 │
+│  [*] 40m (Phone)                                   7.175 - 7.300 │
+│  [ ] 30m (CW/Data only)                          10.100 - 10.150 │
+│  [ ] 20m (CW/Data)                               14.025 - 14.150 │
+│  [*] 20m (Phone)                                 14.225 - 14.350 │
+│  [*] 17m (All Modes)                             18.068 - 18.168 │
+│  [ ] 15m (CW/Data)                               21.025 - 21.200 │
+│  [*] 15m (Phone)                                 21.275 - 21.450 │
+│  [x] 12m (All Modes)                             24.890 - 24.990 │
+│  [ ] 10m (CW/Data)                               28.000 - 28.300 │
+│  [x] 10m (SSB)                                   28.300 - 28.600 │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ tuning 7/24   14.326 MHz   ^X aborts                             │
+│ ^X abort                                                         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## The ring editor — `F1` `4` from deck & rig
+
+Which applications `^O` and `^P` walk, and in what order. `Space` takes one off
+the ring or puts it back, a number moves it, `Enter` saves.
+
+The numbers are the walk order, which is why only the applications on the
+ring carry one. **Deck & rig cannot be removed** -- it holds the system menu,
+including the way out of a deck configured into a corner -- though it can be
+moved.
+
+The log leaves the ring on its own while logging is switched off, which is a
+different fact from being taken off it: this screen reads the configured
+order, so editing it with logging off does not drop logging.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ FUNCTION RING                            Space in/out   1-9 move │
+│──────────────────────────────────────────────────────────────────│
+│▸  1. [*] Band plan                                               │
+│   2. [*] Deck & rig        always on the ring                    │
+│   3. [*] Logging                                                 │
+│   4. [*] Digimodes                                               │
+│      [ ] WSPR                                                    │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│                                                                  │
+│ Esc cancel   ↑↓ move   Space in/out   1-9 move   Enter save      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## Sending the files to a phone — `F1` `5` from deck & rig
+
+Type the address into the phone's browser and tap what you want. No account,
+nothing installed, and it works on a field hotspot with no uplink.
+
+**The numeric address leads** because Android resolves `.local` inconsistently;
+`cyberdeck.local` is printed underneath as the shorter thing to type when it
+happens to work.
+
+The four characters at the end are a fresh random token per export, so an
+address read out loud stops working when the export does. `Space` issues a
+new one. The server closes itself five minutes after the last download.
+
+**`cyberdeck.secrets` is not on the list**, and the request names a position in
+that list rather than a filename -- there is no path in it to traverse.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ SEND FILES TO A PHONE                       r refresh   Esc stop │
+│──────────────────────────────────────────────────────────────────│
+│  Open this in the phone's browser:                               │
+│                                                                  │
+│    http://192.168.1.47:8080/a7f3                                 │
+│                                                                  │
+│    or http://cyberdeck.local:8080/a7f3                           │
+│──────────────────────────────────────────────────────────────────│
+│  qso.adi             4.2 kB                                      │
+│  qso.log             18.4 kB                                     │
+│  wspr.log            1.1 MB                                      │
+│  transcript.txt      3.6 kB                                      │
+│  cyberdeck.conf      2.9 kB                                      │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│──────────────────────────────────────────────────────────────────│
+│ closes itself in 4:12   ·   2 downloads                          │
+│ Esc stop   r refresh   Space new address                         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## The WSPR map — `m` from the WSPR screen
+
+The two rows curses draws over the picture. The map itself goes straight to
+the framebuffer, so only the rows are here -- `docs/screens/wspr-map.png` has the
+whole screen.
+
+The band digits are **key caps, drawn in reverse video**; an ASCII capture
+cannot show that, which is why `180m 240m` below is `1` `80m` `2` `40m`.
+
+`+` is a station that heard this one and `×` one this station heard. `t` cycles
+between them and both, which is how "am I deaf?" gets asked: a night where
+thirty stations heard the deck and the deck heard four is a receive problem.
+
+The count of spots the view is clipping is on the line because the USA view
+clips hard, and a map quietly dropping a third of the night would answer
+"where am I being heard" with a lie.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ 32 spots   1 off this view                               global  │
+│120m 215m 340m 417m 530m 610m 712m 880m    +heard v view  Esc back│
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## The contact map — `F5` from the log screen
+
+The same map pointed at the contact log. One legend reading `worked`, not the
+WSPR map's two: a QSO that only went one way is not a QSO, so the direction
+filter would have a position that is always empty.
+
+**Contacts with no grid are counted, not dropped.** A grid arrives when the
+schema has one or the callbook lookup filled it, and not otherwise. A map
+showing eleven of forty contacts with nothing on screen saying so reads as a
+map of a quiet weekend.
+
+That is a different absence from a clipped one: `v` fixes a clipped point and
+nothing on this screen fixes a missing grid.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ 11 spots   4 with no grid                                 focus  │
+│140m 220m 315m    +worked                         v view  Esc back│
 └──────────────────────────────────────────────────────────────────┘
 ```
 

@@ -28,12 +28,17 @@ F1 = "\x1b[[A"                   # TERM=linux F1
 DOWN, ENTER = "\x1b[B", "\r"
 
 # The deck OPENS on DECK & RIG. The ring reads
-# settings | log | digimodes | WSPR, so from the boot screen `^P` is the log
-# and `^P ^P` the conversation, while `^O` wraps backwards onto WSPR.
+# settings | log | digimodes | WSPR | band plan, so from the boot screen `^P`
+# is the log and `^P ^P` the conversation, while `^O` wraps backwards onto
+# the band plan.
 #
-# WSPR made it four areas. Every count in this file is from the boot screen,
-# so a fifth area is one edit here plus the three ring-size checks below,
-# which are about the size itself and cannot be hidden behind a name.
+# WSPR made it four areas and the band plan reference made it five. Every
+# count in this file is from the boot screen, so a sixth area is one edit
+# here plus the three ring-size checks below, which are about the size itself
+# and cannot be hidden behind a name.
+#
+# The ring is configurable now (`RING_ORDER`), and these scenarios run with
+# it unset, which is the built-in order above.
 #
 # Named rather than counted at each call site: the boot screen moved once and
 # every scenario in this file counts its steps from it.
@@ -86,16 +91,15 @@ check("and what it is attached to", "FTX-1" in body and "EFHW" in body,
       body[:400])
 
 print("\n^O walks left, and the ring wraps")
-body = deck([CB], "^O once: wraps onto WSPR", extra=ON)
-check("one back wraps onto WSPR, the last area on the ring",
-      "WSPR" in body, body[:200])
+body = deck([CB], "^O once: wraps onto the band plan", extra=ON)
+check("one back wraps onto the band plan, the last area on the ring",
+      "BAND PLAN" in body, body[:200])
 
-body = deck([CB, CB], "^O twice: the conversation", extra=ON)
-check("and two back reaches the conversation", "^T over" in body,
-      body[-200:])
+body = deck([CB, CB], "^O twice: WSPR", extra=ON)
+check("two back reaches WSPR", "WSPR" in body, body[:200])
 
-body = deck([CF, CF, CF, CF], "all the way round", extra=ON)
-check("four forward comes back to where it started",
+body = deck([CF, CF, CF, CF, CF], "all the way round", extra=ON)
+check("five forward comes back to where it started",
       "DECK & RIG" in body, body[:200])
 
 print("\neach area remembers where it was left")
@@ -217,7 +221,9 @@ check("one forward goes straight to the conversation",
 body = deck([CF, CF], "^P twice with logging off")
 check("two reaches WSPR", "WSPR" in body, body[:200])
 body = deck([CF, CF, CF], "^P three times with logging off")
-check("and three comes back to the settings", "DECK & RIG" in body,
+check("three reaches the band plan", "BAND PLAN" in body, body[:200])
+body = deck([CF, CF, CF, CF], "^P four times with logging off")
+check("and four comes back to the settings", "DECK & RIG" in body,
       body[:200])
 
 print("\nthe deck and rig screen is edited in place")

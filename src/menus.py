@@ -80,6 +80,22 @@ DIGI = {
     "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
 }
 
+
+def digi_menu(log_hotkey=""):
+    """The digimode menu, with what `^G` currently does spelled out.
+
+    A static entry reading "Log hotkey" would say which key to press and not
+    what pressing it does, and the three behaviours differ in whether the
+    screen changes under the operator -- which is exactly the part that has to
+    be known before the key is pressed rather than after.
+    """
+    import decall
+    label = decall.MODE_LABELS.get(log_hotkey, "")
+    items = list(DIGI["items"])
+    items.append(("5", f"^G logs the last station heard: {label}"
+                  if label else "^G logs the last station heard"))
+    return {**DIGI, "items": items}
+
 # The deck and the radio: what this station is, what it is attached to, and
 # what the panel itself does. Nothing here is about digital modes, and nothing
 # here is about one contact.
@@ -93,6 +109,20 @@ DECK = {
         # looking at.
         ("1", "Display"),
         ("2", "System"),
+        # The auto tuner. A sub-screen rather than a ring area: it keys the
+        # transmitter for minutes at a time, and a screen that does that
+        # should not be one `^O` away from everything else.
+        ("3", "Auto tuner"),
+        # The ring editor. Here rather than an area of its own because it is
+        # set once and lived with -- and here rather than anywhere else
+        # because deck & rig is the area that cannot leave the ring, so it is
+        # the one place reachable from a deck configured into a corner.
+        ("4", "Function ring order"),
+        # Getting the files off the deck. Under deck & rig rather than under
+        # logging or WSPR, because it offers all of their files at once --
+        # and beside WiFi in spirit, since the phone it serves is on the
+        # network the system menu joins.
+        ("5", "Send files to a phone"),
     ],
     "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
 }
@@ -370,6 +400,10 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # before seeing the alternatives.
         ("v", f"Log schema                   "
               f"{activity_type or 'general logging'}"),
+        # The map of where the contacts are. Named with its key, because the
+        # log screen's footer is already 61 of 66 columns and has no room to
+        # say so -- the same reason `F3 type` is left off it.
+        ("g", "Map of the contacts          F5 on the log screen"),
     ]
     if needs_reference(activity_type):
         # Only when the schema has a reference field. Otherwise this station's

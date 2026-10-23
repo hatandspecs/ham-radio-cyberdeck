@@ -23,6 +23,7 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 | `docs/wspr_deploy.md` | **Installing `wsprd` on the deck and benchmarking it.** Decode only; nothing in it transmits |
 | `docs/wspr_design.md` | **WSPR: design and decisions, all of it built and on `main`.** Read §4 and §8 first — the audio device contention with fldigi and the five open questions are what the shape depends on |
 | `docs/logger_branch_deploy.md` | The logger deploy and recovery sequence, written when the logger was a branch. Merged to `main` since; `docs/scratch_notes.md` carries the current deploy and revert |
+| `docs/next_steps.md` | **Seven features specified 2026-10-22, none built.** Ring reordering, frequency allocation tables, the FTX-1 auto tuner, logging a digimode contact by hotkey, the WSPR and logger maps, and export off the deck. Grounded in two sibling projects: `ftx1-tuner-sweep` has the verified tuner CAT work, `wspr_7510_analysis/terminal_map_prototype` has a working map renderer |
 | `slides/cyberdeck-talk.md` | The talk, as Marp markdown; `slides/diagrams/` holds the mermaid sources |
 
 ## Things that cost a lot to rediscover
@@ -638,6 +639,64 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 
 ## What is being worked on now
 
+### Seven features from `docs/next_steps.md`, built 2026-10-22
+
+Specified and built the same day, all uncommitted in the working tree. The
+specification is `docs/next_steps.md`; each of its sections now ends with a
+**Built** note recording what was made and where the implementation departed
+from the spec.
+
+| # | Feature | Where | Tests |
+|---|---|---|---|
+| 1 | Ring order editor | `RINGED` screen, deck & rig `F1` item 4 | `test_ring_editor.py` 57 |
+| 2 | Band allocation tables | `ALLOC`, a fifth ring area; `src/bandplan.py` | `test_bandplan.py` 70, `test_bandscreens.py` 65 |
+| 3 | FTX-1 auto tuner | `TUNER` screen, deck & rig `F1` item 3; `src/tuner.py` | `test_tuner.py` 48 |
+| 4 | `^G` logs the station heard | `src/decall.py`, digimodes `F1` item 5 | `test_decall.py` 50, `test_logfromchat.py` 45 |
+| 5 | WSPR map | `WSPRMAP`, `m` on the WSPR screen; `src/wsprmap.py`, `src/fbdraw.py` | `test_wsprmap.py` 95, `test_fbdraw.py` 30, `test_mapscreen.py` 50 |
+| 6 | Logger map | `LOGMAP`, `F5` on the log screen | shares the above |
+| 7 | Export to a phone | `EXPORT` screen, deck & rig `F1` item 5; `src/export.py` | `test_export.py` 122 |
+
+**The ring went from four areas to five**, which broke eight test files
+through the ring-hop trap below. The new counts: `^O`x3 reaches the
+conversation, `^O`x2 reaches WSPR, both regardless of whether logging is on.
+
+**Nothing here has run on the deck.** Every one of the seven is tested off
+hardware and none has been deployed. Three need the panel to be believed:
+the maps write to the framebuffer directly (`src/fbdraw.py` -- no `fim`, no
+`fbi`, no keyboard handover), the auto tuner keys the transmitter for the
+better part of an hour, and the export server binds to the WiFi address.
+
+**Four new config keys outside the tuner's**: `RING_ORDER`, `LOG_HOTKEY`,
+`MAP_VIEW`, and the export's `EXPORT_DIR` / `EXPORT_PORT` / `EXPORT_IDLE_MIN`.
+All but the export paths are in `_REMEMBERED`; a setting a menu can change
+and this tuple does not list silently reverts on the next power cycle, which
+reads as the panel forgetting rather than as a bug.
+
+#### The export server is the one with a security surface
+
+`src/export.py` stands an HTTP server on the WiFi address for five minutes so
+a phone can download the logs. Three properties keep that safe, and all three
+are tested:
+
+- **The request names a position, never a file.** `/a7f3/2` is the third item
+  on a list the deck handed the server. `BaseHTTPRequestHandler`, not
+  `SimpleHTTPRequestHandler` -- the latter maps request paths onto the
+  filesystem, which is the single thing this must not do. There is no path to
+  traverse, which is why `../cyberdeck.secrets` and its encodings are a 404
+  rather than something a filter has to catch.
+- **`cyberdeck.secrets` is not on the list and must never be added to it.**
+  `Deck._export_files` offers the ADIF, the contact log, the WSPR spots, the
+  transcript and `cyberdeck.conf`. The secrets are a separate file for
+  exactly this reason.
+- **It closes itself**, on a timer polled from the main loop rather than from
+  its own screen, and in the `finally` that un-keys the transmitter. A server
+  that only expired while being looked at would stay up for as long as the
+  operator was anywhere else.
+
+The handler logs nothing: `http.server` writes a request line to stderr, and
+on the deck stderr is tty1 -- the console curses draws the panel on.
+
+
 **WSPR, merged to `main` and proven on the air.** Transmit and receive,
 exclusive while running, band hopping, a session log, spot upload. The design
 is `docs/wspr_design.md`, the install runbook is `docs/wspr_deploy.md`, and
@@ -828,7 +887,15 @@ written into `screens.md` by hand is destroyed the next time either runs.
 New screens go in `tools/wsprgrid_fixture.py`, which both tools read.
 
 The PNG path is the one the blog articles use: a generated screen in the
-scheme's true colors beats ASCII art, and it cannot drift from the code.
+scheme's true colors beats ASCII art, and it cannot drift from the code. It
+is also the only one that can show an ATTRIBUTE -- the maps' band digits are
+reverse-video key caps, which `screens.md` renders as `180m 240m` and the PNG
+renders correctly.
+
+**The `▸` selection marker comes out as an empty box in the PNGs**, in every
+screen that has one, because Liberation Mono has no U+25B8. Pre-existing and
+cosmetic; the deck's console font is a different font and the panel is the
+thing that matters. Worth knowing before chasing it as a new bug.
 
 ### On-air, and what the second day of panel testing found — 2026-10-17
 
@@ -980,15 +1047,67 @@ test tone is necessary and the RX calibration mode is not.
 
 ## Where it stands
 
-**3146 checks across 41 files, all passing as of 2026-10-18** — a clean
-serial run with nothing edited while it was in flight, fldigi up via
-`tools/dev-fldigi.sh`, through `tools/run_tests.sh`.
+**3912 checks across 52 files, all passing as of 2026-10-23** — a clean
+serial run through `tools/run_tests.sh`, fldigi freshly restarted, nothing
+edited while it was in flight, nothing else touching fldigi.
+
+The 3146-check figure this replaced was measured 2026-10-18, before the seven
+features from `docs/next_steps.md`. Those account for most of the 766 new
+checks: bandplan 70, bandscreens 65, decall 50, export 134, fbdraw 30,
+logfromchat 61, mapscreen 84, ring_editor 56, ring_order 54, tuner 60,
+wsprmap 95.
 
 Run it that way rather than looping over the files by hand. `run_tests.sh`
 checks each file for its `ALL PASS` line, which is the only thing that proves
 a file reached its end; counting `PASS` lines proves only that execution got
 that far, and a file that dies two thirds of the way down still prints
 plenty of them. `test_log_panel` needs its 1800-second timeout.
+
+**Only one test process at a time, because there is only one fldigi.** The
+six pty-driven files drive the real application against the real modem, and
+two of them running at once fight over it: on 2026-10-22 a quick sweep
+started alongside a full run reported `test_screen` failing on "fldigi
+connected" and `test_state` failing three mode-change checks, and both files
+passed in the serial run minutes later. A red pty file is worth nothing
+unless it was the only thing running.
+
+**A pty file that has not finished is not a file that failed.** The same
+sweep put a 90-second timeout on every file and reported eight "failures",
+all of which were files that needed longer. `run_tests.sh` has no per-file
+timeout for this reason.
+
+### A wedged fldigi looks exactly like a broken deck
+
+**Before believing any pty failure, check that fldigi is still answering.**
+After about fourteen hours up and a long day of test runs, fldigi on
+2026-10-22 kept its socket open and stopped answering XML-RPC: every call
+blocked until the client timed out. The deck then spends its whole main loop
+in `poll()`, never reads the keys the harness sent inside the settle window,
+and the screen stays on whatever it booted to. `test_wspr_panel` reported 90
+failures and `test_wifi` five, and **a pristine `git archive HEAD` tree
+reported the same 88 failures**, which is what proved it was not the working
+tree.
+
+The symptom on screen is `NO MODEM` in the header and a deck that ignores
+`^O` and `^P`. The way to tell in one command:
+
+```bash
+ss -ltnp | grep 7362      # a full accept queue -- "LISTEN 6 5" -- is wedged
+```
+
+A healthy fldigi shows `LISTEN 0 5` and answers `fldigi.name_version()` in
+milliseconds. Restart it with `tools/dev-fldigi.sh stop` then
+`tools/dev-fldigi.sh`, and re-run; do not go looking for the bug in `_ring`.
+
+**The real cost of a wedge is not the noise, it is what the noise hides.**
+With fldigi wedged, `test_wspr_panel` reported 90 failures. With it healthy
+the same file reported **one** -- and that one was genuine: `^P` off the WSPR
+screen was asserted to wrap round to DECK & RIG, which was true while the
+ring was four areas and WSPR was last, and became wrong when the band plan
+joined the ring behind it. Eight other files were fixed for that same
+ring-hop at the time; this one was missed because the whole file was red and
+the single true failure was buried in the spurious ones. **Fix the
+environment first, then read the failures.**
 
 The 2379-check figure this line used to carry was measured 2026-10-16 on
 branch `add-wspr`, before WSPR's own tests and the audio-level work landed.

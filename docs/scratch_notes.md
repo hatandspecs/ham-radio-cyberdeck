@@ -1,37 +1,95 @@
 # Scratch notes — pending deploy
 
-**Everything below is tested and uncommitted as of 2026-10-18.** The deck is
-running the build from the deploy before the stuck-PTT incident, so this
-carries transmitter-safety fixes as well as features.
+**Everything below is tested and uncommitted as of 2026-10-23.** Two rounds
+of work are pending: the seven features from `docs/next_steps.md`, built
+2026-10-22, and the transmitter-safety and crash fixes from 2026-10-18 that
+may or may not have reached the deck. One deploy carries both, because the
+procedure replaces the whole directory rather than patching it.
+
+**3912 checks across 52 files pass off the deck.** Nothing here has run on
+the panel. The framebuffer writes, the CAT tuner sequence and the WiFi bind
+are the three things the tests cannot reach.
 
 ## Deploy
+
+**The whole `src/` tree, not `src/*.py`.** Four of the files this deploy
+needs are not Python:
+
+```
+src/bandplans.tsv        the band plan, from 47 CFR §97.301
+src/basemap_focus.bin    the three map outlines, 1-bit, zlib
+src/basemap_global.bin
+src/basemap_wide.bin
+```
+
+`bandplan.segments()` and `wsprmap.load()` both raise `FileNotFoundError`
+when their asset is absent, and neither `_draw_alloc` nor `_build_map`
+guards it. The band plan is on the default ring, so a `*.py`-only deploy
+takes the panel down on the first `^O` from the boot screen. The image build
+copies the directory (`build_deck_image.sh` rsyncs `src/`), so a freshly
+flashed card is unaffected; a live deploy is not.
 
 On the laptop:
 
 ```bash
 cd ~/git_repos/ham-radio-cyberdeck
-rsync -av src/*.py deck@cyberdeck.local:/tmp/deckupd/
+rsync -av --exclude '__pycache__/' src/ deck@cyberdeck.local:/tmp/deckupd/
 ```
 
-On the deck — snapshot first, this is what the revert restores:
+Ends with a `sent … bytes` summary. `bandplans.tsv` and all three
+`basemap_*.bin` must appear in the file list.
+
+On the deck — confirm they arrived:
+
+```bash
+ls /tmp/deckupd/bandplans.tsv /tmp/deckupd/basemap_*.bin
+ls /tmp/deckupd/*.py | wc -l
+```
+
+Four files, then `32`. Anything missing, stop.
+
+Snapshot — this is what the revert restores:
 
 ```bash
 sudo rm -rf /opt/cyberdeck-restore
 sudo mkdir -p /opt/cyberdeck-restore
-sudo cp /opt/cyberdeck/*.py /opt/cyberdeck/cyberdeck.conf /opt/cyberdeck-restore/
+sudo cp -a /opt/cyberdeck/. /opt/cyberdeck-restore/
 ls /opt/cyberdeck-restore/*.py | wc -l
 ```
 
-A non-zero count, or stop. Then:
+A non-zero count, or stop. **`cp -a` of the directory, not `*.py`:** the
+snapshot has to carry the data files too, or a revert restores code whose
+assets have been overwritten.
+
+Then:
 
 ```bash
-sudo cp /tmp/deckupd/*.py /opt/cyberdeck/
+sudo cp -a /tmp/deckupd/. /opt/cyberdeck/
 sudo systemctl restart cyberdeck-ui
 sleep 5
 systemctl is-active cyberdeck-ui
 ```
 
 Prints `active`.
+
+Verify the assets landed where the code looks for them — beside the module,
+through `os.path.join(HERE, ...)`:
+
+```bash
+ls -la /opt/cyberdeck/bandplans.tsv /opt/cyberdeck/basemap_*.bin
+```
+
+Four files: the TSV about 10.8 kB, the basemaps 6.4, 11.2 and 10.9 kB.
+
+And that they load under the deck's own Python:
+
+```bash
+cd /opt/cyberdeck
+python3 -c "import bandplan, wsprmap, export, decall, tuner, fbdraw; print(len(bandplan.segments('us_general')), 'segments;', wsprmap.load(view='global').width, 'px map')"
+```
+
+Prints `19 segments; 800 px map`. A traceback here means an asset is
+missing or truncated — revert.
 
 **Do not deploy during a WSPR session.** Staging to `/tmp/deckupd` is safe at
 any time, but copying into `/opt/cyberdeck` while the deck runs mixes new
@@ -41,20 +99,87 @@ the restart stops WSPR mid-slot.
 ## Revert to the version running before this deploy
 
 ```bash
-sudo cp /opt/cyberdeck-restore/*.py /opt/cyberdeck/
-sudo cp /opt/cyberdeck-restore/cyberdeck.conf /opt/cyberdeck/
+sudo rm -rf /opt/cyberdeck
+sudo mkdir -p /opt/cyberdeck
+sudo cp -a /opt/cyberdeck-restore/. /opt/cyberdeck/
 sudo systemctl restart cyberdeck-ui
 sleep 5
 systemctl is-active cyberdeck-ui
 ```
 
+Prints `active`.
+
+**The `rm -rf` is deliberate.** A plain copy back leaves this deploy's new
+modules in place beside the restored ones — `export.py`, `tuner.py`,
+`bandplan.py`, `decall.py`, `fbdraw.py`, `wsprmap.py` and the four data
+files. Harmless while the restored `cyberdeck.py` never imports them, and
+not worth relying on.
+
+Settings are not in `/opt/cyberdeck`. The state file holds `RING_ORDER`,
+`LOG_HOTKEY` and `MAP_VIEW` after this deploy; restored code ignores keys it
+does not know, so reverting needs nothing further. For a clean one:
+
+```bash
+rm -f ~/.local/state/cyberdeck.json
+sudo systemctl restart cyberdeck-ui
+```
+
+That also resets mode, carrier, colors and the WSPR audio levels to whatever
+`cyberdeck.conf` says.
+
 If the panel does not come back either way:
 
 ```bash
-journalctl -u cyberdeck-ui -n 40 --no-pager
+journalctl -u cyberdeck-ui -n 60 --no-pager
 ```
 
 ## What this carries
+
+### 2026-10-22 — seven features from `docs/next_steps.md`
+
+The ring is five areas and in an order the operator sets.
+
+| | Feature | Where |
+|---|---|---|
+| 1 | Ring order editor | deck & rig `F1` `4` |
+| 2 | Band allocation tables | a fifth ring area |
+| 3 | FTX-1 auto tuner | deck & rig `F1` `3` |
+| 4 | `^G` logs the station heard | digimodes, `F1` `5` picks what it does |
+| 5 | WSPR map | `m` on the WSPR screen |
+| 6 | Contact map | `F5` on the log screen |
+| 7 | Export to a phone | deck & rig `F1` `5` |
+
+New settings, all with defaults, so `cyberdeck.conf` needs no edit:
+`RING_ORDER`, `LICENSE_CLASS`, `TUNER_LOCKED`, `TUNER_DWELL_S`, `MAP_VIEW`,
+`LOG_HOTKEY`, `EXPORT_DIR`, `EXPORT_PORT`, `EXPORT_IDLE_MIN`.
+
+**The export server opens a port on the WiFi address**, for five minutes per
+export, at a path with a fresh four-character token. It serves five named
+files by POSITION — the request never carries a filename — and
+`cyberdeck.secrets` is not among them.
+
+**The auto tuner keys the transmitter** for as long as the selected segments
+take, about four minutes for five segments at the default dwell. The radio
+cannot report that an external tuner has finished, so each frequency gets a
+fixed dwell and too short a dwell fails silently.
+
+### Check after deploying, riskiest last
+
+Stop at the first that misbehaves and revert.
+
+1. `^O` once from the boot screen reaches **BAND PLAN**. This is the check
+   that catches a `*.py`-only deploy. `Space` cycles the license class.
+2. `^O` again reaches WSPR; `m` draws the map. `v` cycles the three views,
+   `1`-`0` toggle bands, `Esc` returns. A black screen carrying only the two
+   text rows means `fbdraw` could not open `/dev/fb0`.
+3. `F1` `4` from deck & rig opens the ring editor. `Esc` cancels without
+   saving; nothing is written until `Enter`.
+4. `F1` `5` opens the export page. The address goes into a phone browser,
+   one file downloads, `Esc` takes the server down.
+5. `F1` `3` opens the auto tuner. **Transmit stays inhibited (`^B`) for the
+   first look**, and the first real run gets one segment, not a band plan.
+
+### 2026-10-18 — transmitter safety, a crash fix, three features
 
 **Transmitter safety — the reason to deploy before the next session.**
 
@@ -95,7 +220,7 @@ journalctl -u cyberdeck-ui -n 40 --no-pager
   watcher's cost was a screen that could interrupt a WSPR session and then
   hand the operator to a dead digimodes screen.
 
-## Check after deploying
+### Check after deploying the 2026-10-18 work
 
 - `F4` walks dark to bright and the deck still boots into Matrix.
 - `F1` then `o` cycles the ToT up to `12 h`.
@@ -199,6 +324,16 @@ zone in the logging menu is the only thing that removes records, and it asks
 first.
 
 ## Known open, not in this deploy
+
+- **A missing asset crashes the panel rather than saying so.**
+  `_draw_alloc` calls `bandplan.segments()` and `_build_map` calls
+  `wsprmap.load()` with no guard, so an absent or corrupt `bandplans.tsv` or
+  `basemap_*.bin` raises `FileNotFoundError` inside a draw path. The deploy
+  procedure above avoids it, and a card that loses a file in the field would
+  not. Both screens should report the missing asset and stay up.
+- **Nothing from the 2026-10-22 work has run on hardware.** The framebuffer
+  writes, the `AC103;` tuner sequence and the export server's bind to the
+  WiFi address are the three things the 3912 off-deck checks cannot reach.
 
 - **The paired screen says "Try typing on it" and cannot show what you type.**
   There is no echo field, and `_handle_pair` does not branch on state, so the

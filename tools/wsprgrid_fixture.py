@@ -136,3 +136,132 @@ def log_extras(cols, rows):
             station, cols, rows, selected=0, state="TX INHIBITED",
             footer=" ↑↓ pick  Enter edit  F1 menu  F4 color  ^O ^P screen")),
     ]
+
+
+# -- the seven screens added 2026-10-22 ------------------------------------
+
+def new_screens(cols, rows):
+    """`[(name, lines), ...]` for the band plan, the tuner, the ring editor,
+    the export page and the two maps' overlay.
+
+    `KD3CCP` stands in for a worked station, as it does in `log_extras`: it
+    is this station's own callsign with the last letter moved, so nothing in
+    the documentation is attributed to an operator who did not agree to it.
+    The WSPR map's bands and counts are from the October capture on the
+    75-10 m EFHW.
+    """
+    import bandplan
+    import cyberdeck
+    import export
+
+    segs = bandplan.segments("us_general")
+    sel = bandplan.Selection(segs)
+    sel.select_phone()
+    # The locks the operator actually asked for: 160 m, 12 m, 10 m and 6 m
+    # off the sweep, because those are the bands this station does not work
+    # phone on. A locked segment is `[x]` and no bulk selection can turn it
+    # back on, which is the point of the lock rather than a second way to
+    # deselect.
+    for key in ("160m:All Modes", "12m:All Modes", "10m:SSB",
+                "10m:AM / misc", "10m:FM / repeaters", "6m:SSB",
+                "6m:FM simplex"):
+        sel.toggle_lock(key)
+
+    # The ring as an operator might set it: the band plan moved to the front,
+    # WSPR left off.
+    ring = [(1, cyberdeck.AREA_ALLOC, "Band plan", True, False),
+            (2, cyberdeck.AREA_SETTINGS, "Deck & rig", True, True),
+            (3, cyberdeck.AREA_LOG, "Logging", True, False),
+            (4, cyberdeck.AREA_DIGI, "Digimodes", True, False),
+            (0, cyberdeck.AREA_WSPR, "WSPR", False, False)]
+
+    files = [("qso.adi", "4.2 kB"), ("qso.log", "18.4 kB"),
+             ("wspr.log", "1.1 MB"), ("transcript.txt", "3.6 kB"),
+             ("cyberdeck.conf", "2.9 kB")]
+
+    bands = ["80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m"]
+
+    return [
+        ("alloc", render.allocation_screen(segs, 6, cols, rows,
+                                           license_name="General")),
+        ("tuner", render.tuner_screen(sel, 2, cols, rows,
+                                      license_name="General", dwell_s=2.5,
+                                      message="")),
+        ("tuner-running", render.tuner_screen(
+            sel, 2, cols, rows, license_name="General", dwell_s=2.5,
+            running=(7, 24, 14_326_000),
+            message="sweeping — ^X stops it before the next key-down")),
+        ("ringed", render.ring_screen(ring, 0, cols, rows,
+                                      message="")),
+        ("export", render.export_screen(
+            ("http://192.168.1.47:8080/a7f3",
+             f"http://{export.HOSTNAME}:8080/a7f3"),
+            files, cols, rows, remaining=252.0, downloads=2)),
+    ]
+
+
+# The grids these spots came from, with the band each was heard on. Real
+# decodes from the October capture on the 75-10 m EFHW -- other operators'
+# callsigns and grids are published on wsprnet, which is what the mode is
+# for. `HEARD_BY` is a station that heard this one, `HEARD` one this station
+# heard, and the pairs that are both are what the `t` key exists to show.
+MAP_SPOTS = [
+    ("FN67", "20m", "by"), ("EN34", "20m", "by"), ("EM64", "20m", "by"),
+    ("EM26", "20m", "by"), ("IO94", "20m", "by"), ("EN54", "20m", "by"),
+    ("JN49", "20m", "by"), ("DM79", "20m", "heard"), ("CN87", "15m", "by"),
+    ("EL96", "40m", "by"), ("FN42", "40m", "heard"), ("EM12", "40m", "by"),
+    ("DM13", "15m", "by"), ("IO83", "15m", "heard"), ("JO21", "17m", "by"),
+    ("KP20", "17m", "by"), ("FM19", "30m", "heard"), ("EN61", "30m", "by"),
+    ("QF56", "10m", "by"), ("GG66", "10m", "heard"), ("IM58", "12m", "by"),
+    ("FK68", "80m", "by"), ("EN90", "80m", "heard"), ("DN31", "40m", "by"),
+    ("EM73", "20m", "heard"), ("IO91", "20m", "by"), ("JN88", "20m", "by"),
+    ("LG13", "15m", "by"), ("PM95", "15m", "heard"), ("GF05", "10m", "by"),
+    ("IB59", "10m", "by"), ("RE78", "20m", "by"), ("OF78", "17m", "by"),
+]
+
+# The contact log's grids, which is a far smaller and more local set -- a
+# weekend of SSB rather than a week of beacons.
+LOG_SPOTS = [("FN42", "40m"), ("EM12", "20m"), ("EN54", "40m"),
+             ("FN31", "20m"), ("EM64", "20m"), ("DM79", "15m"),
+             ("EL96", "40m"), ("EN90", "20m"), ("FN67", "40m"),
+             ("EM73", "15m"), ("DN31", "20m")]
+
+HOME = "FN10"
+
+
+def maps(cols, rows):
+    """`[(name, spotmap, overlay)]` -- the picture and the rows over it.
+
+    The map is a framebuffer picture and the two rows are curses, so a
+    capture that drew only the curses half showed an empty screen. Both
+    halves come from the real code: `wsprmap.SpotMap` projects the grids and
+    `render.map_overlay` builds the rows, and the summary line is taken FROM
+    the map rather than written beside it, so the count and the picture
+    cannot disagree.
+    """
+    import grid
+    import wsprmap
+
+    def built(view, spots, directions):
+        base = wsprmap.load(view=view)
+        sm = wsprmap.SpotMap(base, home=grid.to_latlon(HOME))
+        for locator, band, kind in spots:
+            sm.add_grid(locator, band,
+                        wsprmap.HEARD if kind == "heard"
+                        else wsprmap.HEARD_BY)
+        return sm, render.map_overlay(sm.summary(), sm.bands(), None, view,
+                                      cols, directions=directions)
+
+    wspr_sm, wspr_rows = built(
+        "global", MAP_SPOTS,
+        [("heard", "+", True), ("by me", "x", True)])
+    log_sm, log_rows = built(
+        "focus", [(g, b, "by") for g, b in LOG_SPOTS],
+        [("worked", "+", True)])
+    # The contacts with no grid, which the log map counts rather than drops.
+    log_sm.ungridded = 4
+    log_rows = render.map_overlay(log_sm.summary(), log_sm.bands(), None,
+                                  "focus", cols,
+                                  directions=[("worked", "+", True)])
+    return [("wspr-map", wspr_sm, wspr_rows),
+            ("log-map", log_sm, log_rows)]

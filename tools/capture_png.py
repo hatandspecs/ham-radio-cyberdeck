@@ -51,7 +51,41 @@ def _rgb(hexstr):
     return tuple(int(hexstr[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def draw(lines, scheme_key, path, cols=COLS, rows=ROWS):
+def _draw_map(img, sm, scheme_key, w, h):
+    """The basemap and its spots, scaled into `img`.
+
+    `colors.map_colors` is what the deck itself uses, so the outline and the
+    spots are the same two colors here as on the panel.
+    """
+    dim_hex, bright_hex = colors.map_colors(scheme_key)
+    outline = ((dim_hex >> 16) & 255, (dim_hex >> 8) & 255, dim_hex & 255)
+    spot = ((bright_hex >> 16) & 255, (bright_hex >> 8) & 255,
+            bright_hex & 255)
+    base = sm.base
+    px = img.load()
+    sx, sy = w / base.width, h / base.height
+
+    def put(x, y, rgb):
+        # One basemap pixel covers more than one image pixel once scaled, so
+        # it is drawn as the block it occupies rather than as a point -- a
+        # point would leave the coastline as a dotted line with gaps.
+        x0, y0 = int(x * sx), int(y * sy)
+        for ix in range(x0, min(w, int((x + 1) * sx) + 1)):
+            for iy in range(y0, min(h, int((y + 1) * sy) + 1)):
+                px[ix, iy] = rgb
+
+    for y in range(base.height):
+        row = y * base.width
+        for x in range(base.width):
+            if base.bits[row + x]:
+                put(x, y, outline)
+    for x, y, _band, _dirn in sm.pixels():
+        put(x, y, spot)
+    for x, y in sm.home_pixels():
+        put(x, y, (255, 255, 255))
+
+
+def draw(lines, scheme_key, path, cols=COLS, rows=ROWS, spotmap=None):
     scheme = colors.SCHEMES[scheme_key]
     bright, dim = _rgb(scheme["bright"]), _rgb(scheme["dim"])
     black = (0, 0, 0)
@@ -62,6 +96,15 @@ def draw(lines, scheme_key, path, cols=COLS, rows=ROWS):
     d = ImageDraw.Draw(img)
     font = _font(int(CELL_H * 0.78))
 
+    # The map screens are a framebuffer picture with two curses rows on top
+    # of it, so a capture that drew only the rows showed an empty screen --
+    # which is what the first version of this did. The picture goes down
+    # first, scaled from the basemap's own 800x480 (the panel's exact pixel
+    # count) to whatever this image is, and the rows are drawn over it the
+    # way curses draws them over the framebuffer.
+    if spotmap is not None:
+        _draw_map(img, spotmap, scheme_key, w, h)
+
     for row, line in enumerate(lines[:rows]):
         x = 0
         for text, kind in line:
@@ -69,6 +112,14 @@ def draw(lines, scheme_key, path, cols=COLS, rows=ROWS):
                 if x >= cols:
                     break
                 px, py = PAD + x * CELL_W, PAD + row * CELL_H
+                if spotmap is not None:
+                    # Curses owns its cells: a space in a curses row paints
+                    # the background, it does not let what is underneath
+                    # show through. Without this the dim half of the band
+                    # row was drawn over coastlines and could not be read --
+                    # which is a fault in the capture, not on the panel.
+                    d.rectangle([px, py, px + CELL_W, py + CELL_H],
+                                fill=black)
                 if kind == "reverse":
                     d.rectangle([px, py, px + CELL_W, py + CELL_H], fill=bright)
                     fg = black
@@ -153,6 +204,15 @@ if __name__ == "__main__":
         made.append(draw(lines, "matrix", f"{OUT}/{name}.png"))
     for name, lines in _w.log_extras(COLS, ROWS):
         made.append(draw(lines, "matrix", f"{OUT}/{name}.png"))
+    # The screens added 2026-10-22. The PNG path is the one that can show a
+    # reverse-video key cap, which is how the maps' band digits are drawn and
+    # which the ASCII capture in `screens.md` cannot represent.
+    for name, lines in _w.new_screens(COLS, ROWS):
+        made.append(draw(lines, "matrix", f"{OUT}/{name}.png"))
+    # The two maps, picture and all.
+    for name, spotmap, lines in _w.maps(COLS, ROWS):
+        made.append(draw(lines, "matrix", f"{OUT}/{name}.png",
+                         spotmap=spotmap))
 
     for p in made:
         print(f"  {p}  {os.path.getsize(p) // 1024} KB")

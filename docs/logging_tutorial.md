@@ -6,11 +6,15 @@ park activation and a QSO party, and getting the contacts out afterward.
 For the design and the reasoning behind it, see
 [`qso_log_design.md`](qso_log_design.md). This is the operating side.
 
-> **Status, 2026-10-11.** The log works today from a terminal or over SSH with
-> `tools/qso.py`, and every screen below is rendered from the same functions
-> the deck draws with. The panel side — Ctrl-N and the menu entry — is not
-> wired into `cyberdeck.py` yet, so the screens show what it will look like
-> rather than what you can press today. The design document says the same.
+> **Status, 2026-10-22.** The log is wired into the panel and is one of the
+> applications `^O` and `^P` walk. Every screen below is rendered from the
+> same functions the deck draws with, and it also works from a terminal or
+> over SSH with `tools/qso.py`.
+>
+> The 2026-10-11 note this replaced said the panel side was not wired yet and
+> named `Ctrl-N` as the key that would open it. Neither is true now: the ring
+> is how the log is reached, and there is no key that jumps to it. See
+> `qso_log_design.md` §7.1, which records why.
 
 ---
 
@@ -44,7 +48,12 @@ means no `My reference` line.
 
 ## 2. Logging an ordinary contact
 
-`Ctrl-N` opens the log screen. `Esc` goes back to the transcript.
+`^O` and `^P` walk the applications; the log is one of them. `Esc` backs out
+within the log — off a picked contact, off a staged message — and never leaves
+it. `^O` is how you leave.
+
+Logging starts switched off. `^O` to the log and the screen says so; `F1` `l`
+switches it on, and the log joins the ring.
 
 ![The log screen, general logging](screens/log-general.png)
 
@@ -351,6 +360,33 @@ carries a hard timeout.
 
 LoTW itself is free; it needs a certificate, not a subscription. That is
 unrelated to the QRZ logbook, which needs a paid one.
+
+### Onto a phone, with no laptop
+
+`^O` to deck & rig, then `F1` `5`. The deck writes a fresh ADIF, stands up a
+web page, and shows the address:
+
+```
+http://192.168.1.47:8080/a7f3
+```
+
+Type it into the phone's browser. The ADIF, the contact log, the WSPR spots,
+the transcript and `cyberdeck.conf` are listed with their sizes; tap one and
+it downloads. From there, the phone can upload it to POTA or QRZ like any
+other file.
+
+Nothing is installed on the phone and no account is involved. It works on a
+hotspot with no internet — the deck and the phone are on the same network,
+which is all this needs.
+
+The server closes itself five minutes after the last download, and `Esc`
+takes it down at once. The four-character token in the address is new every
+time, so an address read out loud stops working as soon as the export ends.
+`Space` issues a new one without leaving the screen.
+
+**`cyberdeck.secrets` is never on the list.** The callbook and QRZ
+credentials live in their own file precisely so that a feature like this
+cannot offer them by accident.
 
 ### Pulling the contacts off the deck
 

@@ -885,6 +885,107 @@ def field_order_screen(order, selected, width, height, title="ORDER FIELDS",
     return out[:height]
 
 
+def export_screen(urls, rows, width, height, remaining=0.0, downloads=0,
+                  message=""):
+    """The address to type into the phone, and what is on offer there.
+
+    `urls` is `(by address, by hostname)`. The ADDRESS leads and is the one
+    laid out to be read off a panel and typed by hand, because it always
+    works; the hostname follows as the shorter thing to type on the networks
+    where `.local` resolves, which on Android is not all of them.
+    """
+    out = []
+    head = " SEND FILES TO A PHONE"
+    right = "r refresh   Esc stop "
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    by_addr, by_name = (urls + ("", ""))[:2]
+    out.append([("  Open this in the phone's browser:"
+                 .ljust(width)[:width], "dim")])
+    out.append([(" " * width, "")])
+    # Bright and alone on its line: this is the one string on the deck that
+    # gets copied by eye onto another device.
+    out.append([(f"    {by_addr}".ljust(width)[:width], "bright")])
+    out.append([(" " * width, "")])
+    if by_name:
+        out.append([(f"    or {by_name}".ljust(width)[:width], "dim")])
+    out.append(rule(width))
+
+    if not rows:
+        out.append([("  nothing to export yet".ljust(width)[:width], "dim")])
+    for label, size in rows:
+        out.append([(f"  {label:<20}{size}".ljust(width)[:width], "")])
+
+    while len(out) < height - 3:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+
+    if message:
+        status = message
+    else:
+        mins, secs = divmod(int(max(0.0, remaining)), 60)
+        status = f"closes itself in {mins}:{secs:02d}"
+        if downloads:
+            status += (f"   ·   {downloads} download"
+                       f"{'' if downloads == 1 else 's'}")
+    out.append([((" " + status)[:width].ljust(width),
+                 "dim" if not message else "bright")])
+    out.append([(" Esc stop   r refresh   Space new address"
+                 .ljust(width)[:width], "dim")])
+    return out[:height]
+
+
+RING_ON, RING_OFF = "[*]", "[ ]"
+
+
+def ring_screen(rows, selected, width, height, message="", footer=""):
+    """The function ring, in the order `^O` will walk it.
+
+    `rows` is `[(number, area, label, on, fixed), ...]`, in display order:
+    the areas on the ring first, numbered 1..N, then the ones left off with
+    no number. Numbering only what is on the ring is the point -- the numbers
+    ARE the walk order, so a number beside an area that is not on the ring
+    would be a position in a sequence it is not part of.
+
+    One screen rather than the schema editor's two. The key bindings are that
+    editor's, because this is the same problem and a second idiom for it
+    would be a second thing to learn -- but five rows fit on one panel, and
+    an Enter between choosing five things and ordering three of them buys
+    nothing.
+    """
+    out = []
+    head = " FUNCTION RING"
+    right = "Space in/out   1-9 move "
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    for i, (number, _area, label, on, fixed) in enumerate(rows):
+        mark = "\u25b8" if i == selected else " "
+        num = f"{number}." if number else "  "
+        line = f"{mark} {num:>3} {RING_ON if on else RING_OFF} {label}"
+        if fixed:
+            # Said on the row rather than only when the key is pressed. An
+            # area that cannot be removed should look like one before the
+            # operator tries.
+            line = f"{line:<28}always on the ring"
+        out.append([(line[:width].ljust(width),
+                     "bright" if i == selected else
+                     ("" if on else "dim"))])
+
+    while len(out) < height - 3:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    out.append([((" " + message)[:width].ljust(width),
+                 "dim" if message else "")])
+    out.append([((" " + (footer or
+                 "Esc cancel   \u2191\u2193 move   Space in/out   "
+                 "1-9 move   Enter save"))[:width].ljust(width), "dim")])
+    return out[:height]
+
+
 def form_rows(form, width, columns=2, focus_cursor=True):
     """The entry form as lines of (text, attr) segments.
 
@@ -2072,3 +2173,172 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
                  "bright" if message else "")])
     out.append([(footer[:width].ljust(width), "dim")])
     return out[:height]
+
+
+# How many band segments fit one page. The General plan with 10 m and 6 m
+# subdivided is nineteen rows, which does not fit a twenty-line panel beside
+# a header, a rule and a footer.
+SEGMENTS_PER_PAGE = 14
+
+# Marks on a segment row. A locked segment stays visible and marked rather
+# than hidden: a band that silently vanished reads as a missing band, and the
+# lock has to be as easy to undo as it is to set.
+SEG_ON, SEG_OFF, SEG_LOCKED = "[*]", "[ ]", "[x]"
+
+
+def _segment_row(seg, width, mark="", box=""):
+    """One row: band and segment together, then the range in MHz.
+
+    Band and mode read as one label -- `40m (Phone)` -- rather than as two
+    columns, which is how the operator thinks of it and what fits the panel.
+    Bandwidth and memory counts are deliberately absent: they are noise
+    beside the decision being made, which is whether to sweep this segment.
+    """
+    lo = seg.start_hz / 1_000_000
+    hi = seg.end_hz / 1_000_000
+    left = f"{mark} {box} {seg.name}" if box else f"{mark} {seg.name}"
+    rng = f"{lo:>7.3f} - {hi:.3f}"
+    pad = max(1, width - len(left) - len(rng) - 1)
+    return (left + " " * pad + rng)[:width].ljust(width)
+
+
+def allocation_screen(segs, selected, width, height, license_name="",
+                      per_page=SEGMENTS_PER_PAGE):
+    """The frequency allocation reference. Read only -- it tunes nothing.
+
+    Two columns, band-and-segment then range, the same shape the tuner screen
+    uses so the two read as one idea seen twice.
+    """
+    out = []
+    pages = max(1, (len(segs) + per_page - 1) // per_page)
+    page = min(max(0, selected // per_page), pages - 1)
+    shown = segs[page * per_page:(page + 1) * per_page]
+
+    head = f" BAND PLAN — {license_name}" if license_name else " BAND PLAN"
+    right = f"{page + 1}/{pages} " if pages > 1 else ""
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    for i, seg in enumerate(shown, start=page * per_page):
+        mark = "▸" if i == selected else " "
+        out.append([(_segment_row(seg, width, mark),
+                     "bright" if i == selected else "")])
+
+    while len(out) < height - 2:
+        out.append([(" " * width, "")])
+    out.append(rule(width))
+    foot = "Esc back   ↑↓ move   Space license class"
+    if pages > 1:
+        foot = "Esc back   ↑↓ move   ←→ page   Space license class"
+    out.append([((" " + foot)[:width].ljust(width), "dim")])
+    return out[:height]
+
+
+def tuner_screen(sel, selected, width, height, license_name="", dwell_s=5.0,
+                 message="", running=None, per_page=SEGMENTS_PER_PAGE):
+    """The auto tuner's segment list.
+
+    `sel` is a `bandplan.Selection`. `running` is None when idle, otherwise
+    `(done, total, freq_hz)` for a sweep in progress -- which replaces the
+    summary line, because while a sweep runs what matters is where it is and
+    that it can be stopped.
+    """
+    out = []
+    segs = sel.rows()
+    pages = max(1, (len(segs) + per_page - 1) // per_page)
+    page = min(max(0, selected // per_page), pages - 1)
+    shown = segs[page * per_page:(page + 1) * per_page]
+
+    head = " AUTO TUNER"
+    if license_name:
+        head += f" — {license_name}"
+    right = f"{page + 1}/{pages} " if pages > 1 else ""
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+    out.append(rule(width))
+
+    for i, seg in enumerate(shown, start=page * per_page):
+        mark = "▸" if i == selected else " "
+        if sel.is_locked(seg.key):
+            box, kind = SEG_LOCKED, "dim"
+        elif sel.is_selected(seg.key):
+            box, kind = SEG_ON, "bright"
+        else:
+            box, kind = SEG_OFF, ""
+        if i == selected:
+            kind = "bright"
+        out.append([(_segment_row(seg, width, mark, box), kind)])
+
+    while len(out) < height - 3:
+        out.append([(" " * width, "")])
+
+    out.append(rule(width))
+    if running is not None:
+        done, total, freq_hz = running
+        line = (f" tuning {done}/{total}   {freq_hz / 1_000_000:.3f} MHz"
+                f"   ^X aborts")
+    else:
+        line = " " + (message or sel.summary(dwell_s))
+    out.append([(line[:width].ljust(width), "bright")])
+
+    if running is not None:
+        foot = "^X abort"
+    else:
+        foot = ("Esc back  ↑↓ move  Space pick  l lock  "
+                "p phone  Enter run")
+    out.append([((" " + foot)[:width].ljust(width), "dim")])
+    return out[:height]
+
+
+# Band keys on the map screen, in the order bands are listed. Digits, because
+# the band picker already uses digits for bands and an operator who knows
+# `3` is 30 m there should not learn a second alphabet here.
+MAP_BAND_KEYS = "1234567890"
+
+
+def map_overlay(summary, bands, on_bands, view, width, directions=None,
+                message=""):
+    """The two text rows drawn over the map, as curses lines.
+
+    The picture itself goes to the framebuffer; this is what curses puts back
+    on top. Two rows only -- the map is the screen and the chrome has to earn
+    every line it takes.
+    """
+    out = []
+    head = f" {summary}"
+    right = f"{view}  "
+    pad = max(1, width - len(head) - len(right))
+    out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
+
+    # The key and the band are SEPARATE segments, so the digit can be drawn
+    # as a key cap. In one segment the row read `180m 240m 330m 420m` -- five
+    # nonsense band names rather than four keys and four bands, and at eight
+    # bands there is no column to spare for a separator. The attribute is the
+    # separator.
+    keys = []
+    for i, band in enumerate(bands[:len(MAP_BAND_KEYS)]):
+        lit = on_bands is None or band in on_bands
+        keys.append((MAP_BAND_KEYS[i], "reverse" if lit else "dim"))
+        keys.append((band, "bright" if lit else "dim"))
+    if directions:
+        keys.append(("  ", ""))
+        for name, mark, lit in directions:
+            keys.append((f"{mark}{name}", "bright" if lit else "dim"))
+
+    line, used = [], 0
+    for text, kind in keys:
+        # No space after a key cap: the band name it labels comes next and
+        # belongs against it. The space goes after the band.
+        chunk = text if kind == "reverse" else text + " "
+        if used + len(chunk) >= width - 10:
+            break
+        line.append((chunk, kind))
+        used += len(chunk)
+    tail = "v view  Esc back"
+    if message:
+        tail = message[:width - used - 2]
+    line.append((tail.rjust(max(1, width - used))[:max(1, width - used)],
+                 "dim"))
+    out.append(line)
+    return out

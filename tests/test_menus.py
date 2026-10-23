@@ -85,8 +85,12 @@ keys = [k for k, _ in on["items"]]
 # then this session, then what a contact looks like, then the file and what
 # comes out of it. The danger zone is last and apart, because everything on
 # it destroys something.
+# `g` is the contact map, between the session group and the entry group: it
+# is a way of READING the log, which is what that boundary separates. It
+# names the key that opens it from the log screen as well, because that
+# screen's footer is 61 of 66 columns already and has no room for it.
 equals("on opens the rest", keys,
-       ["l", "e", "v", "d", "c", "m", "n", "f", "a", "z"])
+       ["l", "e", "v", "g", "d", "c", "m", "n", "f", "a", "z"])
 # `x` exports the activity in progress and is offered ONLY when there is one.
 # Without an activity it would export the same records as `a` under a
 # different name -- two menu items for one action, and the reader left
@@ -203,9 +207,16 @@ equals("the digimode menu is the digimode settings",
 # No Station line: the deck-and-rig SCREEN is the station editor now, every
 # field with its substitution token beside it. A menu opening a second list of
 # the same eight settings was the same information twice.
+# The three screens added 2026-10-22 are here rather than on an area menu,
+# each for its own reason. The auto tuner keys the transmitter for an hour,
+# so it is not one `^O` from everything else. The ring editor configures the
+# ring, and deck & rig is the one area that cannot leave it -- so it is
+# reachable from a deck configured into a corner. The export offers files
+# from every area at once and so belongs to none of them.
 equals("the deck menu is the deck and the panel",
        [l for _k, l in menus.DECK["items"]],
-       ["Display", "System"])
+       ["Display", "System", "Auto tuner", "Function ring order",
+        "Send files to a phone"])
 check("and the station is not a menu line",
       not any(l == "Station" for _k, l in menus.DECK["items"]),
       str(menus.DECK["items"]))

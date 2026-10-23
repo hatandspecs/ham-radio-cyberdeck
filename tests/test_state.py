@@ -39,7 +39,11 @@ TO_LOG = "\x10"         # ^P: one stop along the ring, the log
 # settings | log | digimodes | WSPR -- so one `^O` back from the boot
 # screen now wraps onto WSPR and every scenario below read the wrong
 # screen. Named here so the next area costs one edit per file.
-TO_DIGI = "\x0f\x0f"
+TO_DIGI = "\x0f\x0f\x0f"
+# Three hops: the ring is five areas now (the band plan joined it),
+# and `^O` x3 lands on the conversation whether or not logging is on --
+# which is the property the old two-hop constant had. See the ring-hop
+# trap in AGENTS.md.
 
 
 if __name__ == "__main__":
@@ -250,7 +254,10 @@ if __name__ == "__main__":
     # the file directly exercises the part that was actually broken: the
     # restore loop accepted `str` only, so every NUMERIC setting was
     # written and then silently discarded on the way back in.
-    TO_WSPR, ESC = "\x0f", "\x1b"
+    # Two hops back reaches WSPR on the five-area ring, whether or not
+    # logging is on. A SECOND ring-hop site in this file -- the one above
+    # is TO_DIGI -- which is how the last ring change was missed too.
+    TO_WSPR, ESC = "\x0f\x0f", "\x1b"
     tmp = tempfile.mkdtemp(prefix="cyberdeck-wspr-state-")
     path = os.path.join(tmp, "state", "cyberdeck.json")
     try:

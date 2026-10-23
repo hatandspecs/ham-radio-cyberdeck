@@ -262,3 +262,15 @@ def attr(kind):
 
 def cycle(current):
     return ORDER[(ORDER.index(current) + 1) % len(ORDER)]
+
+
+def map_colors(scheme_key=None):
+    """`(dim, bright)` for the active scheme, as 0xRRGGBB.
+
+    The maps are drawn straight to the framebuffer rather than through
+    curses, so they need the actual colors rather than an attribute. The
+    outline takes the dim one and the spots the bright one, which is the
+    same relationship the panel's text already has.
+    """
+    scheme = SCHEMES.get(scheme_key or _active, SCHEMES["matrix"])
+    return (int(scheme["dim"], 16), int(scheme["bright"], 16))

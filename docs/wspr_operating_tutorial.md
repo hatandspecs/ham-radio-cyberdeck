@@ -405,6 +405,11 @@ heard.
 It lives at `~/.local/share/cyberdeck/wspr.log`, beside the contact log, as
 append-only `key=value` text with one line per spot. `WSPR_LOG_PATH` moves it.
 
+**Onto a phone**, with no laptop: `^O` to deck & rig, then `F1` `5`. The deck
+shows an address, the phone's browser opens it, and the spot log is one of
+the five files listed. It works on a hotspot with no uplink. §6 of the
+logging tutorial has the detail.
+
 **On the deck**, to see what is there:
 
 ```bash
@@ -472,7 +477,35 @@ pressing it does nothing. `rsync` above is the working path.
 | `Esc` | Release the spot selection |
 | `^B` | Transmit inhibit, from any screen |
 | `^C` | Stop WSPR — the same key that aborts an over in the digital modes |
+| `m` | The map of where the spots came from, and where this station reached |
 | `^O` `^P` | **Locked** while WSPR runs |
+
+### The map — `m`
+
+A world map on the panel, with every spot lit. `Esc` returns to the spot
+list.
+
+| Key | |
+|---|---|
+| `1`–`0` | Toggle a band on and off |
+| `t` | Cycle: stations that heard this one · stations this one heard · both |
+| `v` | Cycle the view: the USA · global · global with the Antarctic bases |
+| `Esc` | Back to the WSPR screen |
+
+`+` marks a station that heard this one, `×` a station this one heard, and a
+white point is this station. The line under the map says how many spots are
+on it and how many the view is clipping — the USA view clips hard, and a map
+quietly dropping a third of the night would answer "where am I being heard"
+with a lie.
+
+**`t` is how "am I deaf?" gets asked.** A night where thirty stations heard
+the deck and the deck heard four is a receive problem, and the two positions
+of that key are what makes it visible.
+
+**The picture goes straight to the framebuffer**, not through curses, so it
+is drawn on entry and on change rather than every frame. On a machine with no
+panel — a laptop over SSH — the two text rows still work and the map area
+says the framebuffer is unavailable.
 
 ### The menu — `F1`
 

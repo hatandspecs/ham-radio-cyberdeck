@@ -39,7 +39,11 @@ DECK = ["\x1bOP"]
 # **One hop was right until WSPR made the ring four areas.** It then landed
 # on WSPR, where none of the digimode menus exist, and 31 checks in this file
 # failed at once. The hop is named here so a fifth area is one edit.
-DIGI = CTRL_O + CTRL_O
+DIGI = CTRL_O * 3
+# Three hops: the ring is five areas now (the band plan joined it),
+# and `^O` x3 lands on the conversation whether or not logging is on --
+# which is the property the old two-hop constant had. See the ring-hop
+# trap in AGENTS.md.
 # Station is gone from this menu: the screen behind it edits those fields
 # directly, each with its substitution token beside it. F1 on the boot screen
 # opens Display and System.
@@ -64,16 +68,28 @@ print("\n-- Enter on the first item reaches Mode --")
 body = show("F1 Enter", run(keys=[DIGI, F1, ENTER]))
 check("landed on MODE", "MODE" in body, body[:400])
 
-# Up from the first item wraps to the last, and Enter on it opens that
-# submenu. Both halves matter: an entry with no handler still wraps to, and
-# then does nothing, which is how the Logging entry was caught.
+# Up from the first item wraps to the last, and Enter on it does that item's
+# job. Both halves matter: an entry with no handler still wraps to, and then
+# does nothing, which is how the Logging entry was caught.
 #
-# Derived from the menu rather than named, because F1 opens the menu for the
-# area the operator is in and the digimode screen is where the deck starts.
-_LAST = menus.DIGI["items"][-1][1].upper()
-print(f"\n-- Up from the first item wraps to the last, {_LAST.title()} --")
+# **Derived from `digi_menu`, not from `DIGI`.** `DIGI` is the static spine;
+# the deck draws `digi_menu`, which appends the `^G` line with the current
+# behaviour spelled out in it. Taking the last item from `DIGI` checked the
+# wrong row the moment that line was added -- it looked for MEMORIES, which
+# is now second from the bottom, and the wrap landed one row below it.
+import decall
+_MENU = menus.digi_menu(decall.PREFILL_SWITCH)
+_LAST = _MENU["items"][-1][1]
+print(f"\n-- Up from the first item wraps to the last, {_LAST!r} --")
 body = show("F1 Up Enter", run(keys=[DIGI, F1, UP, ENTER]))
-check(f"wrapped to {_LAST} and it opened", _LAST in body, body[:400])
+# The last item cycles what `^G` does rather than opening a submenu, so the
+# proof that Enter reached it is the label CHANGING to the next behaviour --
+# `prefill` is the default, and one press moves it to `prefill_stay`.
+check("the menu is still open", "DIGIMODES" in body, body[:200])
+check("and the wrap reached the ^G line",
+      decall.MODE_LABELS[decall.PREFILL_STAY] in body, body[:500])
+check("which is one press on from the default",
+      decall.MODE_LABELS[decall.PREFILL_SWITCH] not in body, body[:500])
 
 print("\n-- tuning menu now shows live state --")
 body = show("F1 then 2", run(keys=[DIGI, F1, DIGI_TUNE]))

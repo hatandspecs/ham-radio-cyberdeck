@@ -33,7 +33,9 @@ TO_SET = []
 # settings | log | digimodes | WSPR -- so one `^O` back from the boot
 # screen now wraps onto WSPR and every scenario below read the wrong
 # screen. Named here so the next area costs one edit per file.
-TO_DIGI = ["\x0f", "\x0f"]
+# Three hops: the band plan made the ring five areas, and `^O` x3 lands on
+# the conversation whether or not logging is on.
+TO_DIGI = ["\x0f", "\x0f", "\x0f"]
 
 f = Fldigi()
 f.set_modem("BPSK31")

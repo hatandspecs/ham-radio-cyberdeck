@@ -282,6 +282,41 @@ SCHEMA = {
                                    "fixed RX_HOLD_MS window instead"),
     "TIMESTAMPS":      ("yes", str, "yes | no"),
     "TOUCH":           ("yes", str, "yes | no — drag the transcript to scroll"),
+    # The ring `^O` and `^P` walk, as a comma-separated ordered list of area
+    # names. Blank means the built-in order. Deck & rig cannot be removed --
+    # it carries the way out of a misconfigured deck -- and an unknown name
+    # is ignored rather than refused, so a typo costs one stop and not a boot.
+    "RING_ORDER":      ("", str, "ring order, comma separated: settings, "
+                                 "logging, digimodes, wspr, alloc"),
+    # Which license class the band plan and the auto tuner show.
+    "LICENSE_CLASS":   ("us_general", str, "band plan to display and sweep: "
+                                           "us_technician | us_general | "
+                                           "us_extra"),
+    # Segments the auto tuner will never offer, comma separated, as
+    # `band:label` keys. A lock overrides every bulk selection.
+    "TUNER_LOCKED":    ("", str, "segments the auto tuner never offers, "
+                                 "as band:label, comma separated"),
+    # How long each frequency is held for the tuner to settle. Five seconds
+    # suits a cold start; a re-sweep where the tuner begins near a stored
+    # memory can be far shorter. **Too short fails silently** -- the radio
+    # cannot report that an external tuner finished -- so the floor is 1 s.
+    "TUNER_DWELL_S":   (5.0, float, "seconds held at each tuner memory"),
+    # Getting the files off the deck. The staging directory is where the
+    # transcript is written for an export; the logs and the settings are
+    # served where they already live.
+    "EXPORT_DIR":      ("~/.local/share/cyberdeck/export", str,
+                        "where an export writes the transcript"),
+    "EXPORT_PORT":     (8080, int, "port the export page is served on"),
+    "EXPORT_IDLE_MIN": (5, int, "minutes with no download before the export "
+                                "server closes itself"),
+    # What `^G` on the conversation screen does with the station named in
+    # the last received line. Cycled from the digimodes menu.
+    "LOG_HOTKEY":      ("prefill", str, "what ^G does with the station in the "
+                                        "last received line: log | prefill | "
+                                        "prefill_stay"),
+    # Which of the three map views the maps open on. Cycled with `v`.
+    "MAP_VIEW":        ("global", str, "map view: focus (the USA) | global | "
+                                       "wide (with the Antarctic bases)"),
     "PAIR_ON_NO_KEYBOARD": ("yes", str, "yes | no — open the pairing screen at "
                                         "startup when no keyboard exists to "
                                         "open it with"),

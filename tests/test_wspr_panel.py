@@ -40,7 +40,11 @@ ESC, ENTER, CTRL_C = "\x1b", "\r", "\x03"
 # The deck opens on DECK & RIG. The ring is settings | log | digimodes | wspr,
 # so `^O` wraps backwards straight onto WSPR -- which is also the cheapest
 # way to get there and the reason the ring order puts it last.
-TO_WSPR = CTRL_O
+TO_WSPR = CTRL_O * 2
+# Three hops: the ring is five areas now (the band plan joined it),
+# and `^O` x3 lands on the conversation whether or not logging is on --
+# which is the property the old two-hop constant had. See the ring-hop
+# trap in AGENTS.md.
 
 
 def deck(keys, label, extra="", term="linux", settle=2.8):
@@ -76,11 +80,18 @@ for term in ("xterm", "linux"):
           "F1 menu" in body, body[-200:])
 
 print("\nit is a stop on the ring, so the ring still walks")
-# Four areas: settings | log | digimodes | wspr. With logging off the log is
-# not on it, so `^P` from WSPR wraps to the settings.
+# Five areas: settings | log | digimodes | wspr | alloc. With logging off the
+# log is not on it, so `^P` from WSPR goes forward onto the BAND PLAN rather
+# than wrapping to the settings.
+#
+# It wrapped to the settings while the ring was four areas and WSPR was last.
+# The band plan joined the ring after it, which moved this landing by one --
+# the ring-hop trap in AGENTS.md, found here late because a wedged fldigi had
+# this whole file red and hid the one check that was genuinely wrong.
 body = deck([TO_WSPR, CTRL_P], "^O then ^P leaves WSPR again", settle=3.0)
-check("the deck left the WSPR screen",
-      "DECK & RIG" in body or "^T over" in body, body[:120])
+check("the deck left the WSPR screen", "WSPR" not in body[:120], body[:120])
+check("onto the next area along, which is the band plan",
+      "BAND PLAN" in body, body[:120])
 
 print("\nthe power block shows the ceiling, the reading and the dBm")
 body = deck([TO_WSPR], "the power block")
