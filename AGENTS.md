@@ -649,22 +649,36 @@ from the spec.
 | # | Feature | Where | Tests |
 |---|---|---|---|
 | 1 | Ring order editor | `RINGED` screen, deck & rig `F1` item 4 | `test_ring_editor.py` 57 |
-| 2 | Band allocation tables | `ALLOC`, a fifth ring area; `src/bandplan.py` | `test_bandplan.py` 70, `test_bandscreens.py` 65 |
-| 3 | FTX-1 auto tuner | `TUNER` screen, deck & rig `F1` item 3; `src/tuner.py` | `test_tuner.py` 48 |
-| 4 | `^G` logs the station heard | `src/decall.py`, digimodes `F1` item 5 | `test_decall.py` 50, `test_logfromchat.py` 45 |
-| 5 | WSPR map | `WSPRMAP`, `m` on the WSPR screen; `src/wsprmap.py`, `src/fbdraw.py` | `test_wsprmap.py` 95, `test_fbdraw.py` 30, `test_mapscreen.py` 50 |
+| 2 | Band allocation tables | `ALLOC`, a fifth ring area; `src/bandplan.py` | `test_bandplan.py` 54, `test_bandscreens.py` 70 |
+| 3 | FTX-1 auto tuner | `TUNER` screen, deck & rig `F1` item 3; `src/tuner.py` | `test_tuner.py` 97 |
+| 4 | `^G` logs the station heard | `src/decall.py`, digimodes `F1` item 5 | `test_decall.py` 50, `test_logfromchat.py` 61 |
+| 5 | WSPR map | `WSPRMAP`, `m` on the WSPR screen; `src/wsprmap.py`, `src/fbdraw.py` | `test_wsprmap.py` 90, `test_fbdraw.py` 37, `test_mapscreen.py` 40 |
 | 6 | Logger map | `LOGMAP`, `F5` on the log screen | shares the above |
-| 7 | Export to a phone | `EXPORT` screen, deck & rig `F1` item 5; `src/export.py` | `test_export.py` 122 |
+| 7 | Export to a phone | `EXPORT` screen, deck & rig `F1` item 5; `src/export.py` | `test_export.py` 135 |
+
+Three test files came out of the panel sessions rather than the
+specification: `test_wsprsessions.py` 42, `test_backfill.py` 39 and
+`test_txbuffer.py` 8.
 
 **The ring went from four areas to five**, which broke eight test files
 through the ring-hop trap below. The new counts: `^O`x3 reaches the
 conversation, `^O`x2 reaches WSPR, both regardless of whether logging is on.
 
-**Nothing here has run on the deck.** Every one of the seven is tested off
-hardware and none has been deployed. Three need the panel to be believed:
-the maps write to the framebuffer directly (`src/fbdraw.py` -- no `fim`, no
-`fbi`, no keyboard handover), the auto tuner keys the transmitter for the
-better part of an hour, and the export server binds to the WiFi address.
+**All seven have run on the deck**, over four panel sessions on 2026-10-23,
+and eleven faults came out of them. The three features that could not be
+believed off hardware are where most of the faults were: the maps write to
+the framebuffer directly (`src/fbdraw.py` -- no `fim`, no `fbi`, no keyboard
+handover) and were erased by curses on every frame, the auto tuner crashed
+the deck on `Enter` and then swept against a radio that was refusing its
+commands, and the export server binds to the WiFi address. The faults and
+what each one cost are written up in the panel-session notes below and in
+`docs/scratch_notes.md`.
+
+**The lesson that generalizes: if a key starts something, a test should press
+the key.** The tuner crash was one line -- `self.rig` where the rest of the
+file uses `self._log_rig()` -- with the sweep engine tested against a fake
+rig on one side and the renderer tested on the other, and nothing calling the
+method between them.
 
 **Four new config keys outside the tuner's**: `RING_ORDER`, `LOG_HOTKEY`,
 `MAP_VIEW`, and the export's `EXPORT_DIR` / `EXPORT_PORT` / `EXPORT_IDLE_MIN`.

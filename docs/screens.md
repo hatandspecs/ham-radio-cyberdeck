@@ -387,7 +387,7 @@ owns the codec while it runs, and put back when the session ends.
 ## The band plan — `^O` to it, or `F1` `4` from anywhere in deck & rig
 
 A reference and nothing else: it tunes nothing and keeps no state but which
-class is showing. `Space` cycles Technician, General and Extra.
+class is showing. `Space` cycles General and Extra.
 
 The ranges are from 47 CFR §97.301 and `bandplans.tsv` carries a `verified_date`
 per row. The mode label is from the regulation too where there is one --

@@ -290,12 +290,13 @@ SCHEMA = {
                                  "logging, digimodes, wspr, alloc"),
     # Which license class the band plan and the auto tuner show.
     "LICENSE_CLASS":   ("us_general", str, "band plan to display and sweep: "
-                                           "us_technician | us_general | "
-                                           "us_extra"),
-    # How long each frequency is held for the tuner to settle. Five seconds
+                                           "us_general | us_extra"),
+    # How long each frequency is held for the tuner to settle, counted from
+    # the moment the radio reports itself on the new frequency. Five seconds
     # suits a cold start; a re-sweep where the tuner begins near a stored
     # memory can be far shorter. **Too short fails silently** -- the radio
-    # cannot report that an external tuner finished -- so the floor is 1 s.
+    # cannot report that an external tuner finished -- so the floor is
+    # `tuner.MIN_DWELL_S`, 0.5 s, and `+`/`-` on the screen stop at 5 s.
     "TUNER_DWELL_S":   (5.0, float, "seconds held at each tuner memory"),
     # Getting the files off the deck. The staging directory is where the
     # transcript is written for an export; the logs and the settings are

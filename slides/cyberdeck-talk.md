@@ -55,6 +55,9 @@ style: |
   section .pair img { max-height: 232px; width: auto; margin: 0 0 6px 0; }
   section .pair figcaption { font-size: 17px; color: #555555; }
   section .trio img { max-height: 182px; }
+  /* Two wide screen captures whose own header text has to stay
+     readable from the back of a room. */
+  section .pair.tall img { max-height: 320px; }
   section footer { font-size: 14px; color: #888888; }
   section::after { font-size: 14px; color: #888888; }
 ---
@@ -67,7 +70,7 @@ style: |
 
 **KD3CCO**
 
-An HF terminal for \$68 — conversation, logbook, and WSPR
+An HF terminal for \$68 — conversation, logbook, WSPR, and a band sweep
 
 ---
 
@@ -293,13 +296,76 @@ All of fldigi's signal processing. None of its interface.
 <span class="caption">The encoder was validated by having the real `wsprd` decode the deck's own output on the bench. The decoder is a 55 KB binary extracted from a 36 MB package, and it decodes a two-minute slot in 14.5 seconds at 20 MiB on a Pi 3A+.</span>
 
 ---
+
+<!-- _class: evidence -->
+
+# The band plan is a stop on the ring, split the way the regulation splits it
+
+![width:900px](../docs/screens/alloc.png)
+
+<span class="caption">General and Extra, each band divided into its CW/data and phone segments. `Space` changes license class. It tunes nothing — the point of a reference is being one key away while operating rather than on a phone in a pocket.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# Which applications are on the ring is now a setting, not a constant
+
+![width:900px](../docs/screens/ringed.png)
+
+<span class="caption">WSPR taken off the ring and the band plan moved to the front. A field weekend and a contest weekend want different rings. Deck & rig cannot be removed, because it holds the system menu, but it can be moved.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# The deck sweeps a band and leaves a tuner memory every 10 kHz
+
+![width:900px](../docs/screens/tuner-running.png)
+
+<span class="caption">Pick segments, press Enter, and the deck walks them keying the radio at each point so the external mAT-30 stores a match. Afterwards, changing frequency recalls a memory instead of running a fresh tune cycle. The segment list is the band plan's, so the sweep never parks outside the license class.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# Both logs draw themselves on a map, scoped to the session being run
+
+<div class="pair tall">
+<figure><img src="../docs/screens/wspr-map.png"/><figcaption>WSPR spots, one session</figcaption></figure>
+<figure><img src="../docs/screens/log-map.png"/><figcaption>contacts, one activity</figcaption></figure>
+</div>
+
+<span class="caption">Written straight to `/dev/fb0`, because handing the framebuffer to `fim` or `fbi` means handing over the keyboard too. Contacts with no grid are counted in the header rather than dropped — "4 with no grid" beats a map that looks like a quiet afternoon.</span>
+
+---
+
+<!-- _class: evidence -->
+
+# The files leave on a phone, over the deck's own WiFi, with no account and no uplink
+
+![width:900px](../docs/screens/export.png)
+
+<span class="caption">One key stands up a web page for five minutes. The request names a position in a list the deck handed the server, never a filename — so there is no path to traverse, and `cyberdeck.secrets` is not on the list. It works on a field hotspot with nothing behind it.</span>
+
+---
+
+# Seven features passed 3,995 tests, and then the panel found eleven faults
+
+**Some were things no test could reach.** The framebuffer and the text console are the same memory, so curses erased the map a frame after it was drawn. An aborted over stayed in fldigi's transmit widget and went out ahead of the next message. The tuner's settle time was a guess about how long a radio takes to change frequency.
+
+**Some were gaps between tested parts.** The tuner crashed the deck on `Enter` because one line said `self.rig` where the rest of the file says `self._log_rig()` — the sweep engine tested against a fake radio, the screen tested on its own, and nothing calling the method between them. **If a key starts something, a test should press the key.**
+
+**The rest were the specification being wrong**, which only showed up in use: a map of everything instead of a map of tonight, a filter for data the deck does not have, a session list reachable from a key but not from the menu. Most of the repair was removing things.
+
+---
 <!-- _class: evidence -->
 
 # AI helps with faster code and better documentation practices
 
 ![width:940px](img/doc-first-cycle.svg)
 
-Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunday. What decides whether a project happens is how much progress fits inside one fragment — a text terminal for HF with 534 tests behind it was never going to happen otherwise.
+Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunday. What decides whether a project happens is how much progress fits inside one fragment — a text terminal for HF with 3,995 tests behind it was never going to happen otherwise.
 
 **Then turn it against your own design.** Write down how it should work, ask for an analysis of the alternatives, and ask the question worth more than any of them: *does this design imply there are tools, techniques or facts I am not accounting for?*
 
@@ -317,7 +383,7 @@ Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunda
 
 <!-- _class: closing -->
 
-# Build something that annoys you into existence
+# It started because a laptop did not fit on my desk
 
 **Code, design document, runbook, operating tutorial**
 github.com/hatandspecs/ham-radio-cyberdeck

@@ -1,6 +1,6 @@
 # Cyberdeck club talk
 
-`cyberdeck-talk.md` — a [Marp](https://marp.app) deck, 25 slides, about 18–20 minutes for a
+`cyberdeck-talk.md` — a [Marp](https://marp.app) deck, 31 slides, about 22–25 minutes for a
 club audience.
 
 Assertion-evidence: every headline is a full sentence making a claim, and the body

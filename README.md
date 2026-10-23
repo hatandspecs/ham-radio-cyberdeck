@@ -430,8 +430,8 @@ immediately contradicts. `{power}` substitutes the reading, not the setting.
 ### The band plan
 
 Its own stop on the ring, because the point of a reference is being one key
-away while operating. It tunes nothing. `Space` cycles Technician, General
-and Extra; the ranges are from 47 CFR §97.301.
+away while operating. It tunes nothing. `Space` cycles General and
+Extra, each band split into its CW/data and phone segments.
 
 ![The band plan](docs/screens/alloc.png)
 

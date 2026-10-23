@@ -112,7 +112,7 @@ check("because 29.000-29.500 holds nothing worth tuning for",
               for s in ten), [s.name for s in ten])
 
 print("\nsub-segments cannot escape the privilege range")
-for lic in ("us_general", "us_extra", "us_technician"):
+for lic in ("us_general", "us_extra"):
     for s in bandplan.segments(lic):
         rows = [r for r in bandplan.segments(lic, subdivide=False)
                 if r.band == s.band]
