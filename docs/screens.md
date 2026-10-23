@@ -1,4 +1,4 @@
-# The screens — KD3CCO's cyberdeck
+# The screens
 
 Every screen below is rendered by the same functions the deck draws with,
 so none of them can drift from the code.

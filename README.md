@@ -1,4 +1,4 @@
-# Ham Radio Cyberdeck — KD3CCO
+# Ham Radio Cyberdeck
 
 A self-contained HF station terminal: a Raspberry Pi 3A+, a 5-inch panel, a
 Bluetooth keyboard and a radio, with no window manager, no mouse and nothing
@@ -502,7 +502,7 @@ the whole interface.
 
 **Every spot is a `+` and this station is an `×`.** There is no heard /
 heard-by filter, because the deck has no heard-by data: its log holds what it
-decoded and what it transmitted, and who heard KD3CCO is on wsprnet, which
+decoded and what it transmitted, and who heard the deck is on wsprnet, which
 needs a network a field deck is often without.
 
 Contacts with no grid are counted rather than dropped — a map showing eleven
@@ -1143,7 +1143,7 @@ same screens as text, in `docs/screens.md`.
 
 ## Status
 
-**The deck works. KD3CCO has made contacts with it.**
+**The deck works. It has made contacts.**
 
 First two QSOs on **2026-09-19**, 80 m RTTY, during an RTTY sprint:
 **N3QE** and **K4ZW**, worked from the deck's own screen and Bluetooth

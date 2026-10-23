@@ -1,4 +1,4 @@
-# Getting the WSPR capability onto KD3CCO's deck
+# Getting the WSPR capability onto the deck
 
 Branch `add-wspr`. Nothing here transmits. The decoder is installed and
 benchmarked; the capture, the beacon and the screen do not exist yet.

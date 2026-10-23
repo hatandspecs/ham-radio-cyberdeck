@@ -1,4 +1,4 @@
-# Digimodes Operating Tutorial — KD3CCO's cyberdeck
+# Digimodes Operating Tutorial
 
 Keyboard-to-keyboard conversation in fldigi's digital modes: how to actually
 work somebody with the deck.

@@ -1,4 +1,4 @@
-# Keyboard-to-Keyboard Cyberdeck — Design, KD3CCO
+# Keyboard-to-Keyboard Cyberdeck — Design
 
 A self-contained HF/VHF text terminal: a repurposed Raspberry Pi 3A+, a screen, a
 Bluetooth keyboard, and a Yaesu FTX-1 on the Pi's single USB port. fldigi runs

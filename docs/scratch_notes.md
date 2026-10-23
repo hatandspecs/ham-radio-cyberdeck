@@ -1,4 +1,4 @@
-# Scratch notes — pending deploy, KD3CCO
+# Scratch notes — pending deploy
 
 **Everything below is tested and uncommitted as of 2026-10-23.** Six rounds
 of work are pending and one deploy carries all of them, because the

@@ -1,4 +1,4 @@
-# Deploying the Cyberdeck — KD3CCO's runbook
+# Deploying the Cyberdeck
 
 Blank SD card to a working terminal, in order. Every command is meant to be
 run as written.

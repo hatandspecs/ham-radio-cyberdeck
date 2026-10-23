@@ -1,4 +1,4 @@
-# WSPR Operating Tutorial — KD3CCO's cyberdeck
+# WSPR Operating Tutorial
 
 Running WSPR from the deck: receiving, beaconing, hopping bands, reporting to
 wsprnet, and getting the spots off afterward.
@@ -403,7 +403,7 @@ otherwise be filed under a name chosen for a different run.
 
 Starting a session for each deployment is what makes the map useful: it
 answers "what is this antenna, in this field, hearing tonight" rather than
-"what has KD3CCO ever heard".
+"what has this deck ever heard".
 
 The name is written into every spot record, which is what makes the log
 answerable afterward: "the 20 m spots from the Saturday night run" is a query
@@ -433,7 +433,7 @@ heard / heard-by filter and neither earned its row. Within one session every
 band answers the same question, and which band a spot arrived on is a column
 in the spot list. As for the other direction — **the deck has no heard-by
 data.** Its log holds what it decoded and what it transmitted; who heard
-KD3CCO is on wsprnet, which needs a network a field deck is often without.
+the deck is on wsprnet, which needs a network a field deck is often without.
 
 Every spot is a `+`. The one `×` is this station.
 

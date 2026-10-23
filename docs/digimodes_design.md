@@ -1,4 +1,4 @@
-# Digital modes — design, KD3CCO
+# Digital modes — design
 
 Keyboard-to-keyboard conversation in fldigi's digital modes: the application
 the deck was built for, and the one the other three were added beside.

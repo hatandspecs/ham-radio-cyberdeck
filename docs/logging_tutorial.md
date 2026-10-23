@@ -1,4 +1,4 @@
-# Logging contacts on KD3CCO's cyberdeck
+# Logging contacts on the cyberdeck
 
 A walk through the contact log: switching it on, logging an ordinary QSO, a
 park activation and a QSO party, and getting the contacts out afterward.
@@ -297,7 +297,7 @@ callbook still fetches one, and it is written onto the record anyway — the
 log format has always carried `grid` and exports it as `GRIDSQUARE`.
 
 This was broken until 2026-10-23: the answer was written into the form, the
-form had nowhere to put it, and it was dropped. Every contact KD3CCO logged
+form had nowhere to put it, and it was dropped. Every contact logged
 under `general` reached the file without a grid, which is why the contact map
 had nothing to plot.
 

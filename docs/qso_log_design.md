@@ -1,4 +1,4 @@
-# QSO Logging — Design, KD3CCO
+# QSO Logging — Design
 
 A general-purpose contact log for SSB and digital operating, built so that a
 deck with logging switched off is indistinguishable from a deck that never had

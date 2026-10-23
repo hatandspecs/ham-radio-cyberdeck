@@ -1,4 +1,4 @@
-# Next steps — design notes, KD3CCO
+# Next steps — design notes
 
 Seven features, specified 2026-10-22, built the same day, and **first run on
 the panel 2026-10-23**. Each section states what the feature is, where it

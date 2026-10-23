@@ -1,4 +1,4 @@
-# AGENTS.md — KD3CCO's ham radio cyberdeck
+# AGENTS.md — ham radio cyberdeck
 
 Renamed from "keyboard-to-keyboard cyberdeck" on 2026-10-16: the digital modes
 are one of three applications now, beside the contact log and the station's own

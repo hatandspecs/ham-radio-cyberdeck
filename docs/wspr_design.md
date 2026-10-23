@@ -1,4 +1,4 @@
-# WSPR on KD3CCO's deck — design
+# WSPR — design
 
 Status: **design only, 2026-10-16.** No code. Branch `add-wspr`.
 
