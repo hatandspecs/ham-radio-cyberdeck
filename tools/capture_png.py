@@ -81,8 +81,8 @@ def _draw_map(img, sm, scheme_key, w, h):
                 put(x, y, outline)
     for x, y, _band, _dirn in sm.pixels():
         put(x, y, spot)
-    # The scheme's own bright colour, as the deck draws it. White is not
-    # one of the phosphor colours; the `×` is what tells home from a spot.
+    # The scheme's own bright color, as the deck draws it. White is not
+    # one of the phosphor colors; the `×` is what tells home from a spot.
     for x, y in sm.home_pixels():
         put(x, y, spot)
 

@@ -84,8 +84,56 @@ def deck(screen):
     d.log_form = None
     d.log_records = []
     d._log_shown = lambda: d.log_records
+    d._activity_name = lambda: str(d.cfg.get("ACTIVITY", "") or "")
+    d._activity_start = lambda: str(d.cfg.get("ACTIVITY_START", "") or "")
     return d
 
+
+print("\nthe cached map follows the session, not just the file")
+# The map is scoped to a session and starting a new one writes nothing to
+# the log -- so a cache keyed on the file's size and mtime did not notice,
+# and a brand new session with no spots drew the previous session's few
+# thousand. Found on the panel 2026-10-23, after creating a second session
+# with the same NAME and a different start.
+import os
+import tempfile
+import wsprlog
+
+_tmp = tempfile.mkdtemp()
+_log = os.path.join(_tmp, "wspr.log")
+_OLD, _NEW = "2026-10-22T18:00:00Z", "2026-10-23T19:00:00Z"
+for i, g in enumerate(("FN67", "EN34", "EM64", "IO94")):
+    wsprlog.append(_log, {"kind": "rx", "call": f"K{i}ABC", "grid": g,
+                          "band": "40 m", "when": _OLD, "activity": "general",
+                          "activity_start": _OLD, "snr": -20})
+
+d = deck(cyberdeck.WSPRMAP)
+d.cfg.update({"WSPR_LOG_PATH": _log, "LOCATOR": "FN10",
+              "WSPR_SESSION": "general", "WSPR_SESSION_START": _OLD})
+equals("the session with spots draws them",
+       len(d._build_map(cyberdeck.WSPRMAP).points), 4)
+# Same NAME, different start. Nothing is written to the log.
+d.cfg["WSPR_SESSION_START"] = _NEW
+equals("a new session of the same name draws none of them",
+       len(d._build_map(cyberdeck.WSPRMAP).points), 0)
+d.cfg["WSPR_SESSION_START"] = _OLD
+equals("and going back shows them again",
+       len(d._build_map(cyberdeck.WSPRMAP).points), 4)
+
+print("\nand the contact map follows the activity")
+# The same hole: switching activity changes which records are shown and
+# leaves the whole log's length alone.
+d = deck(cyberdeck.LOGMAP)
+d.cfg.update({"LOCATOR": "FN10", "ACTIVITY": "Park A", "ACTIVITY_START": "a"})
+_all = [{"call": "K2ABC", "band": "20m", "grid": "EM12", "activity": "Park A"},
+        {"call": "W1XYZ", "band": "40m", "grid": "FN42", "activity": "Park B"},
+        {"call": "N3QE", "band": "20m", "grid": "FM19", "activity": "Park B"}]
+d.log_records = _all
+d._log_shown = lambda: [r for r in _all if r["activity"] == d.cfg["ACTIVITY"]]
+equals("Park A has one", len(d._build_map(cyberdeck.LOGMAP).points), 1)
+d.cfg["ACTIVITY"] = "Park B"
+equals("Park B has two, not Park A's cached one",
+       len(d._build_map(cyberdeck.LOGMAP).points), 2)
 
 print("\nthe log map says how many contacts it cannot plot")
 # Contacts carry a grid when the schema has one or the callbook lookup filled

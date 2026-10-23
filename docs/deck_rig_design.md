@@ -1,4 +1,4 @@
-# Deck and rig — design
+# Deck and rig — design, KD3CCO
 
 The screen the deck opens on: what this station calls itself, what the deck
 is doing, and the way into everything that is about the deck rather than

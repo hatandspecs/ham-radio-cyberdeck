@@ -187,7 +187,7 @@ def symbols(call, grid, dbm):
 
 
 def tones(call, grid, dbm, base_hz=1500.0):
-    """The frequency of each symbol, in Hz, for a given audio centre."""
+    """The frequency of each symbol, in Hz, for a given audio center."""
     return [base_hz + sym * TONE_SPACING for sym in symbols(call, grid, dbm)]
 
 

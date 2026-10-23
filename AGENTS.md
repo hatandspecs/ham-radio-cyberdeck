@@ -1,4 +1,4 @@
-# AGENTS.md — ham radio cyberdeck
+# AGENTS.md — KD3CCO's ham radio cyberdeck
 
 Renamed from "keyboard-to-keyboard cyberdeck" on 2026-10-16: the digital modes
 are one of three applications now, beside the contact log and the station's own
@@ -1114,6 +1114,36 @@ retry in the journal every ten seconds while the radio is off.
 **Check this before reading the deck's own code.** The tuner now fails on
 its first CAT command with "no rig control — is rigctld running?", which is
 the question this answers.
+
+### fldigi's RIG MODE persists between runs, and parks the decoder
+
+`test_screen` failing on **"fldigi connected (modem in status)"** is usually
+not a connection problem. The deck parks the modem when the rig reports a
+voice mode -- that is `_watch_rig_mode` doing its job -- and a parked modem
+leaves no name in the status line, which is what that check reads.
+
+**`test_screen` and `test_menu_arrows` want OPPOSITE modes**, and for a
+whole session neither set one: `test_screen` needs a data mode or the deck
+parks the decoder, `test_menu_arrows` needs a voice mode to exercise the
+`^B` refusal. Whichever ran last decided whether the other passed, which
+cost four suite runs on 2026-10-23 before the pattern was seen. Both set
+what they need now. **A pty test that depends on fldigi's state must set
+it**, because fldigi keeps it between runs:
+
+```bash
+python3 -c "import xmlrpc.client as x; \
+  print(x.ServerProxy('http://127.0.0.1:7362/').rig.get_mode())"
+```
+
+`USB` is the fault. Put it back and the file passes:
+
+```bash
+python3 -c "import xmlrpc.client as x; \
+  x.ServerProxy('http://127.0.0.1:7362/').rig.set_mode('PKTUSB')"
+```
+
+The transcript full of garbage `RX` lines in that capture is unrelated and
+normal: a live fldigi with no signal decodes noise.
 
 ### A wedged fldigi looks exactly like a broken deck
 

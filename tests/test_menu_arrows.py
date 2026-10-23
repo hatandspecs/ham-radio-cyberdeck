@@ -295,11 +295,18 @@ check("the transcript is emptied", "transcript cleared" in body, body[:300])
 check("and the startup notes are gone", "fldigi 4.2" not in body, body[:300])
 
 # **Ctrl-B is refused while the radio is not in a data mode**, and that is
-# the interlock working rather than a dead key. The rig behind the test rig
-# reports USB, so arming is exactly the half that gets refused -- inhibiting
-# is always allowed, because a safety control that can fail to engage is not
-# one. The refusal names the mode and says what to do about it, because a
-# key that silently did nothing would read as broken.
+# the interlock working rather than a dead key. Arming is exactly the half
+# that gets refused -- inhibiting is always allowed, because a safety
+# control that can fail to engage is not one. The refusal names the mode and
+# says what to do about it, because a key that silently did nothing would
+# read as broken.
+#
+# **The mode is SET here, not assumed.** fldigi keeps its rig mode between
+# runs, so this depended on whatever the previous file left behind -- and
+# `test_screen` needs the opposite, a data mode, or the deck parks the
+# decoder and its status line carries no modem name. The two flapped
+# against each other for a whole session depending on which ran last.
+Fldigi().set_rig_mode("USB")
 body = show("Ctrl-B against a radio in USB",
             run(keys=[DIGI, CTRL_B], settle=2.0))
 check("the inhibit stays up, because the radio is not in a data mode",

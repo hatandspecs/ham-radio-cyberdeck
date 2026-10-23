@@ -1,8 +1,12 @@
-# Ham Radio Cyberdeck
+# Ham Radio Cyberdeck — KD3CCO
 
 A self-contained HF station terminal: a Raspberry Pi 3A+, a 5-inch panel, a
 Bluetooth keyboard and a radio, with no window manager, no mouse and nothing
 on the screen but the terminal.
+
+Built and operated by **KD3CCO** in central Pennsylvania, grid FN10. Every
+screenshot here is from the deck itself, and every on-air result is from
+contacts it made.
 
 ![The conversation screen](docs/screens/conversation-matrix.png)
 
@@ -437,9 +441,16 @@ and Extra; the ranges are from 47 CFR §97.301.
 them storing a tuner memory at each — 10 kHz apart, 1 kHz inside each band
 edge.
 
-`[*]` is selected, `[ ]` is not, and **`[x]` is locked**: a segment no bulk
-selection can turn back on. 160 m, 12 m, 10 m and 6 m are locked off below,
-so `p` for all-phone does not drag them into an hour-long sweep.
+`[*]` is selected and `[ ]` is not. `Space` is the only way to pick one:
+the bulk selections and the per-segment locks that existed to override them
+were removed after the first sweep on the panel, because scrolling a list of
+twenty-odd rows is fast enough and a lock protected against nothing once
+there was no bulk operation to protect against.
+
+`+` and `-` set the dwell in half seconds, between 0.5 and 5.0, and the
+footer carries the current value. **The dwell starts when the radio reports
+itself on the new frequency**, not a fixed moment after the command — too
+short a settle and the tuner matches the previous frequency.
 
 ![The auto tuner](docs/screens/tuner.png)
 
@@ -464,19 +475,38 @@ what you want.
 
 ![Sending files to a phone](docs/screens/export.png)
 
+### WSPR sessions
+
+A session is a deployment: a name and the moment it started. `F2` on the WSPR
+screen, or `F1` `e`, opens the list.
+
+`Enter` resumes one — and the spot list fills with that session's spots, read
+back from the log. `n` starts a new one, `r` renames, `d` takes it off the
+list without deleting a single spot. The one in use is marked `*`.
+
+Times are shown to the minute in UTC, because a WSPR session is evidence
+about propagation and propagation is a function of time of day. Two runs on
+one date at different hours are two different questions.
+
 ### The maps
 
-`m` on the WSPR screen, `F5` on the log screen. The picture goes straight to
-the framebuffer and curses draws the two rows over it. The band digits are
-key caps; `1`–`0` toggle a band, `v` cycles the view, and on the WSPR map `t`
-cycles heard / heard by / both — which is how "am I deaf?" gets asked.
+`F5` on the WSPR screen and on the log screen, and `F5` again to leave. The
+picture goes straight to the framebuffer; curses draws the top row and the
+bottom one. `v` cycles the two views — the continental USA, and the world.
 
-![The WSPR map](docs/screens/wspr-map.png)
+Each map is scoped to what is being logged: the WSPR map to the session, the
+contact map to the activity, both named on the top row. One key and `Esc` is
+the whole interface.
 
-The contact map carries one legend reading `worked`, because a QSO that only
-went one way is not a QSO. Contacts with no grid are counted rather than
-dropped — a map showing eleven of forty with nothing saying so reads as a map
-of a quiet weekend.
+![The WSPR map, KD3CCO at the center](docs/screens/wspr-map.png)
+
+**Every spot is a `+` and this station is an `×`.** There is no heard /
+heard-by filter, because the deck has no heard-by data: its log holds what it
+decoded and what it transmitted, and who heard KD3CCO is on wsprnet, which
+needs a network a field deck is often without.
+
+Contacts with no grid are counted rather than dropped — a map showing eleven
+of forty with nothing saying so reads as a map of a quiet weekend.
 
 ![The contact map](docs/screens/log-map.png)
 
@@ -523,7 +553,7 @@ its own while logging is switched off.
 |---|---|
 | `F2` | Activities — start, resume, rename or forget a session |
 | `F3` | Log schema — select, edit, copy or create one; `Esc` keeps the current one |
-| `F5` | Map of where the contacts are; `F1` `g` reaches it too |
+| `F5` | Map of this activity's contacts; `F1` `g` reaches it too |
 | `←` `→` | Move between fields on the entry form; `Tab` does too |
 | `↑` `↓` | Pick a logged contact; typing returns to the form |
 | `Enter` | Log the contact — or open the one picked above |
@@ -536,7 +566,7 @@ its own while logging is switched off.
 | `↑` `↓` | Pick a station field |
 | `Enter` | Edit it in place |
 | `F2` `F3` | Display, System |
-| `F1` `3` | Auto tuner — pick segments, sweep them, store a memory at each |
+| `F1` `3` | Auto tuner — `Space` picks a segment, `+` `-` set the dwell |
 | `F1` `4` | Function ring order |
 | `F1` `5` | Send the files to a phone over WiFi |
 
@@ -547,7 +577,8 @@ its own while logging is switched off.
 
 | Key | WSPR, continued |
 |---|---|
-| `m` | Map of who was heard and who heard this station |
+| `F5` | Map of the stations this session has heard; `F5` again to leave |
+| `F2` | Sessions — resume, start, rename or forget one |
 
 | Key | WSPR |
 |---|---|
@@ -560,9 +591,8 @@ its own while logging is switched off.
 
 | Key | Either map |
 |---|---|
-| `1`–`0` | Toggle a band on and off |
-| `v` | Cycle the view: the USA, global, or global with the Antarctic bases |
-| `t` | WSPR map only: heard / heard by this station / both |
+| `v` | Cycle the view: the continental USA, or the world |
+| `F5` `Esc` | Back to the screen it was opened from |
 
 Menus take arrow keys as well as their single-key shortcuts: `↑` `↓` move a
 `▸` marker, `Enter` chooses. Transmit starts **inhibited** at every power-on;
@@ -1113,7 +1143,7 @@ same screens as text, in `docs/screens.md`.
 
 ## Status
 
-**The deck works. It has made contacts.**
+**The deck works. KD3CCO has made contacts with it.**
 
 First two QSOs on **2026-09-19**, 80 m RTTY, during an RTTY sprint:
 **N3QE** and **K4ZW**, worked from the deck's own screen and Bluetooth

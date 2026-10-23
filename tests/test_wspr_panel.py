@@ -171,9 +171,20 @@ check("and HOP is on the toggle row", "HOP" in body, body)
 check("and + is gone rather than silently meaning something else",
       "+n" not in body, body[-200:])
 
-print("\nF2 names a session")
-body = deck([TO_WSPR, F2["linux"]] + list("Saturday") + [ENTER],
-            "name a session", settle=3.4)
+print("\nF2 opens the session list")
+# It opened the name editor, which can only START a session -- so there was
+# no way back into an earlier one, and a deck powered on into a session
+# with a night behind it showed an empty spot list under a header reporting
+# thousands heard. `n` on the list reaches the editor.
+body = deck([TO_WSPR, F2["linux"]], "the session list", settle=3.4)
+check("the list is drawn", "WSPR SESSIONS" in body, body[:140])
+check("with the keys it takes", "Enter resume" in body, body[-200:])
+check("and times to the minute, which is the resolution propagation has",
+      "UTC" in body, body[:140])
+
+print("\nand n on it names a new one")
+body = deck([TO_WSPR, F2["linux"], "n"] + list("Saturday") + [ENTER],
+            "name a session", settle=3.6)
 check("the header carries the name", "Saturday" in body, body[:140])
 
 print("\nthe danger zone is behind z, and counts by kind")

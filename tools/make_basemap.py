@@ -57,7 +57,7 @@ CUT_LON = 90.0
 # sized so its Mercator aspect matches the panel's 800x480 -- 68 degrees of
 # longitude against 40.8 of Mercator latitude -- because a view stretched to
 # fit would put Florida in the wrong shape on the one view where the shape
-# is recognisable.
+# is recognizable.
 VIEWS = {
     "focus":  (22.0, 53.0, -130.0, -62.0),
     "global": (-60.0, 75.0, None, None),

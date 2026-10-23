@@ -1,4 +1,4 @@
-# Next steps — design notes
+# Next steps — design notes, KD3CCO
 
 Seven features, specified 2026-10-22, built the same day, and **first run on
 the panel 2026-10-23**. Each section states what the feature is, where it
@@ -62,10 +62,10 @@ is below, and it is mostly about the map.
   off `SpotMap.bands()` in insertion order, so the row reads 40, 20, 15, 30,
   17, 80, 12, 10. An operator reads a band row longest to shortest.
 - **The markers are the wrong way round.** Spots should be `+` in the bright
-  colour and the coastline dim; the heard/heard-by distinction drew one of
+  color and the coastline dim; the heard/heard-by distinction drew one of
   them as `×`, which reads as the fainter marker.
-- **This station should be an `×`**, in the scheme's own colour. It is a
-  white square, and white is not one of the phosphor colours.
+- **This station should be an `×`**, in the scheme's own color. It is a
+  white square, and white is not one of the phosphor colors.
 - **The band toggles space themselves inconsistently.** A lit band has no
   gap between its key cap and its label and an unlit one has a gap, because
   the cap carries no trailing space and the label does. One space in both
@@ -111,11 +111,11 @@ is not a question the deck has the data to ask.
 
 What is left on the map screen is `v` and `Esc`.
 
-**Every spot is a `+` in the bright colour, this station is an `×`.** The
+**Every spot is a `+` in the bright color, this station is an `×`.** The
 two directions were `+` and `×`, and a diagonal cross puts no pixel on the
-row or column through its centre, so at one pixel wide it reads as dimmer
-even in the same colour. Home was white, which is not one of the phosphor
-colours.
+row or column through its center, so at one pixel wide it reads as dimmer
+even in the same color. Home was white, which is not one of the phosphor
+colors.
 
 **The bands sort longest to shortest** where they are still listed.
 

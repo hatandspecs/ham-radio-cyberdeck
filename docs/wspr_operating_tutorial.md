@@ -1,4 +1,4 @@
-# WSPR Operating Tutorial
+# WSPR Operating Tutorial — KD3CCO's cyberdeck
 
 Running WSPR from the deck: receiving, beaconing, hopping bands, reporting to
 wsprnet, and getting the spots off afterward.
@@ -29,10 +29,11 @@ it describes, is [`wspr_design.md`](wspr_design.md).
 - [8. Band hopping](#8-band-hopping)
 - [9. Reporting spots to wsprnet](#9-reporting-spots-to-wsprnet)
 - [10. Sessions](#10-sessions)
-- [11. Getting the spots off the deck](#11-getting-the-spots-off-the-deck)
-- [12. Full key reference](#12-full-key-reference)
-- [13. What it has done, on the air](#13-what-it-has-done-on-the-air)
-- [14. When something goes wrong](#14-when-something-goes-wrong)
+- [11. The map — `F5`](#11-the-map--f5)
+- [12. Getting the spots off the deck](#12-getting-the-spots-off-the-deck)
+- [13. Full key reference](#13-full-key-reference)
+- [14. What it has done, on the air](#14-what-it-has-done-on-the-air)
+- [15. When something goes wrong](#15-when-something-goes-wrong)
 
 ---
 
@@ -378,8 +379,31 @@ transmit power and no band space at all.
 
 ## 10. Sessions
 
-`F2`, or `e` from the menu, names the session. An unnamed run is logged as
-`general`.
+A session is a deployment: a name, and the moment it began. Every spot the
+deck decodes is filed under the one that is open, and an unnamed run is
+logged as `general`.
+
+`F2`, or `e` from the menu, opens the list.
+
+| Key | |
+|---|---|
+| `Enter` | Resume this session — the spot list fills with its spots |
+| `n` | Start a new one, and name it |
+| `r` | Rename this one; its start, and so its identity, does not change |
+| `d` | Take it off the list. **No spot is deleted** |
+| `Esc` | Back to the WSPR screen |
+
+The session in use is marked `*`. Times are shown **to the minute, in UTC** —
+a WSPR session is evidence about propagation and propagation is a function of
+time of day, so two runs on one date at different hours are two different
+questions.
+
+Switching is refused while WSPR is running. The rest of the night would
+otherwise be filed under a name chosen for a different run.
+
+Starting a session for each deployment is what makes the map useful: it
+answers "what is this antenna, in this field, hearing tonight" rather than
+"what has KD3CCO ever heard".
 
 The name is written into every spot record, which is what makes the log
 answerable afterward: "the 20 m spots from the Saturday night run" is a query
@@ -394,7 +418,37 @@ unattended beaconing.
 
 ---
 
-## 11. Getting the spots off the deck
+## 11. The map — `F5`
+
+Every station this session has heard, on the panel. `F5` again or `Esc`
+returns to the spot list.
+
+| Key | |
+|---|---|
+| `v` | Cycle the view: the continental USA, or the world |
+| `F5` `Esc` | Back to the WSPR screen |
+
+**One key and a way out.** The map used to carry band toggles and a
+heard / heard-by filter and neither earned its row. Within one session every
+band answers the same question, and which band a spot arrived on is a column
+in the spot list. As for the other direction — **the deck has no heard-by
+data.** Its log holds what it decoded and what it transmitted; who heard
+KD3CCO is on wsprnet, which needs a network a field deck is often without.
+
+Every spot is a `+`. The one `×` is this station.
+
+The top row names the session and says how many spots are on the map and how
+many the view is clipping — the USA view clips hard, and a map quietly
+dropping a third of the night would answer "where am I being heard" with a
+lie.
+
+**The picture goes straight to the framebuffer**, not through curses. On a
+machine with no panel — a laptop over SSH — the two text rows still work and
+the top row says the framebuffer is unavailable.
+
+---
+
+## 12. Getting the spots off the deck
 
 The spot log is **not** the same as what wsprnet holds. wsprnet has what was
 uploaded; the deck's log has every decode, including the ones that never
@@ -463,49 +517,22 @@ pressing it does nothing. `rsync` above is the working path.
 
 ---
 
-## 12. Full key reference
+## 13. Full key reference
 
 ### The WSPR screen
 
 | Key | |
 |---|---|
 | `F1` | The WSPR menu |
-| `F2` | Name the session |
+| `F2` | Sessions — resume, start, rename or forget one |
 | `F3` | Band picker |
 | `↑` `↓` | Pick a spot. Arrowing up off the top follows the newest again |
 | `PgUp` `PgDn` | Page the spot list |
 | `Esc` | Release the spot selection |
 | `^B` | Transmit inhibit, from any screen |
 | `^C` | Stop WSPR — the same key that aborts an over in the digital modes |
-| `m` | The map of where the spots came from, and where this station reached |
+| `F5` | The map of where this session's spots came from; `F5` again to leave |
 | `^O` `^P` | **Locked** while WSPR runs |
-
-### The map — `m`
-
-A world map on the panel, with every spot lit. `Esc` returns to the spot
-list.
-
-| Key | |
-|---|---|
-| `1`–`0` | Toggle a band on and off |
-| `t` | Cycle: stations that heard this one · stations this one heard · both |
-| `v` | Cycle the view: the USA · global · global with the Antarctic bases |
-| `Esc` | Back to the WSPR screen |
-
-`+` marks a station that heard this one, `×` a station this one heard, and a
-white point is this station. The line under the map says how many spots are
-on it and how many the view is clipping — the USA view clips hard, and a map
-quietly dropping a third of the night would answer "where am I being heard"
-with a lie.
-
-**`t` is how "am I deaf?" gets asked.** A night where thirty stations heard
-the deck and the deck heard four is a receive problem, and the two positions
-of that key are what makes it visible.
-
-**The picture goes straight to the framebuffer**, not through curses, so it
-is drawn on entry and on change rather than every frame. On a machine with no
-panel — a laptop over SSH — the two text rows still work and the map area
-says the framebuffer is unavailable.
 
 ### The menu — `F1`
 
@@ -549,7 +576,7 @@ distinction and `=` is unshifted `+` on a small keyboard.
 
 ---
 
-## 13. What it has done, on the air
+## 14. What it has done, on the air
 
 **From the deck's own log**, one run of roughly 28 hours ending 2026-10-18,
 FN10cs, a 75–10 m end-fed half-wave:
@@ -579,7 +606,7 @@ points at local receive noise rather than at the antenna.
 
 ---
 
-## 14. When something goes wrong
+## 15. When something goes wrong
 
 | What you see | What it is |
 |---|---|

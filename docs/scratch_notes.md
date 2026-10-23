@@ -1,4 +1,4 @@
-# Scratch notes — pending deploy
+# Scratch notes — pending deploy, KD3CCO
 
 **Everything below is tested and uncommitted as of 2026-10-23.** Six rounds
 of work are pending and one deploy carries all of them, because the
@@ -269,10 +269,10 @@ IT is on wsprnet. One of that filter's two positions was always empty.
 The map screen is now `v` and `Esc`, with the summary on the top row and the
 keys on the bottom row. **`Esc back` is no longer clipped to `Esc bac`.**
 
-**Spots are `+` in the bright colour; this station is an `×`.** The `×` used
+**Spots are `+` in the bright color; this station is an `×`.** The `×` used
 to mean a direction and read as the fainter marker -- a diagonal cross puts
-no pixel on the row or column through its centre. Home was white, which is
-not one of the phosphor colours.
+no pixel on the row or column through its center. Home was white, which is
+not one of the phosphor colors.
 
 **The right-edge stripe is wiped.** The console is 66 columns of a 12-pixel
 font -- 792 of the panel's 800 -- so the last 8 pixels belong to no cell and
@@ -389,7 +389,7 @@ Stop at the first that misbehaves and revert.
    - The picture fills everything between them. **Fragments, a squeezed
      picture, or a stripe left on the right edge after `Esc` mean the
      repair did not take.**
-   - Spots are `+`; this station is an `×` in the same colour as the
+   - Spots are `+`; this station is an `×` in the same color as the
      coastline's brighter shade, not white.
    - `v` cycles two views, the USA and the world. There is no third.
    - **`F5` leaves the map as well as opening it**, and so does `Esc`.

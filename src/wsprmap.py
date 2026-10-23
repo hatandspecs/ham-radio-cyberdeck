@@ -215,8 +215,8 @@ SPOT_OFFSETS = PLUS
 SHAPES = {HEARD: PLUS}
 
 # This station. An `×`, so it is not one more `+` among the spots, and in
-# the scheme's own bright colour rather than white -- white is not one of
-# the phosphor colours and read as a fault.
+# the scheme's own bright color rather than white -- white is not one of
+# the phosphor colors and read as a fault.
 HOME = ((0, 0), (-1, -1), (1, 1), (-2, -2), (2, 2),
         (-1, 1), (1, -1), (-2, 2), (2, -2))
 
@@ -364,7 +364,7 @@ class SpotMap:
         """The station's own marker: an `×`, so it is not one more spot.
 
         Every spot is a `+`; this is the one thing on the map that is not,
-        which is what makes it findable without a colour of its own.
+        which is what makes it findable without a color of its own.
         """
         if not self.home:
             return []
@@ -372,7 +372,7 @@ class SpotMap:
         if xy is None:
             return []
         cx, cy = xy
-        # A set, because the arms share their centre and a doubled pixel is
+        # A set, because the arms share their center and a doubled pixel is
         # a doubled draw -- harmless on a framebuffer, misleading in a count.
         seen = set()
         for dx, dy in HOME:

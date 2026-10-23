@@ -118,7 +118,7 @@ def fldigi_server(radio, host="127.0.0.1", port=7362, quiet=True):
         with radio.lock:
             radio.mode = str(name)
             # Real fldigi moves the carrier to the modem's sweet spot on a
-            # mode change, which is exactly the behaviour _set_mode works
+            # mode change, which is exactly the behavior _set_mode works
             # around by reading the carrier and writing it back.
             radio.carrier = 1000
         return 0

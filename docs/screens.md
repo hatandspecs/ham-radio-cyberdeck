@@ -1,3 +1,8 @@
+# The screens — KD3CCO's cyberdeck
+
+Every screen below is rendered by the same functions the deck draws with,
+so none of them can drift from the code.
+
 ## The conversation screen
 
 ```
@@ -234,7 +239,7 @@ room for the values this menu exists to show.
 │  d  Decode                       on                              │
 │  t  Transmit                     off                             │
 │  n  Transmit next slot           off                             │
-│  e  Session                      general                         │
+│  e  Sessions                     general                         │
 │  b  Band                         20 m                            │
 │  p  Transmit percent             20%                             │
 │  o  Session ToT                  1 h                             │
@@ -407,8 +412,8 @@ per row. The mode label is from the regulation too where there is one --
 │  12m (CW/Data)                                   24.890 - 24.930 │
 │  12m (Phone)                                     24.930 - 24.990 │
 │                                                                  │
-│                                                                  │
 │──────────────────────────────────────────────────────────────────│
+│                                                                  │
 │ Esc back   ↑↓ move   ←→ page   Space license class               │
 └──────────────────────────────────────────────────────────────────┘
 ```

@@ -1,4 +1,4 @@
-# Logging contacts on the cyberdeck
+# Logging contacts on KD3CCO's cyberdeck
 
 A walk through the contact log: switching it on, logging an ordinary QSO, a
 park activation and a QSO party, and getting the contacts out afterward.
@@ -290,7 +290,36 @@ asking until it has name, QTH and grid, or runs out of providers.
 **What you typed always wins.** The lookup only fills blanks. You heard it on
 the air; the database is reading a license record that may be a decade old.
 
-### Filling them in later
+### The grid reaches the record even when the form has no field for it
+
+A schema chooses which fields get typed, and `general` has no grid field. The
+callbook still fetches one, and it is written onto the record anyway — the
+log format has always carried `grid` and exports it as `GRIDSQUARE`.
+
+This was broken until 2026-10-23: the answer was written into the form, the
+form had nowhere to put it, and it was dropped. Every contact KD3CCO logged
+under `general` reached the file without a grid, which is why the contact map
+had nothing to plot.
+
+### Filling them in later, on the deck
+
+`F1` `z` `f` from the log screen — **Fill in missing details**, on the danger
+zone menu. It looks up every callsign in the log missing a grid, name or QTH
+and fills the gaps from HamQTH.
+
+It is on that menu because it rewrites the whole file in one pass, which is
+what the rest of that screen has in common — not because it destroys
+anything. It is the only line there that does not.
+
+One query per **callsign**, not per contact: four QSOs with one station are
+one lookup and the answer fills all four. It runs in the background and
+writes once at the end, so a session of several hundred contacts is one
+atomic rewrite rather than hundreds.
+
+**It fills gaps and never corrects.** A callbook is evidence; what you typed
+at the time is testimony.
+
+### Filling them in later, from a terminal
 
 Logged a park with the WiFi off? Run `qso.py backfill` when you are back on a
 network. It looks up every call still missing a name or grid and remembers the
@@ -332,6 +361,22 @@ BPSK31.
 One sharp edge worth knowing: with **no CAT connection at all**, `auto` leans
 digital, because the deck is a digital terminal first. If you are working SSB
 from a park with no CAT cable, set `the rig, always`.
+
+---
+
+## 5a. The map — `F5`
+
+`F5` on the log screen, or `F1` `g`. `F5` again or `Esc` returns.
+
+Every contact of the **current activity** that carries a grid, on the panel.
+The top row names the activity and says how many contacts could not be
+plotted — a map showing eleven of forty with nothing saying so reads as a map
+of a quiet weekend rather than a log missing its grids.
+
+`v` cycles two views: the continental USA, and the world.
+
+This is what the grid is for. A park activation drawn on the panel answers
+"how far did this wire actually get out" before the log ever leaves the deck.
 
 ---
 

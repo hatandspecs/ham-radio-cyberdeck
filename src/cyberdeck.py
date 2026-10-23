@@ -4054,7 +4054,7 @@ class Deck:
     def _log_from_transcript(self):
         """`^G`: log the station named in the most recent received line.
 
-        Three behaviours, cycled from the digimodes menu, because the right
+        Three behaviors, cycled from the digimodes menu, because the right
         one depends on whether the operator is mid-conversation or mopping up
         afterwards. All three read the same source -- a RECEIVED line, where
         the token after `DE` is the other station. A transmitted line names
@@ -4093,7 +4093,7 @@ class Deck:
         _i, call, _text = found[at]
 
         # `_open_log` ends on the log screen, which is right for one of the
-        # three behaviours and wrong for the other two. The screen is put
+        # three behaviors and wrong for the other two. The screen is put
         # back, and the move to LOG made below where it is meant.
         if self.log_form is None:
             here = self.screen
@@ -4207,22 +4207,32 @@ class Deck:
         return sm
 
     def _map_stamp(self, which):
-        """A cheap staleness check: the log's size and modification time.
+        """Everything the picture depends on, cheaply.
 
-        **Not a record count.** Counting meant reading and parsing the whole
-        spot log on every frame, which is most of the work the cache exists
-        to avoid -- the map still took seconds to open and seconds to change
-        view. `os.stat` is one syscall and changes whenever a spot is
-        appended, which is the only way the map can go stale.
+        **The file is not the whole of it.** The map is scoped to a session,
+        and starting a new one writes nothing -- so a stamp made only of the
+        log's size and modification time did not change, the cache answered,
+        and a brand new session with no spots drew the previous session's
+        few thousand. Found on the panel 2026-10-23. The same hole was in
+        the contact map, where switching activity changes which records are
+        shown and leaves the whole log's length alone.
+
+        `os.stat` is one syscall and changes whenever a spot is appended,
+        which is the other way the map can go stale. Counting records meant
+        reading and parsing the log on every frame, which is most of the
+        work the cache exists to avoid.
         """
         if which != WSPRMAP:
-            return len(self.log_records)
+            return (len(self.log_records), self._activity_name(),
+                    self._activity_start())
         import wsprlog
+        session = (str(self.cfg.get("WSPR_SESSION", "") or ""),
+                   str(self.cfg.get("WSPR_SESSION_START", "") or ""))
         try:
             st = os.stat(wsprlog.log_path(self.cfg.get("WSPR_LOG_PATH", "")))
-            return (st.st_size, st.st_mtime_ns)
+            return (st.st_size, st.st_mtime_ns) + session
         except OSError:
-            return 0
+            return (0, 0) + session
 
     def _wspr_map_records(self):
         """The spots the map plots: THIS SESSION's, not the whole log.
@@ -4373,7 +4383,7 @@ class Deck:
         basemap -- 345,600 of them -- and that was happening five times a
         second for a picture that had not changed. The cache is keyed on
         everything the picture depends on: the view, the records, and the
-        colour scheme.
+        color scheme.
         """
         import fbdraw
         key = (self._map_view(), self._map_stamp(self.screen), self.scheme,
@@ -4405,9 +4415,9 @@ class Deck:
                     coast.append((x, y + top))
         canvas.points(coast, dim)
         canvas.points([(x, y + top) for x, y, _b, _d in sm.pixels()], bright)
-        # This station in the scheme's own bright colour, not white. Its `×`
+        # This station in the scheme's own bright color, not white. Its `×`
         # is what tells it apart from the spots, which are all `+`; white is
-        # not one of the phosphor colours and read as a fault on the panel.
+        # not one of the phosphor colors and read as a fault on the panel.
         canvas.points([(x, y + top) for x, y in sm.home_pixels()], bright)
         self._canvas_cache = (key, (canvas, top, base.height))
         return canvas.write(from_row=top, rows=base.height)
@@ -4927,7 +4937,8 @@ class Deck:
             # distrust the confirmation that really does delete.
             self._ask_confirm(
                 "FORGET THIS SESSION",
-                [f"{row['name']}  {str(row['start'])[:10]}".strip(),
+                [f"{row['name']}  "
+                 f"{str(row['start'])[:16].replace('T', ' ')}Z".strip(),
                  "",
                  f"Its {heard} spot{'' if heard == 1 else 's'} and "
                  f"{sent} transmission{'' if sent == 1 else 's'} stay in",
@@ -5783,7 +5794,7 @@ class Deck:
         """Write the mode and carrier once they have stopped changing.
 
         `_save_state` used to run only from menu actions, so the file held
-        whatever happened to be true at the last colour change or memory edit
+        whatever happened to be true at the last color change or memory edit
         — a snapshot of an unrelated moment. Tuning with the search and nudge
         keys never triggered it at all, so a deck tuned to 1500 and restarted
         came back on a carrier from an hour earlier, and a mode to match. It
@@ -6622,7 +6633,7 @@ class Deck:
             return
         # What the radio is doing, or — when it cannot be asked — what was
         # remembered about it. Writing a null here instead was a quiet way to
-        # forget: every _save_state from a colour change or a memory edit runs
+        # forget: every _save_state from a color change or a memory edit runs
         # whether or not fldigi is answering, so one of those while it was
         # down erased the mode and carrier the operator had chosen.
         if self.fldigi.connected and self._startup_done:
@@ -6853,7 +6864,7 @@ class Deck:
                 nxt = decall.next_mode(
                     str(self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH)))
                 self.cfg["LOG_HOTKEY"] = nxt
-                # The menu stays open: cycling three behaviours by reopening
+                # The menu stays open: cycling three behaviors by reopening
                 # the menu between each press is two keystrokes of noise per
                 # step. The label redraws with the new one.
                 return True

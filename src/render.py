@@ -449,7 +449,7 @@ BIG_ROWS = 5
 
 
 def big_number(text, width):
-    """`text` as five rows of block characters, centred in `width`.
+    """`text` as five rows of block characters, centerd in `width`.
 
     Anything without a glyph falls back to the plain string rather than
     disappearing: a passkey BlueZ sends in an unexpected shape must still be
@@ -956,7 +956,9 @@ def wspr_sessions_screen(rows, selected, width, height, current=("", ""),
     """
     out = []
     head = " WSPR SESSIONS"
-    right = f"{len(rows)} " if rows else ""
+    # UTC said once, in the header, rather than on a footer that has no
+    # room left for it. Every time on this screen is the log's own.
+    right = f"UTC   {len(rows)} " if rows else ""
     pad = max(1, width - len(head) - len(right))
     out.append([((head + " " * pad + right)[:width].ljust(width), "reverse")])
     out.append(rule(width))
@@ -974,13 +976,18 @@ def wspr_sessions_screen(rows, selected, width, height, current=("", ""),
     for i, row in enumerate(shown, start=page * body):
         mark = "\u25b8" if i == selected else " "
         here = (row.get("name", ""), row.get("start", "")) == tuple(current)
-        # The day, not the timestamp: two runs under one name are told apart
-        # by when they began, and the date is what an operator remembers.
-        day = str(row.get("start", ""))[:10] or "--"
+        # **The date AND the hour, in UTC.** Not the day alone: what a WSPR
+        # session is evidence about is propagation, and propagation is a
+        # function of time of day. Two runs on one date at different hours
+        # are two different questions, and under one name they were
+        # indistinguishable on this list.
+        began = str(row.get("start", ""))
+        when = (began[:16].replace("T", " ") + "Z") if len(began) >= 16 \
+            else (began[:10] or "--")
         counts = f"{row.get('heard', 0)}/{row.get('sent', 0)}"
-        bands = " ".join(row.get("bands", [])[:4])
-        line = (f"{mark}{'*' if here else ' '}{row.get('name', ''):<14}"
-                f"{day:<12}{counts:>9}  {bands}")
+        bands = " ".join(row.get("bands", [])[:3])
+        line = (f"{mark}{'*' if here else ' '}{row.get('name', ''):<13}"
+                f"{when:<18}{counts:>9}  {bands}")
         out.append([(line[:width].ljust(width),
                      "bright" if i == selected else "")])
 
@@ -1673,12 +1680,12 @@ def log_extra_rows(rec, fields, width, rows):
     """`rows` continuation lines of `label value` pairs, wrapped and padded.
 
     Labelled rather than columnar: rows of different shapes cannot share one
-    set of column headings, and an unlabeled `PA Centre FN10` stops being
+    set of column headings, and an unlabeled `PA Center FN10` stops being
     readable the moment one of the three is missing.
 
     **A field is never split across two rows.** One that does not fit in what
     is left of a row starts the next one instead, which is what makes the rows
-    readable at a glance -- a `Coun` at the end of one row and `ty Centre` at
+    readable at a glance -- a `Coun` at the end of one row and `ty Center` at
     the start of the next is worse than a short row. A field too wide for a
     whole row is clipped with `...`, because it can never fit anywhere and
     dropping it silently would hide what is in the log.

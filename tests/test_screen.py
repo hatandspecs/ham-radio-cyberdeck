@@ -128,6 +128,20 @@ def show(title, screen):
 # settings | log | digimodes | WSPR -- so one `^O` back from the boot
 # screen now wraps onto WSPR and every scenario below read the wrong
 # screen. Named here so the next area costs one edit per file.
+# **The rig mode is SET here, not assumed.** fldigi keeps it between runs,
+# and a voice mode makes the deck park the decoder -- correctly, that is
+# `_watch_rig_mode` -- which leaves no modem name in the status line and
+# fails the first check below. `test_menu_arrows` needs the opposite, a
+# non-data mode, to exercise the Ctrl-B refusal, so neither file can rely on
+# what the other left behind. They flapped against each other for a whole
+# session depending on which ran last.
+try:
+    sys.path.insert(0, _SRC)
+    from fldigi_client import Fldigi as _Fldigi
+    _Fldigi().set_rig_mode("PKTUSB")
+except Exception:
+    pass
+
 TO_CHAT = "\x0f\x0f\x0f"
 # Three hops: the ring is five areas now (the band plan joined it),
 # and `^O` x3 lands on the conversation whether or not logging is on --

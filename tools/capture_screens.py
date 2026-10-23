@@ -209,6 +209,12 @@ def wifi_screen():
 
 if __name__ == "__main__":
     s = scripted_session()
+    # A title, and whose deck these are. `docs/screens.md` is generated, so
+    # anything written into that file by hand is destroyed on the next run --
+    # which is why this lives here.
+    print("# The screens — KD3CCO's cyberdeck\n")
+    print("Every screen below is rendered by the same functions the deck "
+          "draws with,\nso none of them can drift from the code.\n")
     print("## The conversation screen\n")
     print("```")
     print(frame(compose_chat(s, FIELDS)))

@@ -242,10 +242,10 @@ def maps(cols, rows):
     def built(view, spots, noun="spot", title=""):
         base = wsprmap.load(view=view)
         sm = wsprmap.SpotMap(base, home=grid.to_latlon(HOME))
-        for locator, band, kind in spots:
-            sm.add_grid(locator, band,
-                        wsprmap.HEARD if kind == "heard"
-                        else wsprmap.HEARD_BY)
+        # One direction: every point is a station this deck HEARD. Who heard
+        # IT is on wsprnet and was never in the spot log to draw.
+        for locator, band, _kind in spots:
+            sm.add_grid(locator, band, wsprmap.HEARD)
         return sm, render.map_overlay(sm.summary(noun), view, cols,
                                       title=title)
 

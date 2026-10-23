@@ -1,4 +1,4 @@
-# Keyboard-to-Keyboard Cyberdeck — Design
+# Keyboard-to-Keyboard Cyberdeck — Design, KD3CCO
 
 A self-contained HF/VHF text terminal: a repurposed Raspberry Pi 3A+, a screen, a
 Bluetooth keyboard, and a Yaesu FTX-1 on the Pi's single USB port. fldigi runs
@@ -782,7 +782,7 @@ happened, so there is no window in which the deck can record a mode it has not
 yet chosen. `_load_state` stashes the remembered mode and carrier rather than
 sending them, because at that point there may be nothing to send them to.
 
-The same reasoning applies to `_save_state` itself, which runs from colour
+The same reasoning applies to `_save_state` itself, which runs from color
 changes and memory edits whether or not fldigi is reachable and wrote a null
 mode when it was not — erasing the remembered mode for a reason having nothing
 to do with the radio. It now writes back what is still pending instead.
