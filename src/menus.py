@@ -705,7 +705,10 @@ def wspr_menu(state=None):
         ("n", f"Transmit next slot           {onoff('tx_next')}"),
 
         # -- the session ---------------------------------------------------
-        ("e", f"Session                      "
+        # Named like the logging menu's Activity line, and it opens the
+        # same kind of screen: the list, from which one is resumed, started,
+        # renamed or forgotten.
+        ("e", f"Sessions                     "
               f"{st.get('session') or '(none)'}"),
         ("b", f"Band                         {band}"),
 

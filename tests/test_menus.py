@@ -417,4 +417,19 @@ row = dict(menus.wspr_menu({"timeout_minutes": 720})["items"])["o"]
 check("the WSPR menu shows twelve hours", "12 h" in row, row)
 check("and still names it the session's", "Session ToT" in row, row)
 
+print("\nthe WSPR menu reaches the session list, as F2 does")
+# It went straight to the name editor, which can only START a session -- so
+# the menu offered no way back into an earlier one, and the list was
+# reachable from `F2` alone. An operator looking for it looked at the menu.
+_st = {"session": "general", "band": "20 m", "wspr": True, "decode": True,
+       "transmit": False, "tx_next": False, "hopping": False, "hop_count": 1,
+       "tx_percent": 20, "timeout_minutes": 60, "upload": "on",
+       "log_name": "wspr.log", "heard": 455, "sent": 1, "tx_level": 35,
+       "rx_gain": 100, "dbfs": -37.0}
+_items = dict(menus.wspr_menu(_st)["items"])
+check("the line is there", "e" in _items, sorted(_items))
+check("named as a list, like the logging menu's activities",
+      _items["e"].startswith("Sessions"), _items["e"])
+check("and it shows the one in use", "general" in _items["e"], _items["e"])
+
 sys.exit(report())

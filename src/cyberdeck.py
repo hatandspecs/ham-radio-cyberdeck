@@ -7011,10 +7011,13 @@ class Deck:
                 self.wspr.arm_tx_next(time.time())
                 self._wspr_note("beaconing on the next slot")
             elif key == "e":
+                # The session LIST, as `F2` opens it and as the logging
+                # menu's Activity line opens the activities list. It went
+                # straight to the name editor, which could only start a new
+                # session -- so the menu offered no way back into an earlier
+                # one and the list was reachable from `F2` alone.
                 self._close_menu()
-                self._open_editor(None, "WSPR session name",
-                                  text=self.cfg.get("WSPR_SESSION", ""),
-                                  sink=self._wspr_set_session)
+                self._open_wspr_sessions()
                 return True
             elif key == "b":
                 self._open_menu("wspr_band")
