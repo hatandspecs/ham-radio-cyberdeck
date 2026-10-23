@@ -130,13 +130,17 @@ print("\nan empty map still says it is empty")
 sm = wsprmap.SpotMap(wsprmap.load(view="global"))
 equals("no spots yet", sm.summary(), "no spots yet")
 
-print("\nEsc goes back to the screen the map was opened from")
+print("\nEsc and F5 both go back to the screen the map was opened from")
+# `F5` both ways: it is the key that opened the map from the screen
+# underneath, so pressing it again is the obvious way out. `Esc` still
+# works, as it does everywhere on the deck.
 for which, home in ((cyberdeck.WSPRMAP, cyberdeck.WSPR),
                     (cyberdeck.LOGMAP, cyberdeck.LOG)):
-    d = deck(which)
-    d._map_state()
-    d._handle_map(which, 27)
-    equals(f"{which} returns to {home}", d.screen, home)
+    for key, label in ((27, "Esc"), (curses.KEY_F5, "F5")):
+        d = deck(which)
+        d._map_state()
+        d._handle_map(which, key)
+        equals(f"{which}: {label} returns to {home}", d.screen, home)
 
 print("\nthe log map is reachable from the log screen, and said so")
 # F5 rather than a letter: every printable key on that screen types into the

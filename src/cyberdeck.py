@@ -4455,7 +4455,10 @@ class Deck:
         key = chr(ch).lower() if 32 <= ch < 127 else ""
         state["msg"] = ""
 
-        if ch == 27:
+        if ch == 27 or ch == curses.KEY_F5:
+            # `F5` both ways. It is the key that opened the map from the
+            # screen underneath, so pressing it again is the obvious way
+            # back -- `Esc` still works, as it does everywhere.
             self._map_left()
             self.screen = WSPR if which == WSPRMAP else LOG
         elif key == "v":

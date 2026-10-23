@@ -69,12 +69,13 @@ f.start_over("SORRY ABOUT THAT")
 adds = [a[0] for n, a in rec.calls if n == "text.add_tx"]
 equals("each over added its own text", adds,
        ["CQ CQ DE KD3CCO KD3CCO K", "SORRY ABOUT THAT"])
-cleared = rec.names().index("text.clear_tx")
-equals("and the widget was emptied between them",
-       rec.names()[cleared + 1], "main.tx")
-check("the clear falls between the two overs",
-      rec.names().index("main.abort") < cleared
-      < len(rec.names()) - 1, rec.names())
+# The whole sequence, in order. The clear has to fall between the abort and
+# the second over's text, or that text goes out behind the first over's
+# remainder.
+equals("the calls, in order", rec.names(),
+       ["text.add_tx", "main.tx",          # the first over
+        "main.abort", "text.clear_tx",     # stopped, and the tail dropped
+        "text.add_tx", "main.tx"])         # the second, on its own
 
 print("\nhanding back does NOT clear — the buffer is what is draining")
 # `hand_back` puts a "receive when drained" mark in the stream. Clearing

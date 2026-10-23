@@ -1,12 +1,14 @@
 # Scratch notes — pending deploy
 
-**Everything below is tested and uncommitted as of 2026-10-23.** Five rounds
+**Everything below is tested and uncommitted as of 2026-10-23.** Six rounds
 of work are pending and one deploy carries all of them, because the
 procedure replaces the whole directory rather than patching it:
 
+- **2026-10-23e — the fourth hardware session.** An aborted over leaving
+  its tail for the next one, the interlock scoped to digimodes and WSPR,
+  the transcript cleaned out, the tuner's dwell timed from arrival.
 - **2026-10-23d — the third hardware session.** The tuner's silent CAT
-  failure, the map's performance, the transcript, the callbook's grid, and
-  a grid backfill in the logger's danger zone.
+  failure, the map's performance, the callbook's grid, the backfill.
 - **2026-10-23c — the second hardware session.** The map simplified to one
   key, the tuner's dwell made reachable, the bulk selections and locks
   removed.
@@ -214,6 +216,38 @@ Should print the dial frequency in hertz. An error or a hang is the radio,
 the USB lead or rigctld — not the deck software, and the tuner will now say
 so rather than pretending to sweep.
 
+### 2026-10-23e — the fourth hardware session
+
+**An aborted over left its tail for the next one.** `start_over` and
+`send_more` reach fldigi through `text.add_tx`, which APPENDS, and
+`main.abort` drops the carrier without emptying the widget -- so the next
+over went on the air behind a fragment of the abandoned one. `Fldigi.abort`
+now stops the transmitter and then discards the unsent text, in that order.
+**This put wrong text on the air** and is the reason to deploy before the
+next session.
+
+**The data-mode interlock belongs to digimodes and WSPR.** `^B` refused to
+ARM transmit whenever the radio was not in a data mode, on every screen. The
+auto tuner keys the radio to match an antenna and does not care what mode it
+is in, so refusing there made `^B` look dead on the one screen whose header
+had just been given an INH indicator. Inhibiting is still never refused
+anywhere: a safety control that can fail to engage is not one.
+
+**Every refusal is readable from the screen that raised it.** `^B` reaches
+every screen and its refusal went to the transcript, which most of them do
+not draw.
+
+**The transcript carries only what went over the air.** WiFi, Bluetooth
+pairing, the keyboard notice, a failed settings save and the auto tuner's
+own progress each went into it. They go to their own screens now. The band
+plan gained a message line, which it had not had.
+
+**The tuner's dwell starts when the VFO arrives.** It ran from a fixed 0.3 s
+settle, which is a guess: too short and the tuner matches the previous
+frequency, too long and every step pays for the worst case. The radio is
+read back instead. A rig that cannot be read falls back to the fixed settle;
+one that can be read and never arrives is a fault and says so.
+
 ### 2026-10-23c — what the second hardware session found
 
 The repairs below held: the map drew, the tuner swept 17 m, the interlock
@@ -358,6 +392,7 @@ Stop at the first that misbehaves and revert.
    - Spots are `+`; this station is an `×` in the same colour as the
      coastline's brighter shade, not white.
    - `v` cycles two views, the USA and the world. There is no third.
+   - **`F5` leaves the map as well as opening it**, and so does `Esc`.
    - The count is this SESSION's spots, not every spot the deck has.
 3. **`F2` on the WSPR screen opens the session list.** `*` marks the one in
    use. `Enter` on another resumes it and the spot list fills with that
@@ -371,9 +406,16 @@ Stop at the first that misbehaves and revert.
    Nothing already in the log changes. Afterwards `F5` should show contacts
    on the map that were not there before.
 8. **The transcript carries only on-air traffic.** Cycling the band plan's
-   class, saving a ring order and the export page closing should each leave
-   it untouched.
-9. **`F1` `3` opens the auto tuner.**
+   class, saving a ring order, joining WiFi, pairing a keyboard, and the
+   auto tuner starting and stopping should each leave it untouched and
+   report on their own screen.
+9. **Abort an over partway, then send a different one.** Only the second
+   message goes out. A fragment of the first ahead of it is the fault this
+   round fixed, and it put wrong text on the air.
+10. **`^B` on the auto tuner arms transmit** with the radio in USB. On the
+    digimodes and WSPR screens it still refuses until the radio is in a
+    data mode, and says so on that screen rather than in the transcript.
+11. **`F1` `3` opens the auto tuner.**
    - The header carries `INH` or `INH off`, and `^B` flips it without
      leaving the screen.
    - The footer reads `+ - dwell 5s`. `+` and `-` step it by half a second
@@ -383,6 +425,9 @@ Stop at the first that misbehaves and revert.
    - With the interlock off and rigctld answering, `Enter` sweeps: the VFO
      moves, the progress line counts, `^X` stops it. **One segment for the
      first run.**
+   - The dwell starts when the radio reports itself on the new frequency,
+     not a fixed moment after the command. A radio that accepts the command
+     and never moves fails the run rather than tuning on the old frequency.
    - **If the radio is not answering it now fails immediately** with "no rig
      control — is rigctld running?" rather than counting through a sweep
      that reaches nothing. That message means the rig, not the deck: see the
