@@ -2513,13 +2513,30 @@ class Deck:
         act = activities.get(name, table or self._activity_table())
         self.cfg["ACTIVITY_TYPE"] = "" if act.name == "GENERAL" else act.name
         carried = {}
+        prefilled = {}
         if self.log_form is not None:
             carried = {k: self.log_form.value(k)
-                       for k in ("my_park", "exchange_tx", "comment")}
+                       for k in ("exchange_tx", "comment")
+                       + logform.OWN_REFS}
+            # The radio and the Station menu have not changed because the
+            # schema did, so these come across too -- with their `touched`
+            # flags, which is what makes a hand correction survive the next
+            # poll. Without this a corrected mode was discarded by a schema
+            # change, which is why `typed()` used to count one and refuse the
+            # change: `commit` and `clear` both leave `touched` alone on
+            # these, so one correction latched the refusal permanently and
+            # the schema could not be changed again. Found on the deck
+            # 2026-10-23.
+            for key in logform.PREFILLED:
+                field = self.log_form.field(key)
+                if field is not None and field.value:
+                    prefilled[key] = (field.value, field.touched)
         self.log_form = logform.LogForm(act)
         for key, value in carried.items():
             if value:
                 self.log_form.set(key, value)
+        for key, (value, was_touched) in prefilled.items():
+            self.log_form.set(key, value, touch=was_touched)
         for key, setting in (("my_park", "MY_PARK"),
                              ("exchange_tx", "EXCHANGE_TX")):
             if not self.log_form.value(key) and self.cfg.get(setting):
@@ -5101,28 +5118,31 @@ class Deck:
                        f"{'' if moved == 1 else 's'} relabeled")
 
     def _start_named_activity(self, name):
-        """Name a new activity, then ask which type it uses.
+        """Name a new activity. The schema is a separate decision.
 
-        Naming it and dropping straight into the log screen left the type at
-        whatever the last activity used, which is wrong more often than right:
-        a new activity is usually new because the operating is different. So
-        the type picker comes next, and that picker is also where a type can
-        be copied or created -- the whole decision in one place.
+        It used to open the type picker straight afterwards, on the reasoning
+        that a new activity is usually new because the operating is different.
+        That made naming an activity and choosing a schema one act, and the
+        two are not one act: the schema is a property of how contacts are
+        typed and an activity is a property of when and where they happened.
+        An operator naming the second park of the day wants the schema they
+        already have. `F3` opens the picker when it IS wanted.
+
+        What survives from that flow is the question it was really there to
+        ask -- this station's own reference, below.
         """
         self._set_activity_session(name)
         # A new activity is a new activation, so this station's own reference
         # is unknown until it is stated. Carrying the last one over would log
-        # last week's park onto today's contacts without saying so, and the
-        # type picker that comes next is what asks for the new one.
+        # last week's park onto today's contacts without saying so.
         if name and self.cfg.get("MY_PARK"):
             self._set_my_park("")
-        # The log screen goes underneath first. The picker is a menu drawn over
-        # whatever screen is current, and leaving the activities list there
-        # means backing out of the picker lands on the list the operator has
-        # already finished with.
         self.screen = LOG if self.log_on else CHAT
+        # Cleared above, so an activating schema asks for the new one here.
+        # Without this the picker's departure took the question with it and
+        # the reference was silently blank for the whole activation.
         if name:
-            self._open_menu("activity")
+            self._ask_my_park()
 
     def _ask_forget_all_sessions(self):
         """Confirm, then empty the deck's list of activities.

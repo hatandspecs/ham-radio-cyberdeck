@@ -473,16 +473,25 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
 # actually does is in docs/qso_log_design.md §6; the panel only has room to
 # say which of the three is selected.
 def needs_reference(activity_type):
-    """Whether an activity TYPE puts this station's reference on every contact.
+    """Whether an activity TYPE puts this station's OWN reference on every
+    contact, and so should be asked for it once.
 
-    Asked of the type rather than hard-coded, so an operator who defines a
-    WWFF or IOTA type with a `park` field gets the setting without anyone
-    editing this file.
+    Asked of the type rather than hard-coded, so an operator who defines their
+    own activating schema gets the setting without anyone editing this file.
+
+    It asks about `my_park` and not `park`. Those were one question until the
+    own-side references became selectable: keyed on the their-side field, a
+    hunting schema was asked which park THIS station was in, which is a
+    question a hunter has no answer to.
+
+    Only `my_park`, because the editor behind this writes the `MY_PARK`
+    setting. A schema selecting `my_sota` or `my_wwff` gets a sticky field
+    typed once and no prompt -- see the note in `qso_log_design.md` §7j.
     """
     try:
         import activities as _acts
         act = _acts.get(activity_type, _acts.load())
-        return act.wants("park")
+        return act.wants("my_park")
     except Exception:
         return str(activity_type or "").upper() in ("POTA", "SOTA", "WWFF")
 

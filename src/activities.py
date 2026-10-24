@@ -134,6 +134,24 @@ ENTRY_FIELDS = {
     "iota":        (TEXT,   "IOTA"),
     "sota":        (REF,    "SOTA"),
     "wwff":        (REF,    "WWFF"),
+    # THIS station's own program references, one per program, each selectable
+    # on its own. They used to be welded to the their-side field: `my_park`
+    # appeared whenever `park` did and could not appear without it, so a
+    # hunting schema carried an own-reference field it never filled -- and was
+    # asked to fill it -- while an activating schema could not have one
+    # without a their-park column it never filled. Two questions, two fields.
+    #
+    # Each exports to its own program's ADIF field rather than through
+    # SIG/MY_SIG, because SOTA, WWFF and IOTA all have dedicated ones. POTA is
+    # the exception that needs both spellings; see `qsolog.adif_record`.
+    #
+    # Sticky, like the exchange and the comment: one activation is one
+    # reference, and typing it on every contact is the thing a setting exists
+    # to stop. `^U` on the field turns that off.
+    "my_park":     (REF,    "My ref"),
+    "my_sota":     (REF,    "My SOTA"),
+    "my_wwff":     (REF,    "My WWFF"),
+    "my_iota":     (TEXT,   "My IOTA"),
     "sat_name":    (TEXT,   "Sat"),
     "prop_mode":   (TEXT,   "Prop"),
     "age":         (NUMBER, "Age"),
@@ -160,8 +178,14 @@ def pick_key(i):
     """The character that jumps to row `i`, or "" past the end of the keys."""
     return PICK_KEYS[i] if 0 <= i < len(PICK_KEYS) else ""
 
-# Settings an activity can draw on, each the same for every contact of an event.
-STATION_FIELDS = ("my_park", "exchange_tx")
+# Settings an activity can draw on, each the same for every contact of an
+# event. `exchange_tx` is still implied by `exchange_rx` rather than selected:
+# an event that exchanges something always exchanges it both ways, so there is
+# no second question to ask. The own-side REFERENCES are not here any more --
+# they are selectable fields, because activating and hunting are different
+# things and a schema has to be able to say which.
+STATION_FIELDS = ("exchange_tx",)
+OWN_REFS = ("my_park", "my_sota", "my_wwff", "my_iota")
 
 
 # What each field is, in the operator's words rather than the parser's. Shown
@@ -172,7 +196,7 @@ FIELD_HELP = {
     "rst_r": "report received",
     "serial_rx": "their serial number",
     "exchange_rx": "their exchange — class, section",
-    "park": "their park or summit ref",
+    "park": "their park — POTA",
     "name": "their name",
     "qth": "where they are",
     "grid": "their grid square",
@@ -191,6 +215,10 @@ FIELD_HELP = {
     "iota": "their IOTA reference",
     "sota": "their summit reference",
     "wwff": "their WWFF reference",
+    "my_park": "YOUR park — activating",
+    "my_sota": "YOUR summit — activating",
+    "my_wwff": "YOUR WWFF ref — activating",
+    "my_iota": "YOUR IOTA reference",
     "sat_name": "satellite worked",
     "prop_mode": "propagation — SAT, EME, MS",
     "age": "their age, some contests",
@@ -287,8 +315,11 @@ BUILTIN = {
     "GENERAL": GENERAL,
     # Hunting is typed; this station's own reference is a setting. Reports
     # first, because a park contact is still a signal report.
+    # Both sides of a park contact: theirs for a park-to-park or a hunt, and
+    # this station's own for an activation. `my_park` is listed rather than
+    # implied -- an operator who only hunts copies this and removes it.
     "POTA": ActivityType("POTA", label="Parks on the Air",
-                     entry=("rst_s", "rst_r", "park", "name"),
+                     entry=("rst_s", "rst_r", "park", "my_park", "name"),
                      sig="POTA", labels={"park": "Park"}),
     # A serial-and-exchange event, both directions. Reports are deliberately
     # NOT in the grammar: in a contest they are 59 every time and typing them

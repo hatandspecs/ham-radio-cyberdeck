@@ -20,16 +20,35 @@
 #   rst_r        signal report received      (report)
 #   serial_rx    their serial number         (number)
 #   exchange_rx  their exchange              (text)
-#   park         their POTA/SOTA reference   (found by shape, any activity)
+#   park         THEIR park -- POTA          (reference)
+#   sota         THEIR summit                (reference)
+#   wwff         THEIR WWFF reference        (reference)
+#   iota         THEIR island                (text)
+#   my_park      YOUR park -- activating     (reference, sticky)
+#   my_sota      YOUR summit                 (reference, sticky)
+#   my_wwff      YOUR WWFF reference         (reference, sticky)
+#   my_iota      YOUR island                 (text, sticky)
 #   name         their name                  (text)
 #   qth          their location              (text)
+#
+# Thirty-two in all; `F3` on the log screen lists every one with a line of
+# help. The two SIDES are separate fields, and that is the whole difference
+# between activating and hunting: take `park` to hunt, `my_park` to activate,
+# both for a park-to-park. The own-side fields are sticky -- typed once per
+# activation -- and `^U` on one turns that off.
+#
+# Use the field that matches the PROGRAM. Each exports to its own ADIF field
+# (`SOTA_REF`/`MY_SOTA_REF` and so on), so a summit logged in `park` is
+# written as a POTA reference.
 #
 # A text field takes one token, except in the LAST position where it takes the
 # rest of the line -- which is how "1B EPA" is one Field Day exchange while
 # "Bob Pittsburgh PA" still splits into a name and a QTH.
 #
-# What THIS station sends is not typed per contact: EXCHANGE_TX and MY_PARK are
-# settings in cyberdeck.conf, and the serial increments on its own.
+# What THIS station sends by way of an exchange is not typed per contact:
+# EXCHANGE_TX is a setting in cyberdeck.conf, appearing whenever a schema takes
+# `exchange_rx`, and the serial increments on its own. Your own REFERENCE is a
+# field you select, and MY_PARK remembers it between sessions.
 #
 # Built in: GENERAL, POTA, CONTEST -- and only those three. Everything
 # below is an example to copy and change, which is what `like` is for.
@@ -60,19 +79,35 @@ label_exchange_rx = Prec + Check + Section
 label = Exchange before number
 entry = exchange_rx, serial_rx
 
-# Summits on the Air. Same shape as POTA with a different word and SIG value.
-[SOTA]
-like = POTA
-label = Summits on the Air
-sig = SOTA
-label_park = Summit
+# Hunting parks: THEIR reference and nothing of your own. No own-reference
+# field on the form, and nothing asks which park you are in.
+[HUNT]
+label = Park hunting
+entry = rst_s, rst_r, park, name
 
-# World Wide Flora and Fauna.
+# Activating a park: YOUR reference, typed once, and no their-park column.
+[ACTIVATE]
+label = Park activation
+entry = rst_s, rst_r, my_park, name
+
+# Summits on the Air. `sota` and `my_sota`, NOT `park` -- each program has its
+# own ADIF field on both sides, and a summit put in `park` is exported as a
+# POTA reference. (`sig` is parsed and read by nothing; it is not the way to
+# say "this is really SOTA".)
+[SOTA]
+label = Summits on the Air
+entry = rst_s, rst_r, sota, my_sota, name
+
+# World Wide Flora and Fauna, the same way.
 [WWFF]
-like = POTA
 label = World Wide Flora and Fauna
-sig = WWFF
-label_park = Reference
+entry = rst_s, rst_r, wwff, my_wwff, name
+
+# One site in two programs: a park that is also a WWFF reference. Both own-side
+# fields, each written to its own ADIF field.
+[PARK-AND-WWFF]
+label = Park and WWFF activation
+entry = rst_s, rst_r, my_park, my_wwff, name
 
 # Field Day: a class and a section, no serial. `exchange_rx` is last, so it
 # takes the rest of the line -- "1B EPA" is one exchange, not two fields.

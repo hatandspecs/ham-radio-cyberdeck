@@ -1266,8 +1266,19 @@ to clear it, then change schema.
 
 What counts as part-typed is what the operator put there — `LogForm.typed()`
 — and not what the deck prefilled. A `599` nobody touched, a serial the log
-handed out, the frequency off the radio and the sticky own-side fields are
-all carried or recomputed, so none of them block a change.
+handed out, the frequency, mode and power off the radio, the rig and antenna
+off the Station menu, and the sticky own-side fields are all carried or
+recomputed, so none of them block a change.
+
+**The prefilled fields are carried with their `touched` flags.** That flag is
+what makes a hand-corrected mode survive the next poll from the radio, and
+`commit` and `clear` both leave it alone on these fields for the same reason.
+`typed()` therefore cannot read it: it counted a prefilled field whenever the
+flag was set, so one correction to the mode latched the refusal for the life
+of the form and the schema could not be changed again — while the message
+named `^X`, which clears everything except these. `_set_activity_type` carries
+value and flag together, and `typed()` skips the prefilled fields outright.
+Reported from the deck 2026-10-23; `test_schema_change.py` holds it.
 
 ### "Logging under the name again brings it back" is now true
 
@@ -1280,6 +1291,100 @@ reappear in the list.
 Dropping by name rather than by `(name, start)` is deliberate: the operator
 types a name, not a timestamp, and "bring back the park I worked last month"
 cannot mean one activation of it and not another.
+
+## 7j. Activating and hunting are different schemas
+
+Each program's own-side reference is a selectable field: `my_park`,
+`my_sota`, `my_wwff`, `my_iota`, beside the their-side `park`, `sota`, `wwff`
+and `iota`. An activity names a session; a schema says which of those two
+sides is being recorded. The two are independent.
+
+### The own-side references are selected, not implied
+
+`my_park` appeared on the form whenever `park` did, placed by the station
+block after the comment, and could not appear without it. Two schemas were
+therefore impossible:
+
+* **Hunting.** The form carried an own-reference field that stayed blank all
+  day, and `needs_reference` — keyed on `park` — asked at the start of every
+  activity which park this station was in. A hunter has no answer.
+* **Activating alone.** No own reference without a their-park column that was
+  never filled.
+
+Selected rather than implied, both work, and the field sits where the schema
+puts it rather than always at the end. `needs_reference` asks about
+`my_park`.
+
+`exchange_tx` stays implied by `exchange_rx`: an event that exchanges
+something exchanges it both ways, so there is no second question. It is
+absent from `ENTRY_FIELDS` for that reason, which is also why the station
+block needs no double-add guard — `validate_entry` refuses a schema that
+names it.
+
+### Each program exports to its own ADIF field
+
+SOTA, WWFF and IOTA have dedicated own-side ADIF fields, so `my_sota`,
+`my_wwff` and `my_iota` are one-to-one entries in `_ADIF_FIELDS`. POTA is the
+one program needing both the generic `SIG`/`MY_SIG` pair and the dedicated
+`POTA_REF`/`MY_POTA_REF`, and keeps its own block.
+
+Routing every program through `SIG` with the type's `sig` field was
+considered and rejected: it writes `MY_SIG=SOTA` beside `MY_POTA_REF`, which
+is a summit reference in the POTA field. `ActivityType.sig` is parsed and
+stored and nothing reads it. It would earn its place only for a program with
+no dedicated ADIF field — Bunkers, Castles, GMA — through a generic
+`sig_ref`/`my_sig_ref` pair that does not exist.
+
+A site in two programs at once — a park that is also a WWFF reference — puts
+both own-side fields on one schema, and each exports to its own field.
+
+### The own references are sticky; only `my_park` is prompted for
+
+One activation is one reference, so every field in `logform.OWN_REFS` is
+sticky wherever a schema selects it. `^U` on the field turns that off, which
+is the only gesture there is: "delete it to stop it coming back" is what an
+operator tries first.
+
+`_ask_my_park` fires for `my_park` alone, because the editor behind it writes
+the `MY_PARK` setting. A schema selecting `my_sota` or `my_wwff` gets a
+sticky field typed once per activation and no prompt, and the deck header
+shows `my_park` alone.
+
+### Naming an activity does not choose a schema
+
+It used to open the type picker immediately, on the reasoning that a new
+activity is usually new because the operating is different. That made naming
+and schema-choosing one act. They are not one act: an operator naming the
+second park of the day wants the schema they already have. `F3` opens the
+picker when it is wanted.
+
+What the picker was really there to ask — this station's own reference — is
+asked directly. Without that the picker's departure took the question with
+it and an activation logged every contact with a blank reference.
+
+### Deliberately not: an operator-settable sticky flag
+
+A key in the field picker that marks any selected field sticky, and unmarks
+it, is **not built**.
+
+Stickiness is a property of what a field means rather than of what an
+operator picked. One activation is one reference; one event is one exchange;
+a comment is a standing note. A sticky `state`, `name` or their-side `park`
+would be wrong on nearly every contact, and a wrongly sticky field logs the
+previous contact's data onto this one silently — the failure `_follow_activity`
+already exists to prevent for the own reference.
+
+**The one case that would justify it is satellite work.** `sat_name` and
+`prop_mode` are constant for a whole pass by definition — ten contacts in
+fifteen minutes, all `SO-50`, all `SAT` — and both are plain selectable
+fields today, so both are retyped per contact. If that becomes relevant the
+change is two entries in `logform.STICKY_ANYWHERE` and no interface at all,
+which is why the flag is not worth building ahead of it.
+
+If a second case appears that a field's own meaning cannot predict, the shape
+is a separate key on a selected row with its own mark, not a third state on
+`Space`: the picker's footer already carries five key meanings, and `Space`
+means one thing.
 
 ## 8. Time
 

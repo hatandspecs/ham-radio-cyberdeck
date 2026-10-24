@@ -62,9 +62,15 @@ UPPER = ("call", "park", "my_park")
 # the per-contact fields so the common path — call, reports, Enter — does not
 # tab through them. Sticky, every one.
 STATION = (
-    ("my_park", "My ref", True),
     ("exchange_tx", "My exch", True),
 )
+
+# Sticky wherever an activity selects them, for the reason the exchange is:
+# one activation is one reference, and `^U` on the field is how that is turned
+# off. These used to be implied by the their-side field and placed by the
+# block below; they are ordinary selectable fields now, so the entry loop
+# places them and this is what keeps them sticky.
+OWN_REFS = ("my_park", "my_sota", "my_wwff", "my_iota")
 
 # Prefilled from the radio and refreshed until touched. `tx_power` is here
 # only when an activity asks for it: the wattage is recorded on every contact
@@ -151,7 +157,8 @@ class LogForm:
         for name in act.entry:
             order.append(Field(name, act.label_for(name),
                                from_radio=(name in PREFILLED),
-                               sticky=(name in STICKY_ANYWHERE)))
+                               sticky=(name in STICKY_ANYWHERE
+                                       or name in OWN_REFS)))
         # Every form has a comment field, whether or not the activity asked
         # for one: a note about a contact is never not worth having.
         #
@@ -169,11 +176,22 @@ class LogForm:
         # a serial — and can correct it when a contact was not logged.
         if act.serial:
             order.append(Field("serial_tx", "My nr", sticky=True))
-        # Only the fields this activity can use: an activity with no reference
-        # field has no business asking for one.
+        # What is still implied rather than selected: an event that exchanges
+        # something exchanges it both ways, so `exchange_rx` is the only
+        # question and `exchange_tx` follows from it.
+        #
+        # The own-side REFERENCES are no longer here. They were implied by the
+        # their-side field -- `my_park` whenever `park` -- which made a hunting
+        # schema carry a reference field it never filled and an activating
+        # schema unable to have one at all. They are selected now, and the
+        # entry loop above has already placed them in the operator's order.
+        #
+        # No `name in act.entry` guard here, deliberately: `exchange_tx` is
+        # not in `ENTRY_FIELDS`, so `validate_entry` refuses a schema that
+        # names it and this block is the only thing that can place it. A guard
+        # against a double-add that cannot happen is a line no test can reach.
+        # Make `exchange_tx` selectable and it needs the guard `comment` has.
         for name, label, sticky in STATION:
-            if name == "my_park" and not act.wants("park"):
-                continue
             if name == "exchange_tx" and not act.wants("exchange_rx"):
                 continue
             order.append(Field(name, label, sticky=sticky))
@@ -422,8 +440,16 @@ class LogForm:
 
         * **sticky fields** -- the comment, this station's own reference and
           exchange -- which `_set_activity_type` carries across by hand,
-        * **radio fields the operator has not touched**, which the next poll
-          refills,
+        * **prefilled fields** -- the frequency, mode and power off the radio
+          and the rig and antenna off the Station menu -- which
+          `_set_activity_type` now carries across with their `touched` flags,
+          so a hand correction is not lost by a schema change either. This
+          used to be "radio fields the operator has not touched", and a
+          single correction to the mode then latched `typed()` non-empty for
+          the life of the form: `commit` and `clear` both leave `touched`
+          alone on these by design, so nothing the operator could do cleared
+          it and the schema could never be changed again. Found on the deck
+          2026-10-23.
         * **anything still equal to what the deck prefilled it with**: a
           `599` nobody edited, a serial the log handed out, a rig name off
           the Station settings,
@@ -439,7 +465,7 @@ class LogForm:
                 continue
             if f.sticky or f.name in STICKY_ANYWHERE:
                 continue
-            if f.from_radio and not f.touched:
+            if f.from_radio:
                 continue
             if not f.touched and f.value == f.prefill:
                 continue

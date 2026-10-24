@@ -160,8 +160,9 @@ on exit.
   attached, because that is the one situation it cannot be told about.
 * **Touch, minimally**: drag the transcript to scroll it, tap to choose on the
   pairing screens. No pointer, no cursor, nothing else is selectable.
-* **A contact log whose grammar the operator defines** — 28 selectable
-  fields, one log with named sessions inside it, contacts read back and
+* **A contact log whose grammar the operator defines** — 32 selectable
+  fields including both sides of every program reference, one log with named
+  sessions inside it, contacts read back and
   corrected on the panel, and ADIF export of the whole log or one session.
   See below.
 * **The station's own settings edited on their own screen**, each field shown
@@ -279,11 +280,23 @@ gain. The whole of it is worked from the keyboard:
 * **A session can be renamed**, with `r` on the activities list. Every
   contact of that session is relabeled and the session keeps its start, so
   renaming back undoes it exactly.
-* **28 selectable fields over two pages.** Page one is general and POTA
-  logging; page two is the contest exchange, the zones and the other
-  programs. Six more are on every contact and are not selectable because they
-  are not typed: the callsign, the UTC time, the band, the frequency, the mode
-  and this station's own call.
+* **32 selectable fields over two pages.** Page one is general and POTA
+  logging; page two is the contest exchange, the zones and the program
+  references — both sides of each. Six more are on every contact and are not
+  selectable because they are not typed: the callsign, the UTC time, the band,
+  the frequency, the mode and this station's own call.
+* **Activating and hunting are different schemas.** Each program's own-side
+  reference is a field in its own right — `my_park`, `my_sota`, `my_wwff`,
+  `my_iota` — beside the their-side `park`, `sota`, `wwff` and `iota`. Take
+  theirs to hunt, your own to activate, both for a park-to-park. The own-side
+  fields are sticky, so a reference is typed once per activation rather than
+  once per contact, and `^U` on one turns that off. Each exports to its own
+  program's ADIF field, so a site that is both a POTA park and a WWFF
+  reference carries both and both are written.
+* **Naming an activity does not choose a schema.** The two are independent:
+  an activity is when and where, a schema is how the contacts are typed. `F3`
+  opens the schema picker when it is wanted. Naming an activity still asks for
+  this station's own reference when the schema uses one.
 * **Contacts are read back and corrected on the panel.** `↑` `↓` picks one,
   `Enter` opens it field by field, `Enter` on a field edits it, `d` deletes it
   after confirming. Only the timestamp is fixed — it is the key the contact is

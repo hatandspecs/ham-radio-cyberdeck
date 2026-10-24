@@ -912,7 +912,8 @@ _FIELD_ORDER = ("activity_start",
                 "iota", "sota", "wwff", "sat_name", "prop_mode",
                 "age", "qsl_via", "freq_rx", "power_rx",
                 "check", "precedence",
-                "my_call", "my_grid", "my_park",
+                "my_call", "my_grid",
+                "my_park", "my_sota", "my_wwff", "my_iota",
                 "serial_tx", "exchange_tx", "activity", "activity_type",
                 "contest_id",
                 "my_rig", "my_antenna", "tx_power", "tx_backend", "comment")
@@ -1011,6 +1012,13 @@ _ADIF_FIELDS = (
     ("iota", "IOTA"),
     ("sota", "SOTA_REF"),
     ("wwff", "WWFF_REF"),
+    # This station's own side of the same three. Each is a standard ADIF
+    # field, which is why none of them goes through MY_SIG -- writing
+    # `MY_SIG=SOTA` beside `MY_POTA_REF` is what the park field would have
+    # produced had the own-side references stayed welded to it.
+    ("my_sota", "MY_SOTA_REF"),
+    ("my_wwff", "MY_WWFF_REF"),
+    ("my_iota", "MY_IOTA"),
     ("sat_name", "SAT_NAME"),
     ("prop_mode", "PROP_MODE"),
     ("age", "AGE"),

@@ -74,13 +74,29 @@ check("every row of that page has a key printed beside it",
 # point inside one event, and noise outside it.
 # Anything strictly contest-related, and anything outside general and POTA
 # logging, goes here.
-equals("page two is the exchange, the zones and the other programs",
-       names[_render.FIELDS_PER_PAGE:],
+_PER = _render.FIELDS_PER_PAGE
+equals("page two is the exchange, the zones and the programs, both sides",
+       names[_PER:_PER * 2],
        ["serial_rx", "exchange_rx", "check", "precedence", "power_rx",
-        "cq_zone", "itu_zone", "iota", "sota", "wwff", "sat_name",
-        "prop_mode", "age", "freq_rx"])
-check("this station's own reference is not a per-contact field",
-      "my_park" not in names, str(names))
+        "cq_zone", "itu_zone", "iota", "sota", "wwff",
+        "my_park", "my_sota", "my_wwff", "my_iota"])
+# A third page exists now, and asserting it as its own list is the point: the
+# own-side references landed at the END of page two, and a field inserted
+# above them pushes one onto a page most operators will never turn to.
+equals("page three is what is left over",
+       names[_PER * 2:],
+       ["sat_name", "prop_mode", "age", "freq_rx"])
+check("and nothing falls off the end",
+       len(names) <= _PER * 3, str(len(names)))
+# This station's own references ARE per-contact fields now, selected rather
+# than implied by the their-side one. `my_park` whenever `park` meant a
+# hunting schema carried a reference it never filled and was asked to fill,
+# and an activating schema could not have one without a their-park column.
+check("each own-side reference is selectable",
+      all(f in names for f in activities.OWN_REFS), str(names))
+check("and what stays a pure setting is only the exchange",
+      activities.STATION_FIELDS == ("exchange_tx",),
+      str(activities.STATION_FIELDS))
 check("each has a label and a kind",
       all(l and k for _f, l, k in activities.field_choices()),
       str(activities.field_choices()))
@@ -113,6 +129,37 @@ check("a contest has a serial and leaves reports out",
 # a built-in nobody uses is a line in a picker to scroll past forever.
 equals("exactly three defaults", sorted(activities.BUILTIN),
        ["CONTEST", "GENERAL", "POTA"])
+
+print("\nthe shipped example file parses and means what it says")
+# It was referred to in a comment here and parsed by nothing. An example that
+# does not load is a document that lies, and this one teaches the field names
+# an operator will copy.
+_EXAMPLE = os.path.join(os.path.dirname(_HERE), "activities.conf.example")
+with open(_EXAMPLE, encoding="utf-8") as fh:
+    _example = activities.parse_file(fh.read(), name="activities.conf.example",
+                                     inherit_from=activities.BUILTIN)
+check("every section loads", len(_example) >= 8, sorted(_example))
+# The shapes the own-side split exists for, each spelled out in the file.
+equals("HUNT takes their park and no own reference",
+       _example["HUNT"].entry, ("rst_s", "rst_r", "park", "name"))
+equals("ACTIVATE takes the own reference and no their-park",
+       _example["ACTIVATE"].entry, ("rst_s", "rst_r", "my_park", "name"))
+# These two used to be `like = POTA` with `sig = SOTA`, which exported a
+# summit as a POTA reference because nothing reads `sig`.
+check("SOTA uses the SOTA fields, not the park fields",
+      "sota" in _example["SOTA"].entry
+      and "my_sota" in _example["SOTA"].entry
+      and "park" not in _example["SOTA"].entry
+      and "my_park" not in _example["SOTA"].entry,
+      str(_example["SOTA"].entry))
+check("WWFF likewise",
+      "wwff" in _example["WWFF"].entry
+      and "my_wwff" in _example["WWFF"].entry
+      and "park" not in _example["WWFF"].entry,
+      str(_example["WWFF"].entry))
+check("and one site can be in two programs at once",
+      {"my_park", "my_wwff"} <= set(_example["PARK-AND-WWFF"].entry),
+      str(_example["PARK-AND-WWFF"].entry))
 
 print("\nan activity renames a field to the word on the air")
 equals("POTA calls it a park",

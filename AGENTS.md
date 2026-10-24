@@ -211,14 +211,40 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   months and not the first, so every contact carried them and no activity could
   put them on the form. `field_choices()` derives from `ENTRY_FIELDS`; it used
   to keep its own copy, and seven fields added to one were selectable nowhere.
-- **`ENTRY_FIELDS` order IS the selection screen, and it pages.** 28 fields,
-  `render.FIELDS_PER_PAGE` = 14, two pages. Page one is general and POTA
+- **The own-side program references are SELECTED, not implied.** `my_park`,
+  `my_sota`, `my_wwff` and `my_iota` are ordinary entries in `ENTRY_FIELDS`
+  and `logform.OWN_REFS`, sticky wherever a schema takes one. `my_park` used
+  to be welded to `park` by the station block in `logform._build`, which made
+  a hunting schema carry a reference it never filled — and be asked to fill it
+  — and made an activating schema impossible. `menus.needs_reference` asks
+  about `my_park`, not `park`. **Only `my_park` is prompted for**, because the
+  editor behind it writes the `MY_PARK` setting; the others are typed once
+  into a sticky field. See `qso_log_design.md` §7j.
+- **Each program exports to its own ADIF field.** `my_sota` → `MY_SOTA_REF`
+  and so on, as plain `_ADIF_FIELDS` entries. POTA is the only one needing the
+  generic `SIG`/`MY_SIG` pair beside `POTA_REF`/`MY_POTA_REF`, and keeps its
+  own block in `adif_record`. **`ActivityType.sig` is parsed and read by
+  nothing** — routing SOTA through it writes `MY_SIG=SOTA` next to
+  `MY_POTA_REF`, which is a summit in the POTA field. `activities.conf.example`
+  used to teach exactly that (`like = POTA`, `sig = SOTA`) and no longer does;
+  `tests/test_activities.py` now parses that file so a wrong example fails.
+- **A sticky flag in the field picker is a deliberate won't-do.** The one case
+  that would justify it is satellite work — `sat_name` and `prop_mode` are
+  constant for a pass and are retyped per contact today. If that becomes
+  relevant the fix is two entries in `logform.STICKY_ANYWHERE` and no
+  interface. Recorded in `qso_log_design.md` §7j under "Deliberately not".
+- **`ENTRY_FIELDS` order IS the selection screen, and it pages.** 32 fields,
+  `render.FIELDS_PER_PAGE` = 14, **three** pages. Page one is general and POTA
   logging — which is also QRZ's own QSO record, minus the six fields QRZ wants
   that the deck fills in and never offers (call, date, UTC, band, frequency,
-  mode). Page two is the contest exchange, the zones and the non-POTA programs.
+  mode). Page two is the contest exchange, the zones and the program
+  references, both sides of each, ending exactly on `my_iota`. Page three is
+  the four leftovers: `sat_name`, `prop_mode`, `age`, `freq_rx`.
   Inserting a field in the middle silently pushes the last of page one onto page
-  two, where nobody will find it, so `tests/test_activities.py` asserts both
-  pages as ordered lists.
+  two, where nobody will find it, so `tests/test_activities.py` asserts all
+  three pages as ordered lists. **`PICK_KEYS` is 17 characters against 32
+  fields**, so the keys address a row of the CURRENT page, not a field — the
+  arrows are the only way to reach a row the keys do not number.
 - **A pty assertion that greps the whole screen can match the FOOTER.** Three
   checks in this suite passed without testing anything because of it: one
   looked for `DELETE` to prove a confirmation was up and matched the

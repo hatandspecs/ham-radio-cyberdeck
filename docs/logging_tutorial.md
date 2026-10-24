@@ -60,22 +60,23 @@ switches it on, and the log joins the ring.
 The whole display is the log, because on SSB the transcript has nothing on it
 worth reading.
 
-Type the callsign, then whatever else you caught:
+The entry area is a **form**, not a line. The callsign is where the cursor
+starts; `←` and `→`, or Tab, move between fields, and every printable key
+including Space types into the field you are on. `*` beside a field means it
+is sticky and survives the contact.
 
 ```
-W1AW                        just the call — reports default to 59
-W1AW 57                     one report is the one you RECEIVED
-W1AW 59 57                  sent, then received
-W1AW 59 57 Ann Newington    and a name, and the rest as the QTH
+    Call W1AW                      Sent 59
+    Rcvd 57                        Name Ann
+ Comment running 5W to a wire  *   Freq 14.285
 ```
 
-`Enter` commits. `Esc` cancels.
+`Enter` commits. `Esc` cancels. `^X` clears the staged contact and keeps the
+sticky fields; `^U` clears the one field you are on, which is also how a
+sticky field is turned off.
 
-**Anything after a semicolon is a comment** and is not parsed:
-
-```
-W1AW 59 57 Ann ; running 5W to a wire
-```
+Reports default from the mode, so a contact you heard 59 both ways is a
+callsign and `Enter`.
 
 The comment is the catch-all — "QRP", "first one from this county", "will send
 a card". It is the last column on screen and the first thing truncated, because
@@ -102,7 +103,7 @@ grammar. Three come built in:
 | | You type | For |
 |---|---|---|
 | **General** | reports, name, QTH | everything else |
-| **POTA** | reports, their park, name | park activations and hunting |
+| **POTA** | reports, their park, your park, name | park-to-park and activations |
 | **Contest** | their serial, their exchange | serial-and-exchange events |
 
 All three record the frequency, band, mode, UTC time, both reports, and this
@@ -128,15 +129,22 @@ reference column appears:
 ![The log screen during a park activation](screens/log-pota.png)
 
 ```
-W3ABC 59 57 US-1234         their park
-W3ABC 59 57 US-1234 Bob     and their name
+    Call W3ABC                     Sent 59
+    Rcvd 57                        Park US-1234
+    Name Bob                     My ref US-5474  *
 ```
 
-**Hunting needs no activity at all.** A park reference is recognized by its
-shape in any activity, so working one park on an ordinary afternoon needs
-nothing switched on. What the activity is for is *activating* — your own
-reference goes on every contact, so it is a setting (`My reference`) rather
-than something typed eighty times.
+`Park` is theirs; `My ref` is yours, sticky, and already filled in. Both on
+one form is a park-to-park.
+
+**POTA carries both sides**, so it suits a park-to-park and an activation as
+it stands. For a day of pure hunting, copy it and remove `my_park`: the
+own-reference field goes with it, and so does the question asking which park
+*you* are in.
+
+What the own reference buys you is that it is typed once. It goes on every
+contact of the activation, so it is sticky rather than something typed eighty
+times, and it shows in the header while it is set.
 
 The reference column is drawn even while empty during an activation. A column
 that appeared on your first park-to-park would shift every row under it.
@@ -148,7 +156,8 @@ With a serial-and-exchange activity selected, different columns appear:
 ![The log screen during a QSO party](screens/log-contest.png)
 
 ```
-W3ABC 101 MONT              their serial, their exchange
+    Call W3ABC                       Nr 101
+    Exch MONT                     My nr 55
 ```
 
 Reports are not typed — in a QSO party they are 59 every time, and leaving them
@@ -188,12 +197,26 @@ The fields an `entry` list may name, in any order:
 | `rst_s`, `rst_r` | signal reports |
 | `serial_rx` | their serial number |
 | `exchange_rx` | their exchange — a class, county, section |
-| `park` | their park or summit reference |
+| `park`, `sota`, `wwff`, `iota` | **their** program reference |
+| `my_park`, `my_sota`, `my_wwff`, `my_iota` | **your own** — what an activator logs |
 | `name`, `qth` | their name and location |
 
-What *you* send is not typed per contact: your exchange is a setting
-(`EXCHANGE_TX`), your reference is a setting, and your serial increments on
-its own.
+Thirty-two fields are selectable in all; those are the ones that decide what a
+schema is for.
+
+**The two sides are separate fields, and that is the whole of activating vs
+hunting.** A hunting schema takes `park` and nothing else; an activating
+schema takes `my_park`; a park-to-park takes both. Your own reference is
+sticky — typed once per activation, not once per contact — and `^U` on it
+turns that off at the end of the day.
+
+Each program exports to its own ADIF field, so use the field that matches the
+program: `sota` for a summit, not `park`. A site that is both a POTA park and
+a WWFF reference takes `my_park` and `my_wwff` together, and both are written.
+
+Your serial and your exchange are still not per-contact fields: the serial
+increments on its own and the exchange is the `EXCHANGE_TX` setting, which
+appears whenever a schema takes `exchange_rx`.
 
 A text field takes one word, **except in the last position, where it takes the
 rest of the line.** That is how `1B EPA` is one Field Day exchange while

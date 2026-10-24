@@ -55,10 +55,40 @@ equals("general logging", names(logform.LogForm(activities.GENERAL)),
 # fields on one form.
 equals("the comment appears once, not twice",
        names(logform.LogForm(activities.GENERAL)).count("comment"), 1)
-equals("a park activation adds the reference and this station's own",
+# `my_park` is in POTA's own field list, so it sits where the schema puts it
+# rather than being appended after the comment. It used to be implied by
+# `park` and placed by the station block at the end, which is why the order
+# below changed when the two were separated.
+equals("a park activation carries both sides of the contact",
        names(logform.LogForm(activities.BUILTIN["POTA"])),
-       ["call", "rst_s", "rst_r", "park", "name", "comment", "my_park",
+       ["call", "rst_s", "rst_r", "park", "my_park", "name", "comment",
         "freq", "mode"])
+
+# The two halves of the split, each impossible before it.
+HUNT = activities.ActivityType("HUNT",
+                               entry=("rst_s", "rst_r", "park", "name"))
+ACTIVATE = activities.ActivityType("ACTIVATE",
+                                   entry=("rst_s", "rst_r", "my_park"))
+equals("a hunting schema has no own-reference field at all",
+       names(logform.LogForm(HUNT)),
+       ["call", "rst_s", "rst_r", "park", "name", "comment", "freq", "mode"])
+equals("an activating schema has one without a their-park column",
+       names(logform.LogForm(ACTIVATE)),
+       ["call", "rst_s", "rst_r", "my_park", "comment", "freq", "mode"])
+check("and the own reference is sticky wherever it appears",
+      logform.LogForm(ACTIVATE).field("my_park").sticky)
+check("while theirs is not",
+      not logform.LogForm(HUNT).field("park").sticky)
+
+# Every program's own side, each sticky, each selectable alone.
+for own in logform.OWN_REFS:
+    act = activities.ActivityType("X", entry=("rst_s", own))
+    f = logform.LogForm(act)
+    check(f"{own}: selectable on its own", f.field(own) is not None, own)
+    check(f"{own}: sticky", f.field(own).sticky, own)
+    check(f"{own}: needs no their-side field",
+          not any(n in names(f) for n in ("park", "sota", "wwff", "iota")),
+          str(names(f)))
 equals("a contest adds both serials and both exchanges",
        names(logform.LogForm(CONTEST)),
        ["call", "serial_rx", "exchange_rx", "comment", "serial_tx",
@@ -376,9 +406,11 @@ _mapped = {k for k, _a in _q._ADIF_FIELDS}
 for name in activities.ENTRY_FIELDS:
     check(f"{name}: described for the selection screen",
           bool(activities.FIELD_HELP.get(name)), name)
-    # `park` is written as POTA_REF/SIG/SIG_INFO rather than through the
-    # table, because one typed reference becomes three ADIF fields.
-    if name != "park":
+    # `park` and `my_park` are written as POTA_REF/SIG/SIG_INFO and their
+    # MY_ forms rather than through the table, because one typed reference
+    # becomes three ADIF fields. SOTA, WWFF and IOTA each have a single
+    # dedicated field on both sides, so they go through the table.
+    if name not in ("park", "my_park"):
         check(f"{name}: survives an export", name in _mapped, name)
 
 print("\nthe row keys reach every field on a page")
