@@ -350,7 +350,7 @@ All of fldigi's signal processing. None of its interface.
 
 ---
 
-# Seven features passed 3,995 tests, and then the panel found eleven faults
+# Seven features passed 3,994 tests, and then the panel found eleven faults
 
 **Some were things no test could reach.** The framebuffer and the text console are the same memory, so curses erased the map a frame after it was drawn. An aborted over stayed in fldigi's transmit widget and went out ahead of the next message. The tuner's settle time was a guess about how long a radio takes to change frequency.
 
@@ -365,7 +365,7 @@ All of fldigi's signal processing. None of its interface.
 
 ![width:940px](img/doc-first-cycle.svg)
 
-Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunday. What decides whether a project happens is how much progress fits inside one fragment — a text terminal for HF with 3,995 tests behind it was never going to happen otherwise.
+Hobby time arrives as confetti: twenty minutes before dinner, an hour on a Sunday. What decides whether a project happens is how much progress fits inside one fragment — a text terminal for HF with 3,994 tests behind it was never going to happen otherwise.
 
 **Then turn it against your own design.** Write down how it should work, ask for an analysis of the alternatives, and ask the question worth more than any of them: *does this design imply there are tools, techniques or facts I am not accounting for?*
 

@@ -1061,15 +1061,22 @@ test tone is necessary and the RX calibration mode is not.
 
 ## Where it stands
 
-**3912 checks across 52 files, all passing as of 2026-10-23** — a clean
-serial run through `tools/run_tests.sh`, fldigi freshly restarted, nothing
-edited while it was in flight, nothing else touching fldigi.
+**3994 checks across 55 files, all passing as of 2026-10-23** — a clean
+serial run through `tools/run_tests.sh`, nothing edited while it was in
+flight, nothing else touching fldigi. fldigi had been up about eleven hours
+rather than freshly restarted, and was checked healthy first (`LISTEN 0 5`,
+`fldigi.name_version()` answering in milliseconds) -- see the wedge note
+below for why that check comes before believing any pty failure.
 
 The 3146-check figure this replaced was measured 2026-10-18, before the seven
-features from `docs/next_steps.md`. Those account for most of the 766 new
-checks: bandplan 70, bandscreens 65, decall 50, export 134, fbdraw 30,
-logfromchat 61, mapscreen 84, ring_editor 56, ring_order 54, tuner 60,
-wsprmap 95.
+features from `docs/next_steps.md`. Those and the panel-session repairs
+account for most of the 848 new checks: tuner 97, export 135, wsprmap 90, bandscreens
+70, logfromchat 61, ring_editor 57, ring_order 54, bandplan 54, decall 50,
+wsprsessions 42, mapscreen 40, backfill 39, fbdraw 37, txbuffer 8.
+
+**Counts drift.** Take them from a run rather than from this paragraph --
+`grep -c 'ALL PASS'` over the suite output, and the trailing total line --
+and correct it here when they have moved.
 
 Run it that way rather than looping over the files by hand. `run_tests.sh`
 checks each file for its `ALL PASS` line, which is the only thing that proves
