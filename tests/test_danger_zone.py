@@ -105,11 +105,18 @@ m = menus.danger_menu(activity="", contacts=5, session=0, sessions=0)
 check("it reads as an absence", "(no activity)" in m["items"][1][1],
       m["items"][1][1])
 
-print("\nthe logging menu offers it, and offers it last")
+print("\nthe logging menu offers it, below everything that is not a hazard")
 log = menus.log_menu(True, count=4, activity="Bald Eagle SP")
 items = [k for k, _l in log["items"] if k]
 check("z is the key", "z" in items, str(items))
-equals("and it is the last item", items[-1], "z")
+# **The keys list is below it.** The danger zone wanted to be last so nobody
+# arrived there by accident -- and last is exactly where an Up from the first
+# item wraps to, so being last was working against the reason for it. A list
+# of hotkeys is the harmless thing to land on instead.
+equals("the keys list is last", items[-1], "k")
+equals("and the danger zone is the one above it", items[-2], "z")
+check("and nothing else sits below the danger zone",
+      items.index("z") == len(items) - 2, str(items))
 text = "\n".join(l for _k, l in log["items"])
 check("it is named as a danger zone", "Danger zone" in text, text)
 

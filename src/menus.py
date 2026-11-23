@@ -67,14 +67,15 @@ def keyboard_modes(all_names):
 DIGI = {
     "title": "DIGIMODES",
     "items": [
-        ("1", "Mode"),
+        # Band first, because it is the one chosen most often and the one a
+        # session starts with. Band is digimode-specific and was briefly moved
+        # to the deck menu on the reasoning that a band is a property of the
+        # radio. That reasoning was wrong about what this entry DOES: it tunes
+        # to the digimode calling frequency for the band, which is a
+        # digital-modes decision and is useless to anything else on the deck.
+        ("1", "Band"),
         ("2", "Tune Settings"),
-        # Band is digimode-specific and was briefly moved to the deck menu on
-        # the reasoning that a band is a property of the radio. That reasoning
-        # was wrong about what this entry DOES: it tunes to the digimode
-        # calling frequency for the band, which is a digital-modes decision
-        # and is useless to anything else on the deck.
-        ("3", "Band"),
+        ("3", "Mode"),
         ("4", "Memories"),
     ],
     "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
@@ -94,6 +95,7 @@ def digi_menu(log_hotkey=""):
     items = list(DIGI["items"])
     items.append(("5", f"^G logs the last station heard: {label}"
                   if label else "^G logs the last station heard"))
+    items.append(("6", "Keys on this screen"))
     return {**DIGI, "items": items}
 
 # The deck and the radio: what this station is, what it is attached to, and
@@ -123,6 +125,11 @@ DECK = {
         # and beside WiFi in spirit, since the phone it serves is on the
         # network the system menu joins.
         ("5", "Send files to a phone"),
+        # The radio's mode. Here rather than on the digimode menu because it
+        # is a property of the radio and is as much use before a phone
+        # session as before a digital one.
+        ("6", "Set the rig mode"),
+        ("7", "Keys on this screen"),
     ],
     "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
 }
@@ -459,9 +466,10 @@ def log_menu(on, count=0, park="", lookup=False, has_qrz_key=False,
         # failing without one, so this is an export-and-a-command, not a
         # one-key upload. The label says so: nothing is sent from here.
         items.append(("t", "Export + print the LoTW command"))
-    # Last, and named so that nobody arrives in it by accident. Everything on
-    # it destroys something; see `danger_menu`.
+    # Named so that nobody arrives in it by accident. Everything on it
+    # destroys something; see `danger_menu`.
     items.append(("z", "Danger zone — clear logs"))
+    items.append(("k", "Keys on this screen"))
     return {
         "title": "LOGGING",
         "items": items,
@@ -518,8 +526,16 @@ SYSTEM = {
         ("b", "Pair a Bluetooth keyboard"),
         ("w", "WiFi — join a network, or switch the radio off"),
         ("i", "Transmit inhibit on/off      Ctrl-B, any screen"),
-        ("c", "Clear the transcript         Ctrl-X"),
-        ("q", "Quit                         Ctrl-Q"),
+        # **No Clear the transcript and no Quit.** Both were carried over from
+        # when the deck was only a digimodes terminal and this was its one
+        # menu. Clearing the transcript is a digimodes action on a screen the
+        # other three areas do not draw, and `Ctrl-X` already does it there.
+        #
+        # Quit was worse than out of place: it `return False`d straight out of
+        # the menu handler, skipping `_quit()` and its confirmation, so the
+        # process exited, systemd restarted it, and the operator got an
+        # unannounced black screen -- indistinguishable from a crash, and
+        # reported as one. `Ctrl-Q` still quits, with the confirmation.
     ],
     "footer": "Esc back   ↑↓ move   Enter select",
 }
@@ -605,6 +621,92 @@ def paged_menu(title, names, page, width, height):
         "items": items,
         "footer": "Esc  back      PgUp/PgDn  more",
     }, page, pages, {PAGE_KEYS[i]: n for i, n in enumerate(chunk)}
+
+
+KEYS = {
+    "digi": ("KEYS — DIGIMODES", (
+        "F1 menu   F2 tune screen   F3 mode",
+        "F5-F12    send message memory",
+        "^T  send the over        ^Y  hand back",
+        "^C  abort the over       ^G  log last heard",
+        "^A ^D  carrier down/up, 5 Hz grid",
+        "^W ^S  search for a signal up/down",
+        "^X  clear the transcript ^Z  undo a memory",
+        "^L  redraw the screen",
+        "arrows/Home/End  edit the line being typed",
+        "PgUp PgDn  scroll the transcript",
+        "on the TUNE screen: a afc  s squelch  r rsid",
+        "  t txid  v reverse  + -  squelch level",
+        "  , .  VFO 100 Hz    < >  VFO 1 kHz",
+    )),
+    "deck": ("KEYS — DECK & RIG", (
+        "F1 menu   F2 display   F3 system",
+        "arrows  move between settings",
+        "Enter   edit the setting under the cursor",
+        "Esc     cancel an edit",
+        "",
+        "Everywhere on the deck:",
+        "F4   next color scheme",
+        "^B   arm or inhibit transmit",
+        "^O ^P  next / previous area",
+        "^Q   quit, and the terminal restarts",
+    )),
+    "log": ("KEYS — LOGGING", (
+        "F1 menu   F3 activity   F5 map",
+        "Tab / Shift-Tab  next / previous field",
+        "left right       next / previous field",
+        "up down          pick a logged contact",
+        "PgUp PgDn        scroll the contacts",
+        "Enter   log it, or open the contact picked",
+        "Bksp Del  edit    ^U  clear the field",
+        "^Z  put the prefill back",
+        "^X  throw away the staged contact",
+        "Esc  drop the selection",
+    )),
+    "wspr": ("KEYS — WSPR", (
+        "F1 menu   F2 sessions   F3 band",
+        "F5  the map of what was heard",
+        "^C  stop the run",
+        "arrows   pick a spot",
+        "PgUp PgDn Home End  move through them",
+        "Esc  drop the selection",
+        "",
+        "^O ^P are locked while WSPR is running:",
+        "it owns the sound card until it stops.",
+    )),
+}
+
+
+def keys_menu(area):
+    """The hotkeys for one area, as an unselectable list.
+
+    Every row is keyed with a space so `selectable` returns nothing and the
+    arrows cannot land on a line that does nothing. Esc is the only key.
+    """
+    title, rows = KEYS[area]
+    return {"title": title,
+            "items": [(" ", row) for row in rows],
+            "footer": "Esc back"}
+
+
+# **One mode, not one per band.** This was specified as "set every HF band to
+# SSB or to Data-U", and that is not a thing this radio can be asked for over
+# CAT: measured 2026-11-23, setting a mode on one band and returning to it
+# later gives whatever was set last anywhere. The radio keeps per-band modes
+# in its own band-stacking registers, recalled by a front-panel band button,
+# and a CAT frequency change does not recall them.
+#
+# So the menu offers what the radio can actually do: set the mode now. SSB
+# picks the sideband from the frequency the radio is on, which is the part of
+# the original request that still applies.
+RIG_MODE = {
+    "title": "SET THE RIG MODE",
+    "items": [
+        ("1", "Data-U   for digimodes and WSPR"),
+        ("2", "SSB      LSB below 10 MHz, USB above"),
+    ],
+    "footer": "Esc back   \u2191\u2193 move   Enter select",
+}
 
 
 def selectable(menu):
@@ -746,8 +848,9 @@ def wspr_menu(state=None):
     items.append(("a", f"Audio levels                 "
                        f"TX {st.get('tx_level', 50)}%  "
                        f"RX {st.get('rx_gain', 70)}%"))
-    # Last, and named so nobody arrives in it by accident.
+    # Named so nobody arrives in it by accident.
     items.append(("z", "Danger zone — clear spots"))
+    items.append(("k", "Keys on this screen"))
     return {
         "title": "WSPR",
         "items": items,

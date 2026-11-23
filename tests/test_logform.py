@@ -512,4 +512,73 @@ p = logform.LogForm(activities.BUILTIN["POTA"])
 p.set("my_park", "US-5678")
 equals("an own reference does not count", p.typed(), [])
 
+print("\n-- a prefill the operator has not touched is a suggestion --")
+# Both halves reported from the panel 2026-11-23, and both are about the two
+# fields corrected most often: the signal reports.
+
+# `from_radio` rewrites rst_s and rst_r from the mode on EVERY poll while the
+# field is untouched. `backspace` only marked a field touched when
+# `Field.from_radio` was set -- and the reports are prefilled by that method
+# without being in `PREFILLED`, so the flag was never set. Backspace deleted
+# the character and the next poll put it straight back, which reads as a key
+# that does not work.
+r = logform.LogForm()
+r.from_radio(freq="14074000", mode="SSB", power="5")
+r.focus("rst_s")
+equals("the report is prefilled", r.value("rst_s"), "59")
+check("and it is not flagged as a radio field",
+      r.field("rst_s").from_radio is False)
+r.backspace()
+equals("backspace takes the character off", r.value("rst_s"), "5")
+check("and marks the field touched", r.field("rst_s").touched)
+r.from_radio(freq="14074000", mode="SSB", power="5")
+equals("so the next poll leaves it alone", r.value("rst_s"), "5")
+
+# Ctrl-Z is the way back, and it makes the field track the mode again.
+check("Ctrl-Z puts the prefill back", r.restore())
+equals("the default is back", r.value("rst_s"), "59")
+check("and the field tracks the mode again", not r.field("rst_s").touched)
+
+# The same for Delete and for Ctrl-U, which had the identical guard.
+r2 = logform.LogForm()
+r2.from_radio(freq="14074000", mode="SSB", power="5")
+r2.focus("rst_r"); r2.home(); r2.delete()
+r2.from_radio(freq="14074000", mode="SSB", power="5")
+equals("Delete survives the next poll too", r2.value("rst_r"), "9")
+r3 = logform.LogForm()
+r3.from_radio(freq="14074000", mode="SSB", power="5")
+r3.focus("rst_r"); r3.kill()
+r3.from_radio(freq="14074000", mode="SSB", power="5")
+equals("and so does Ctrl-U", r3.value("rst_r"), "")
+
+# Typing over an untouched prefill replaces it. It used to insert at the
+# cursor, which sat after the value: 59 and then "57" gave "5957".
+w = logform.LogForm()
+w.from_radio(freq="14074000", mode="SSB", power="5")
+w.focus("rst_r")
+w.type("57")
+equals("typing over an untouched report replaces it", w.value("rst_r"), "57")
+w.type("9")
+equals("and the keystroke after it inserts as normal",
+       w.value("rst_r"), "579")
+check("Ctrl-Z still has the default", w.restore() and w.value("rst_r") == "59",
+      w.value("rst_r"))
+
+# Only a PRISTINE prefill. Once the operator has typed, the text is theirs
+# and the next keystroke must not wipe it.
+e = logform.LogForm()
+e.focus("call")
+e.type("W3")
+e.type("ABC")
+equals("a field being typed into is not replaced", e.value("call"), "W3ABC")
+
+# And a field whose value no longer matches its prefill is not pristine
+# either, however it got that way.
+d = logform.LogForm()
+d.from_radio(freq="14074000", mode="SSB", power="5")
+d.focus("rst_s")
+d.backspace()            # "5", and now touched
+d.type("7")
+equals("an edited field keeps what is in it", d.value("rst_s"), "57")
+
 sys.exit(report())

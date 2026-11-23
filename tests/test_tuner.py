@@ -442,14 +442,17 @@ equals("it completes", sw.state, tuner.DONE)
 equals("and tuned at every frequency",
        blind.cat.count(tuner.CAT_TUNE_START), len(FREQS))
 
-print("\nthe data-mode interlock belongs to digimodes and WSPR, not here")
-# `^B` refused to ARM transmit whenever the radio was not in a data mode,
-# on every screen. That is right for digimodes and WSPR -- sending PSK or a
-# beacon through a voice mode is wrong -- and wrong for the auto tuner,
-# which keys the radio to match an antenna and does not care what mode it
-# is in. It made `^B` look dead on the one screen whose header had just
-# been given an INH indicator to show the state it would not let the
-# operator change. Reported from the panel 2026-10-23.
+print("\nthe mode question does not belong to ^B on ANY screen")
+# `^B` refused to ARM transmit whenever the radio was not in a data mode.
+# First on every screen, which made it look dead on the auto tuner -- a
+# screen whose own header had just been given an INH indicator to show the
+# state it would not let the operator change (reported 2026-10-23). The
+# tuner and the band plan were exempted, and the exemption was the clue:
+# one key gave two different answers depending on which screen was showing.
+#
+# It asks nothing about the mode now, anywhere. The question moved to the
+# things that actually send -- `_digi_mode_ok` for `^T`, and
+# `_wspr_transmit` per band. Reported from the panel 2026-11-23.
 import session as session_mod
 
 
@@ -492,15 +495,28 @@ for screen, label in ((cyberdeck.CHAT, "digimodes"),
                       (cyberdeck.WSPR, "WSPR")):
     d = inhibited_deck(screen, "USB")
     d._toggle_inhibit()
-    check(f"{label} still refuses with the radio in USB",
-          d.session.inhibited)
-    said = d.wspr_message or d.session.last_note
-    check(f"{label}: and says why, where it was pressed",
-          "not a data mode" in said, said)
+    check(f"{label} now arms with the radio in USB too",
+          not d.session.inhibited)
+    check(f"{label}: and fldigi was told", d.fldigi.rx_only is False)
     d = inhibited_deck(screen, "PKTUSB")
     d._toggle_inhibit()
-    check(f"{label} arms once the radio is in a data mode",
+    check(f"{label} arms in a data mode as it always did",
           not d.session.inhibited)
+
+print("\nthe digimode transmit gate wants DATA-U specifically")
+# Narrower than `_rig_mode_ok`, which accepts any data mode. fldigi makes
+# its tones for upper sideband on every band, so DATA-L inverts them and
+# nothing decodes -- a failure that looks like a dead band.
+for mode, want in (("PKTUSB", True), ("DATA-U", True), ("DIGU", True),
+                   ("USB-D", True), ("USB", False), ("LSB", False),
+                   ("PKTLSB", False), ("RTTY", False), ("", True)):
+    d = inhibited_deck(cyberdeck.CHAT, mode)
+    got = d._digi_mode_ok()
+    check(f"_digi_mode_ok({mode or 'unreadable'!r}) is {want}", got is want,
+          f"{mode!r} -> {got}")
+# An unreadable mode passes for the same reason `_rig_mode_ok` lets it pass:
+# refusing on an absence of evidence takes transmit away from every deck
+# without CAT control, which is the worse failure.
 
 print("\na refusal is readable from whichever screen raised it")
 # `^B` reaches every screen, so its refusal has to as well. It went to the

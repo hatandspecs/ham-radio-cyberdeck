@@ -266,13 +266,20 @@ equals("and switches, which is the default", d.screen, cyberdeck.LOG)
 
 print("\nevery mode is reachable from the digimode menu")
 import menus
+# By its KEY, not by its position: `Keys on this screen` was appended after
+# it, and a test that reaches for the last item breaks whenever the menu
+# grows -- which says nothing about the thing it is checking.
+def _by_key(menu, key):
+    return dict(menu["items"])[key]
+
+
 for mode in decall.MODES:
-    item = menus.digi_menu(mode)["items"][-1]
+    item = menus.digi_menu(mode)["items"][4]
     equals(f"{mode} is on key 5", item[0], "5")
     check(f"{mode} is spelled out, not named",
           decall.MODE_LABELS[mode] in item[1], item[1])
 check("and ^G is named there, since no footer has room for it",
-      "^G" in menus.digi_menu(decall.LOG_NOW)["items"][-1][1])
+      "^G" in _by_key(menus.digi_menu(decall.LOG_NOW), "5"))
 
 print("\nF5 on the log screen opens the map of the contacts")
 # Checked here rather than in test_mapscreen because this file is the one

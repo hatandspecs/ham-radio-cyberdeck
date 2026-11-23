@@ -314,10 +314,27 @@ class LogForm:
     # -- editing ----------------------------------------------------------
 
     def type(self, text):
-        """Insert at the cursor. Marks the field as touched by hand."""
+        """Insert at the cursor. Marks the field as touched by hand.
+
+        **The first keystroke into an untouched prefill REPLACES it.** The
+        signal reports are the case that forced this: arriving on `59` with
+        the cursor after it and typing `57` gave `5957`, so correcting a
+        default meant two Backspaces first, every time, on the two fields
+        most often corrected. A prefill the operator has not touched is a
+        suggestion, and typing over a suggestion is how every other form on
+        earth behaves.
+
+        Only a PRISTINE prefill: once the field has been typed into, the
+        text is the operator's and further keystrokes insert as before, so
+        a mistyped callsign is still corrected a character at a time.
+        `Ctrl-Z` puts the prefill back, which is what makes this safe.
+        """
         f = self.current
         if f is None:
             return
+        if not f.touched and f.value and f.value == f.prefill:
+            f.value = ""
+            self.cursor = 0
         f.touched = True
         for ch in str(text):
             if f.upper:
@@ -327,22 +344,30 @@ class LogForm:
         if f.from_radio:
             f.touched = True
 
+    # **Every edit by hand is a touch, not only on a radio-sourced field.**
+    # `from_radio()` rewrites `rst_s` and `rst_r` from the mode on every poll
+    # while `touched` is false, and those two fields are not in `PREFILLED`,
+    # so `Field.from_radio` is false for them. Deleting a character therefore
+    # did not mark them, and the next poll put the default straight back:
+    # Backspace on `59` gave `5` and then `59` again, which reads as a key
+    # that does not work. Reported from the panel 2026-11-23.
+    #
+    # `touched` means "the operator has had their hands on this", and that is
+    # as true of a deletion as of a keystroke. `Ctrl-Z` clears it again.
     def backspace(self):
         f = self.current
         if f is None or self.cursor <= 0:
             return
         f.value = f.value[:self.cursor - 1] + f.value[self.cursor:]
         self.cursor -= 1
-        if f.from_radio:
-            f.touched = True
+        f.touched = True
 
     def delete(self):
         f = self.current
         if f is None or self.cursor >= len(f.value):
             return
         f.value = f.value[:self.cursor] + f.value[self.cursor + 1:]
-        if f.from_radio:
-            f.touched = True
+        f.touched = True
 
     def kill(self):
         """Clear the focused field. **This is how a sticky field is turned
@@ -353,8 +378,7 @@ class LogForm:
             return
         f.value = ""
         self.cursor = 0
-        if f.from_radio:
-            f.touched = True
+        f.touched = True
 
     def left(self):
         self.cursor = max(0, self.cursor - 1)

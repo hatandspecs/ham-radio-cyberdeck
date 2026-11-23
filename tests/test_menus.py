@@ -90,7 +90,7 @@ keys = [k for k, _ in on["items"]]
 # names the key that opens it from the log screen as well, because that
 # screen's footer is 61 of 66 columns already and has no room for it.
 equals("on opens the rest", keys,
-       ["l", "e", "v", "g", "d", "c", "m", "n", "f", "a", "z"])
+       ["l", "e", "v", "g", "d", "c", "m", "n", "f", "a", "z", "k"])
 # `x` exports the activity in progress and is offered ONLY when there is one.
 # Without an activity it would export the same records as `a` under a
 # different name -- two menu items for one action, and the reader left
@@ -123,8 +123,13 @@ for n in (1, 2, 3):
           shown)
 equals("the activity comes before its schema",
        keys.index("e") < keys.index("v"), True)
-# Last, and named so nobody arrives in it by accident.
-equals("the danger zone is last", keys[-1], "z")
+# **The keys list is last and the danger zone is second to last.** Being
+# last is exactly where an Up from the first item wraps to, so a list of
+# hotkeys is a better thing to arrive at by accident than a list of things
+# that delete contacts -- which is the reason the danger zone wanted to be
+# last in the first place, served better by not being.
+equals("the keys list is last", keys[-1], "k")
+equals("and the danger zone is the one before it", keys[-2], "z")
 # The log file sits with the export rather than under the toggle. There is
 # one log now and an activity is a label on its records, so which file is in
 # use stopped being a question asked per session and became part of "where
@@ -200,7 +205,10 @@ check("and the menu it opens is still built",
 # The two area menus carry what belongs to their own area and nothing else.
 equals("the digimode menu is the digimode settings",
        [l for _k, l in menus.DIGI["items"]],
-       ["Mode", "Tune Settings", "Band", "Memories"])
+       ["Band", "Tune Settings", "Mode", "Memories"])
+# Band is first because it is the one chosen most often and the one a session
+# starts with. The keys follow the order: `1` is Band.
+equals("and Band is key 1", menus.DIGI["items"][0][0], "1")
 # Band is NOT here: it tunes to the digimode calling frequencies, which is a
 # digital-modes decision. It was on this menu briefly, on the reasoning that a
 # band is a property of the radio -- true of the band, false of this entry.
@@ -216,7 +224,8 @@ equals("the digimode menu is the digimode settings",
 equals("the deck menu is the deck and the panel",
        [l for _k, l in menus.DECK["items"]],
        ["Display", "System", "Auto tuner", "Function ring order",
-        "Send files to a phone"])
+        "Send files to a phone", "Set the rig mode",
+        "Keys on this screen"])
 check("and the station is not a menu line",
       not any(l == "Station" for _k, l in menus.DECK["items"]),
       str(menus.DECK["items"]))

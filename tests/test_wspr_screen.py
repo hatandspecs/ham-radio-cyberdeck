@@ -201,7 +201,11 @@ check("the upload state", "Upload spots                 on" in text, text)
 check("the audio levels are offered", "Audio levels" in text, text)
 check("and the levels are reported on the line",
       "TX 50%" in text and "RX 70%" in text, text)
-equals("and the danger zone is last", keys[-1], "z")
+# The keys list is last, the danger zone the one before it: being last is
+# where an Up from the first item wraps to, and a list of hotkeys is a
+# better thing to arrive at by accident than one that clears the spots.
+equals("the keys list is last", keys[-1], "k")
+equals("and the danger zone is the one before it", keys[-2], "z")
 check("the footer says the ring is locked",
       "locked while running" in m["footer"], m["footer"])
 equals("a time-out of zero reads as off",

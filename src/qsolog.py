@@ -120,6 +120,17 @@ RIG_DATA_MODES = frozenset((
     "DIGU", "DIGL", "RTTY", "RTTYR", "FSK", "USB-D", "LSB-D",
 ))
 
+# The upper-sideband data modes, which is the narrower question the digimode
+# transmit gate asks. fldigi generates its tones assuming upper sideband on
+# every band, so DATA-L or PKTLSB inverts them and nothing decodes at the far
+# end -- a failure that looks like a dead band rather than a wrong setting.
+#
+# Four names for one thing: `PKTUSB` is hamlib's and what the FTX-1's DATA-U
+# reports as, `DATA-U` is the ADIF-ish spelling, `DIGU` is Flex and Elecraft,
+# `USB-D` is Icom. Deliberately NOT a subset taken from RIG_DATA_MODES by
+# filtering on a substring: `RTTY` is a data mode and is not this one.
+RIG_DATA_MODES_USB = frozenset(("PKTUSB", "DATA-U", "DIGU", "USB-D"))
+
 # How the operator is working, which decides where the mode comes from.
 OPERATING_AUTO = "auto"        # infer, per resolve_mode
 OPERATING_DIGITAL = "digital"  # the deck is the terminal; fldigi says the mode

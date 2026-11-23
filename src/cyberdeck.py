@@ -2699,6 +2699,9 @@ class Deck:
         why = self.wspr_gain.silence_agc()
         if why:
             self._wspr_note(f"AGC: {why}")
+        # Before the clock starts, not on the first band change: see
+        # `_wspr_preflight_modes`.
+        self._wspr_preflight_modes()
         self.wspr.start(time.time())
         self.wspr_spots = []
         self.wspr_sel = None
@@ -2872,6 +2875,202 @@ class Deck:
         """
         return str(self.cfg.get("WSPR_MODE", "PKTUSB")).strip().upper()
 
+    def _digi_data_mode(self):
+        """The mode name to put the radio in for digimodes.
+
+        Read from the config with a default rather than declared, which is
+        what `WSPR_MODE` does and for the same reason: `PKTUSB` is hamlib's
+        name for the FTX-1's DATA-U, and another radio spells it another way.
+        """
+        return str(self.cfg.get("DIGI_MODE", "PKTUSB")).strip().upper()
+
+    def _digi_claim_mode(self):
+        """Put the radio into the digimode data mode. Says what it did.
+
+        **This is a deliberate exception to "the deck does not set the
+        radio's mode".** That rule was made because the deck used to set it
+        at startup and on EVERY band change, which took the decision away
+        from an operator using the deck as a logbook beside a microphone.
+        Choosing a band from the digimode menu is not that: the entry tunes
+        to the digimode calling frequency, so it is already a statement that
+        digital work is what is about to happen, and arriving there in LSB
+        is never what was meant.
+
+        Narrower than `_wspr_claim_mode` in that nothing is remembered and
+        nothing is given back. WSPR takes the radio for the length of a run
+        and hands it back; this is the operator going to a band to work it.
+        """
+        rig = self._log_rig()
+        if rig is None:
+            return
+        want = self._digi_data_mode()
+        try:
+            found = (rig.mode()[0] or "").upper()
+        except Exception:
+            return
+        if not found:
+            # A mode that cannot be read is not a mode known to be wrong.
+            return
+        if found in qsolog.RIG_DATA_MODES_USB:
+            return
+        if self._rig_set_mode(rig, want):
+            self.session.note(f"{found} -> {want} for digimodes")
+        else:
+            self.session.note(f"the radio would not take {want}")
+
+    # Measured against the FTX-1 over this rigctld on 2026-11-23, because
+    # every number here was a guess before and every guess was wrong:
+    #
+    #   set_frequency   2.38 s to read back
+    #   set_mode        0.21 to 0.26 s
+    #
+    # The code slept 0.25 s after a band change, so it set the mode while the
+    # radio was still moving and then read the PREVIOUS band's mode back. A
+    # probe built on those reads concluded the radio had no per-band mode at
+    # all, which took a second measurement to disprove -- and a third to
+    # establish that it really has none, for a different reason. Poll for the
+    # answer rather than sleeping a number.
+    RIG_FREQ_SETTLE_S = 6.0
+    RIG_MODE_SETTLE_S = 3.0
+
+    # **Never 0.** `set_mode(name, 0)` means "leave the IF filter where it
+    # is", not "give me the mode's normal passband" -- measured both ways on
+    # 2026-11-23, and the docstring in `rigctld_client.set_mode` says the
+    # second thing. The radio keeps a filter per MODE, its DATA-U entry was
+    # 500 Hz, and the digital audio sits at about 1500 Hz: once the radio
+    # recalled that filter nothing the deck did ever widened it again.
+    RIG_PASSBAND_HZ = 3000
+
+    def _rig_goto(self, rig, hz):
+        """Command the VFO and wait until the radio says it arrived."""
+        try:
+            if not rig.set_frequency(hz):
+                return False
+        except Exception:
+            return False
+        end = time.monotonic() + self.RIG_FREQ_SETTLE_S
+        while time.monotonic() < end:
+            try:
+                if abs((rig.frequency() or 0) - hz) < 2:
+                    return True
+            except Exception:
+                return False
+            time.sleep(0.1)
+        return False
+
+    def _rig_set_mode(self, rig, name):
+        """Set the mode with an explicit filter, and wait for it to take.
+
+        Returns whether the radio is actually IN that mode afterwards, which
+        is not what `rigctld_client.set_mode` answers -- that says only that
+        the command was sent.
+        """
+        want = str(name or "").strip().upper()
+        if not want:
+            return False
+        try:
+            if not rig.set_mode(want, self.RIG_PASSBAND_HZ):
+                return False
+        except Exception:
+            return False
+        end = time.monotonic() + self.RIG_MODE_SETTLE_S
+        while time.monotonic() < end:
+            try:
+                if (rig.mode()[0] or "").upper() == want:
+                    return True
+            except Exception:
+                return False
+            time.sleep(0.1)
+        return False
+
+    def _ssb_for(self, hz):
+        """The sideband convention: LSB below 10 MHz, USB above it."""
+        return "LSB" if hz < 10_000_000 else "USB"
+
+    def _set_rig_mode_now(self, kind):
+        """Put the radio into a data mode, or into SSB for the band it is on.
+
+        **This sets ONE mode, not one per band**, and the menu line says so.
+        It was specified as "set every HF band", which this radio cannot do
+        over CAT: measured on 2026-11-23, setting LSB on 40 m and then PKTUSB
+        on 20 m and returning to 40 m gives PKTUSB. There is a single mode as
+        far as rigctld can see. The radio almost certainly does keep a mode
+        per band in its own band-stacking registers, recalled by pressing a
+        band button on the front panel -- but a CAT frequency change does not
+        recall them, so the deck can neither read nor write them.
+
+        Walking the bands setting a mode on each therefore achieves nothing
+        except leaving the radio in whatever the last band was given, which
+        is what the first version of this did and what was watched happening
+        on the radio.
+        """
+        rig = self._log_rig()
+        if rig is None:
+            self._screen_note("no CAT connection — cannot set the rig mode")
+            return
+        try:
+            hz = rig.frequency() or 0
+            before = (rig.mode()[0] or "").upper()
+        except Exception:
+            self._screen_note("the radio did not answer")
+            return
+        want = self._digi_data_mode() if kind == "data" else self._ssb_for(hz)
+        if self._rig_set_mode(rig, want):
+            self._screen_note(f"rig {before or '?'} -> {want}, "
+                              f"{self.RIG_PASSBAND_HZ} Hz filter")
+        else:
+            now = ""
+            try:
+                now = (rig.mode()[0] or "").upper()
+            except Exception:
+                pass
+            self._screen_note(f"the radio would not take {want} — "
+                              f"still {now or 'unreadable'}")
+
+    def _wspr_preflight_modes(self):
+        """Put the radio into a data mode before the run starts.
+
+        **The mode was only ever claimed on a band CHANGE**, by
+        `_wspr_set_band`. Starting a run on the band already selected
+        therefore claimed nothing, and the first slot refused with "not in a
+        data mode" -- two minutes after the operator thought they had
+        started.
+
+        **One mode, not one per band.** This walked every band in the
+        rotation at first, on the premise `_wspr_claim_mode` states: that
+        the radio remembers a mode per band. Measured on 2026-11-23, this
+        radio does not, over CAT -- see `_set_rig_mode_now`. So the walk was
+        eight band changes to set one thing eight times.
+
+        What is remembered here is given back by `_wspr_release_modes` on
+        stop, so the run borrows the mode exactly as a band change already
+        did.
+        """
+        rig = self._log_rig()
+        if rig is None:
+            return
+        try:
+            found = (rig.mode()[0] or "").upper()
+        except Exception:
+            found = ""
+        # **"Could not read" is not "everything is fine".** The first version
+        # of this said "all bands already in a data mode" after failing to
+        # read any of them, which is the reassuring answer to a question it
+        # had not managed to ask.
+        if not found:
+            self._wspr_note("cannot read the rig mode — check it is "
+                            + self._wspr_data_mode())
+            return
+        if found in qsolog.RIG_DATA_MODES:
+            self._wspr_note(f"rig is in {found} — good for WSPR")
+            return
+        want = self._wspr_data_mode()
+        if self._rig_set_mode(rig, want):
+            self._wspr_modes.setdefault(self.wspr_band, found)
+            self._wspr_note(f"rig was {found} — set to {want} for the run")
+        else:
+            self._wspr_note(f"rig is in {found} and would not take {want}")
+
     def _wspr_claim_mode(self, band):
         """Put this band in a data mode, remembering what it was in.
 
@@ -2898,10 +3097,7 @@ class Deck:
         if found in qsolog.RIG_DATA_MODES:
             return
         want = self._wspr_data_mode()
-        try:
-            if not rig.set_mode(want):
-                return
-        except Exception:
+        if not self._rig_set_mode(rig, want):
             return
         # Remembered only once the command went, and only the FIRST mode
         # seen on this band: visiting a band twice must not record the mode
@@ -2937,11 +3133,10 @@ class Deck:
             try:
                 if band != self.wspr_band:
                     hz = wsprbands.dial_hz(band)
-                    if hz:
-                        rig.set_frequency(hz)
-                        time.sleep(0.25)
-                rig.set_mode(was)
-                time.sleep(0.1)
+                    if hz and not self._rig_goto(rig, hz):
+                        continue
+                if not self._rig_set_mode(rig, was):
+                    continue
                 done.append(band)
             except Exception:
                 continue
@@ -3003,10 +3198,8 @@ class Deck:
         self.wspr_band = band
         rig = self._log_rig()
         if rig is not None:
-            try:
-                rig.set_frequency(hz)
-            except Exception as exc:
-                self._wspr_note(f"could not tune: {exc}")
+            if not self._rig_goto(rig, hz):
+                self._wspr_note(f"the radio did not reach {band}")
                 return
             # And the band being arrived at is put into a data mode, which
             # is what makes a rotation work without the operator setting
@@ -3044,8 +3237,8 @@ class Deck:
             # **Named band.** The radio remembers a mode per band, so on a
             # hopping session this fires for one band out of four and "the
             # rig is not in a data mode" does not say which to go and set.
-            # `Check hop bands for DATA-U` on the menu answers it for the
-            # whole rotation without waiting for the slot to come round.
+            # `_wspr_preflight_modes` answers it for the whole rotation at
+            # start, so reaching here at all should now be rare.
             self._wspr_note(f"{band or self.wspr_band} is not in a data "
                             f"mode — not transmitting on it")
             return
@@ -6130,6 +6323,14 @@ class Deck:
                 self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH))
         if m == "deck":
             return menus.DECK
+        if m == "rig_mode":
+            return menus.RIG_MODE
+        if m == "keys":
+            # Keyed by area, so one menu name serves all four and Esc goes
+            # back to the menu the operator opened it from.
+            return menus.keys_menu(
+                {AREA_DIGI: "digi", AREA_LOG: "log", AREA_WSPR: "wspr"}
+                .get(self._area(), "deck"))
         if m == "display":
             return menus.DISPLAY
         if m == "tuning":
@@ -6439,7 +6640,16 @@ class Deck:
             # a key-up that may never come. Which half arrives depends on
             # fldigi's own handling of text after the mark, and a terminal
             # should not have an answer that depends on that.
-            if self._fldigi_sending and self.session.state == RX:
+            if not self._digi_mode_ok():
+                # Named, because "wrong mode" without saying which leaves the
+                # operator to go and look -- and the radio is the thing they
+                # would have to stop and look at.
+                mode = (self._rig_mode_held(self.fldigi.rig_mode())
+                        or "?").strip() or "?"
+                self.session.note(
+                    f"radio is in {mode} — digital transmit needs DATA-U. "
+                    f"Set it on the radio, or pick the band again from F1 1.")
+            elif self._fldigi_sending and self.session.state == RX:
                 self.session.note("still sending the last over — wait for RX, "
                                   "or Ctrl-C to cut it short")
             else:
@@ -6495,9 +6705,9 @@ class Deck:
         # ncurses sees a plain KEY_UP whether or not Ctrl is held. That would
         # have worked over SSH from an xterm and silently not on the panel.
         elif ch == 1:                        # Ctrl-A
-            self._operator_chose(); self.fldigi.nudge_carrier(-10)
+            self._operator_chose(); self._nudge_carrier(False)
         elif ch == 4:                        # Ctrl-D
-            self._operator_chose(); self.fldigi.nudge_carrier(10)
+            self._operator_chose(); self._nudge_carrier(True)
         elif ch == 23:                       # Ctrl-W
             self._search(self.fldigi.search_up, "up")
         elif ch == 19:                       # Ctrl-S
@@ -6879,6 +7089,9 @@ class Deck:
         # the digimode menu so that anything still asking for it by that name
         # gets the menu it used to get rather than nothing.
         if m in ("digi", "root"):
+            if key == "6":
+                self._open_menu("keys")
+                return True
             if key == "5":
                 import decall
                 nxt = decall.next_mode(
@@ -6888,7 +7101,7 @@ class Deck:
                 # the menu between each press is two keystrokes of noise per
                 # step. The label redraws with the new one.
                 return True
-            dest = {"1": "mode", "2": "tuning", "3": "radio",
+            dest = {"1": "radio", "2": "tuning", "3": "mode",
                     "4": "memories"}.get(key)
             if dest:
                 self._open_menu(dest)
@@ -6904,6 +7117,12 @@ class Deck:
                 return True
             if key == "5":
                 self._open_export()
+                return True
+            if key == "6":
+                self._open_menu("rig_mode")
+                return True
+            if key == "7":
+                self._open_menu("keys")
                 return True
             dest = {"1": "display", "2": "system"}.get(key)
             if dest:
@@ -7002,8 +7221,13 @@ class Deck:
                     self.session.note(f"{label} is not supported by this radio")
                 else:
                     self._set_vfo(hz, label=render.frequency(hz))
-                    # Reported, not set: a band change is not consent to
-                    # change the radio's mode.
+                    # **Set, not merely reported.** This entry tunes to the
+                    # band's digimode calling frequency, which is already a
+                    # statement that digital work is what is happening, so
+                    # arriving there in LSB is never what was meant. The
+                    # deck-wide rule that the mode is the operator's still
+                    # holds everywhere else -- see `_digi_claim_mode`.
+                    self._digi_claim_mode()
                     self._report_rig_mode()
                 self._close_menu()
             return True
@@ -7015,6 +7239,9 @@ class Deck:
             return True
 
         if m == "wspr":
+            if key == "k":
+                self._open_menu("keys")
+                return True
             if key == "w":
                 if self.wspr_running:
                     self._wspr_stop("stopped from the menu")
@@ -7252,6 +7479,9 @@ class Deck:
             return True
 
         if m == "logging":
+            if key == "k":
+                self._open_menu("keys")
+                return True
             if key == "g":
                 self._close_menu()
                 self._map_cache = None
@@ -7403,6 +7633,16 @@ class Deck:
                 self.screen = LOG if self.log_on else CHAT
             return True
 
+        if m == "rig_mode":
+            if key in ("1", "2"):
+                self._close_menu()
+                self._set_rig_mode_now("data" if key == "1" else "ssb")
+            return True
+
+        if m == "keys":
+            # Nothing is selectable on it; Esc is handled by the menu frame.
+            return True
+
         if m == "system":
             if key == "b":
                 self._open_pair()
@@ -7411,11 +7651,6 @@ class Deck:
             elif key == "i":
                 self._toggle_inhibit()
                 self._close_menu()
-            elif key == "c":
-                self._clear_transcript()
-                self._close_menu()
-            elif key == "q":
-                return False
             return True
 
         return True
@@ -7459,23 +7694,19 @@ class Deck:
         it says so rather than leaving the operator to infer it from a radio
         that stays keyed.
         """
-        # Arming transmit is the half that can be refused. Inhibiting is
-        # always allowed: a safety control that can fail to engage is not one.
+        # **Ctrl-B asks nothing about the radio's mode.** It used to refuse
+        # to ARM while the radio was outside a data mode, on the digimodes and
+        # WSPR screens only -- which made one key give two different answers
+        # depending on which screen was showing, and put a mode check in front
+        # of the auto tuner and the WSPR beacon by way of a control that has
+        # nothing to do with either. The tuner was exempted first; the
+        # exemption was the clue that the check was in the wrong place.
         #
-        # **The data-mode interlock belongs to digimodes and WSPR, and only
-        # to them.** It exists because sending PSK or a WSPR beacon through a
-        # voice mode is wrong. The auto tuner keys the radio to match an
-        # antenna and does not care what mode it is in -- refusing there made
-        # `^B` look dead on a screen whose own header had just been given an
-        # INH indicator to show the state it would not let the operator
-        # change.
-        if (self.session.inhibited and self._area() in (AREA_DIGI, AREA_WSPR)
-                and not self._rig_mode_ok()):
-            mode = (self.fldigi.rig_mode() or "?").strip()
-            self._screen_note(
-                f"transmit stays inhibited — the radio is in {mode}, not a "
-                f"data mode. Change it on the radio, then Ctrl-B again.")
-            return
+        # The mode question belongs to the thing that actually sends: `Ctrl-T`
+        # asks it through `_digi_mode_ok`, and `_wspr_transmit` asks it per
+        # band. This is the arm/disarm switch and nothing else, so it works on
+        # every screen in every mode, which is what an interlock an operator
+        # has to trust looks like.
         self.session.inhibit(not self.session.inhibited)
         self.fldigi.receive_only(self.session.inhibited)
         if self.session.inhibited and self._fldigi_sending:
@@ -7856,26 +8087,31 @@ class Deck:
         return rig_mode
 
     def _watch_rig_mode(self):
-        """Transmit and decoding both follow the radio's mode by themselves.
+        """Decoding follows the radio's mode. The inhibit does not.
 
-        The interlock used to be one-sided: `_toggle_inhibit` refused to ARM
-        in a voice mode, but a radio moved OUT of a data mode while transmit
-        was already armed stayed armed. So the dangerous order -- arm first,
-        change the radio second -- was the one the deck did not cover, and the
-        operator's next over would go out as a digital signal into a voice
-        mode on a voice frequency.
+        **This used to disarm transmit as well**, and that is the half that
+        is gone. It covered the dangerous order -- arm first, change the
+        radio second -- at the cost of making `Ctrl-B` a key whose effect
+        the deck could undo a fifth of a second later without being asked.
+        An operator who armed in SSB to run the auto tuner watched the INH
+        indicator come back on its own, which reads as a broken key rather
+        than as an interlock.
 
-        **Decoding stops too.** fldigi decodes whatever is on the sound card
-        whether or not the radio is in a mode that could be carrying it, and
-        on a Pi 3A+ that DSP is the deck's largest continuous cost. In SSB or
-        FM it buys nothing: anything decoded is noise, and transmit is
-        interlocked off anyway. `fldigi_client.park_decoder` is how, and the
-        carrier survives the round trip.
+        The cover is not lost, it moved to the things that actually send.
+        `Ctrl-T` asks `_digi_mode_ok` at the moment of sending, the WSPR
+        beacon asks per band in `_wspr_transmit`, and the calibration tone
+        asks `_rig_mode_ok`. Each refuses at the point where refusing is
+        about one transmission rather than about the deck's whole state, so
+        changing the radio out of a data mode while armed is still caught --
+        on the next `Ctrl-T`, which is the first moment it matters.
 
-        The two resume differently, on purpose. Decoding comes back by itself
-        the moment the radio is in a data mode again -- a running decoder puts
-        nothing on the air. Arming transmit stays the operator's act, which is
-        what `Ctrl-B` is, and what the message says.
+        **Decoding still stops.** fldigi decodes whatever is on the sound
+        card whether or not the radio is in a mode that could be carrying
+        it, and on a Pi 3A+ that DSP is the deck's largest continuous cost.
+        In SSB or FM it buys nothing. `fldigi_client.park_decoder` is how,
+        and the carrier survives the round trip. It comes back by itself the
+        moment the radio is in a data mode again -- a running decoder puts
+        nothing on the air.
         """
         if not self.fldigi.connected:
             return
@@ -7893,18 +8129,13 @@ class Deck:
         # return early when transmit was ALREADY inhibited, which is the
         # common case -- so a decoder left running was never stopped.
         parked = self.fldigi.park_decoder()
-        was_armed = not self.session.inhibited
-        if was_armed:
-            # Through the session's own setter, which is the route `Ctrl-B`
-            # takes, so the state and the transcript cannot disagree about why
-            # transmit is off.
-            self.session.inhibit(True)
+        # **The inhibit is NOT touched here.** See the docstring: arming is
+        # the operator's, and every path that actually transmits asks about
+        # the mode for itself.
         if self._rig_mode_warned:
             return
         self._rig_mode_warned = True
         did = []
-        if was_armed:
-            did.append("transmit off")
         if parked:
             did.append("decoding off")
         # TWO short notes rather than one long one. The panel is 66 columns
@@ -7920,9 +8151,17 @@ class Deck:
         # worth knowing; what the deck did about it is the detail.
         self.session.note(f"rig in {current} — not a data mode"
                           + (f": {', '.join(did)}" if did else ""))
-        if parked and self.session.inhibited:
+        # What comes back by itself, and what does not. The second half
+        # depends on whether transmit is armed, because the useful next key
+        # differs: inhibited, it is `Ctrl-B`; armed, the deck will take the
+        # key and `Ctrl-T` will refuse, which is a surprise better had now.
+        if parked:
             self.session.note("decoding returns with the rig; "
-                              "Ctrl-B to arm transmit")
+                              + ("Ctrl-B to arm transmit"
+                                 if self.session.inhibited
+                                 else "Ctrl-T needs DATA-U"))
+        elif not self.session.inhibited:
+            self.session.note("armed, but Ctrl-T needs DATA-U")
         elif parked:
             self.session.note("decoding returns when the rig does")
         elif self.session.inhibited:
@@ -7951,6 +8190,56 @@ class Deck:
             self.session.note(f"rig in {current} — not a data mode, "
                               f"transmit stays inhibited")
         return current
+
+    def _digi_mode_ok(self):
+        """Whether the radio is in the one mode fldigi's audio assumes.
+
+        Narrower than `_rig_mode_ok` on purpose. fldigi generates its tones
+        for upper sideband on every band, so DATA-L or PKTLSB inverts them
+        and the far end decodes nothing -- which looks like a dead band
+        rather than a wrong setting, and is the failure worth refusing.
+
+        True when the mode cannot be read, for the same reason
+        `_rig_mode_ok` is: refusing on an absence of evidence would take
+        transmit away from every deck without CAT control.
+        """
+        current = self._rig_mode_held(self.fldigi.rig_mode()).upper()
+        if not current:
+            return True
+        return current in qsolog.RIG_DATA_MODES_USB
+
+    # The carrier grid for a manual nudge. Search and AFC are deliberately
+    # not snapped: they are following a signal that is wherever it is, and
+    # rounding it would move the modem off what it just found.
+    CARRIER_GRID = 5
+
+    def _nudge_carrier(self, up):
+        """Move the carrier to the next grid point in that direction.
+
+        **Absolute, not relative.** `modem.inc_carrier` adds a delta, so a
+        carrier left off-grid by a search or by AFC stays off-grid for ever:
+        from 1443 Hz, three presses gave 1453, 1463, 1473. Reading the
+        carrier and writing a rounded value back means the first press lands
+        on the grid and every press after it stays there -- 1443, 1445,
+        1450, 1455.
+
+        So the step is the grid once on it, and less than the grid for the
+        first press off it. That is the point: the first press is a snap.
+        It also means up-then-down does not return to an off-grid start,
+        which is inherent in snapping and is why only the manual keys use it.
+        """
+        g = self.CARRIER_GRID
+        try:
+            now = int(self.fldigi.carrier() or 0)
+        except (TypeError, ValueError):
+            now = 0
+        if now <= 0:
+            # No readable carrier is not a reason to do nothing: fall back to
+            # the relative nudge that was here before.
+            self.fldigi.nudge_carrier(g if up else -g)
+            return
+        want = (-(-(now + 1) // g) * g) if up else ((now - 1) // g * g)
+        self.fldigi.set_carrier(max(0, int(want)))
 
     def _rig_mode_ok(self):
         """Whether the radio is in a mode digital transmit can use.
@@ -8035,9 +8324,9 @@ class Deck:
         if ch in (curses.KEY_F2, 27):
             self.screen = CHAT
         elif ch == curses.KEY_LEFT:
-            self._operator_chose(); f.nudge_carrier(-10)
+            self._operator_chose(); self._nudge_carrier(False)
         elif ch == curses.KEY_RIGHT:
-            self._operator_chose(); f.nudge_carrier(10)
+            self._operator_chose(); self._nudge_carrier(True)
         elif ch == curses.KEY_UP:
             self._search(f.search_up, "up")
         elif ch == curses.KEY_DOWN:

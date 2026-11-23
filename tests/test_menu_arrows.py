@@ -27,7 +27,9 @@ CTRL_O = "\x0f"          # one area back on the ring
 # F1 from the digimode screen: Mode, Tune Settings, Band, Memories. Band is
 # here and not on the deck menu because it tunes to the digimode calling
 # frequency for the band, which is useless to anything else on the deck.
-DIGI_MODE, DIGI_TUNE, DIGI_BAND, DIGI_MEM = "1", "2", "3", "4"
+# Band first: it is the one chosen most often and the one a session starts
+# with. The keys follow the order shown.
+DIGI_BAND, DIGI_TUNE, DIGI_MODE, DIGI_MEM = "1", "2", "3", "4"
 # The deck's own settings are a screen of their own AND the screen the deck
 # opens on, so there is no hop to make: F1 from the boot screen is its menu.
 DECK = ["\x1bOP"]
@@ -64,9 +66,9 @@ body = show("F1 Down Down Enter", run(keys=[DIGI, F1, DOWN, DOWN, ENTER]))
 check(f"landed on {_THIRD.upper()}",
       _THIRD.split()[0].upper() in body.upper(), body[:400])
 
-print("\n-- Enter on the first item reaches Mode --")
+print("\n-- Enter on the first item reaches Band --")
 body = show("F1 Enter", run(keys=[DIGI, F1, ENTER]))
-check("landed on MODE", "MODE" in body, body[:400])
+check("landed on BAND", "BAND" in body, body[:400])
 
 # Up from the first item wraps to the last, and Enter on it does that item's
 # job. Both halves matter: an entry with no handler still wraps to, and then
@@ -81,12 +83,18 @@ import decall
 _MENU = menus.digi_menu(decall.PREFILL_SWITCH)
 _LAST = _MENU["items"][-1][1]
 print(f"\n-- Up from the first item wraps to the last, {_LAST!r} --")
+# **The hotkey list is what is last now**, and that is deliberate: a wrap
+# from the top lands somewhere harmless rather than on the ^G line, which
+# changes a setting, or on a danger zone.
 body = show("F1 Up Enter", run(keys=[DIGI, F1, UP, ENTER]))
-# The last item cycles what `^G` does rather than opening a submenu, so the
-# proof that Enter reached it is the label CHANGING to the next behaviour --
-# `prefill` is the default, and one press moves it to `prefill_stay`.
+check("the wrap reached the keys list", "KEYS" in body, body[:300])
+check("and it lists the send key", "^T" in body, body[:600])
+
+# The ^G line still cycles what the key does, reached by its own key rather
+# than by the wrap. `prefill` is the default and one press moves it on.
+body = show("F1 5 — the ^G line", run(keys=[DIGI, F1, "5"]))
 check("the menu is still open", "DIGIMODES" in body, body[:200])
-check("and the wrap reached the ^G line",
+check("and the ^G line moved on",
       decall.MODE_LABELS[decall.PREFILL_STAY] in body, body[:500])
 check("which is one press on from the default",
       decall.MODE_LABELS[decall.PREFILL_SWITCH] not in body, body[:500])
@@ -281,8 +289,15 @@ check("the inhibit hotkey is shown", "Ctrl-B" in body, body[:400])
 # including on a form where Tab means "next field". It moved to Ctrl-B,
 # which nothing else uses, and byte 9 no longer toggles anything.
 check("and it says it works on any screen", "any screen" in body, body[:400])
-check("the clear hotkey is shown", "Ctrl-X" in body, body[:400])
-check("quit too", "Ctrl-Q" in body, body[:400])
+# **Clear the transcript and Quit are NOT here**, and that is the fix rather
+# than an omission. Both were carried over from when the deck was only a
+# digimodes terminal. Clearing the transcript acts on a screen the other
+# three areas do not draw, and Quit `return False`d out of the menu handler
+# without going through `_quit()`, so it skipped the confirmation and the
+# operator got an unannounced restart that read as a crash.
+check("clear the transcript is not on a deck-wide menu",
+      "Clear the transcript" not in body, body[:400])
+check("and neither is quit", "Quit" not in body, body[:400])
 
 # after=4.0, comfortably past the fldigi client's two-second timeout: Ctrl-X
 # calls text.clear_rx before it writes its note, so a slow fldigi delays the
@@ -294,12 +309,11 @@ body = show("Ctrl-X clears",
 check("the transcript is emptied", "transcript cleared" in body, body[:300])
 check("and the startup notes are gone", "fldigi 4.2" not in body, body[:300])
 
-# **Ctrl-B is refused while the radio is not in a data mode**, and that is
-# the interlock working rather than a dead key. Arming is exactly the half
-# that gets refused -- inhibiting is always allowed, because a safety
-# control that can fail to engage is not one. The refusal names the mode and
-# says what to do about it, because a key that silently did nothing would
-# read as broken.
+# **Ctrl-B arms whatever mode the radio is in.** It used to refuse outside a
+# data mode, on the digimodes and WSPR screens only, which made one key give
+# two different answers depending on which screen was showing -- and put a
+# mode check in front of the auto tuner, which does not care. The question
+# moved to `Ctrl-T`, which is the thing that actually sends.
 #
 # **The mode is SET here, not assumed.** fldigi keeps its rig mode between
 # runs, so this depended on whatever the previous file left behind -- and
@@ -309,15 +323,21 @@ check("and the startup notes are gone", "fldigi 4.2" not in body, body[:300])
 Fldigi().set_rig_mode("USB")
 body = show("Ctrl-B against a radio in USB",
             run(keys=[DIGI, CTRL_B], settle=2.0))
-check("the inhibit stays up, because the radio is not in a data mode",
-      " INH " in body, body[:120])
-check("and the refusal says so rather than doing nothing",
-      "transmit stays inhibited" in body, body[:400])
-check("naming the mode the radio is actually in", "USB" in body, body[:400])
+check("the inhibit comes off even though the radio is in USB",
+      " INH " not in body, body[:120])
+check("and it does not lecture about the mode",
+      "transmit stays inhibited" not in body, body[:400])
+
+# ...and Ctrl-T is where the mode is now asked about. Armed by the Ctrl-B
+# above, radio still in USB: the over is refused and the refusal names the
+# mode and what is wanted instead.
+CTRL_T = "\x14"
+body = show("Ctrl-T against a radio in USB",
+            run(keys=[DIGI, CTRL_B, "hello", CTRL_T], settle=2.0))
 # The whole body, not the first 400 characters: the sentence is longer than
 # the panel is wide and the deck wraps it onto a second line.
-check("and that the mode is the thing in the way",
-      "not a data mode" in body, body)
+check("the over is refused", "digital transmit needs DATA-U" in body, body)
+check("naming the mode the radio is actually in", "USB" in body, body)
 
 
 print("\n-- The RX hold after an over is adjustable from Tune Settings --")
