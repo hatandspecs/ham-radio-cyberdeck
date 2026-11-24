@@ -2762,7 +2762,10 @@ class Deck:
         if why:
             self._wspr_note(f"AGC: {why}")
         # Before the clock starts, not on the first band change: see
-        # `_wspr_preflight_modes`.
+        # `_wspr_preflight_modes`. The dial goes first -- the radio keeps a
+        # mode per band, so being on the right band is what makes setting
+        # the mode write the right register.
+        self._wspr_preflight_dial()
         self._wspr_preflight_modes()
         self.wspr.start(time.time())
         self.wspr_spots = []
@@ -3122,6 +3125,51 @@ class Deck:
             return
         self._screen_note(walk.message or "band modes set")
         self.band_walk = None
+
+    def _wspr_preflight_dial(self):
+        """Put the radio on the WSPR dial before the run starts.
+
+        **The frequency half of `_wspr_preflight_modes`, missed when the mode
+        half was fixed.** That docstring describes this bug exactly, for the
+        mode: the dial was only ever set on a band CHANGE, by `_wspr_tune`
+        from the picker or from the scheduler's `tune` action. Starting a run
+        on the band already selected tuned nothing -- and `wsprsched.tick`
+        only emits actions within two seconds of a slot boundary, so the
+        radio stayed on whatever frequency the operator had left it on for up
+        to two minutes while the screen reported a live session receiving a
+        band it was not on. Panel report 2026-11-24.
+
+        The picker's own tune is deliberately conditional -- it fires when
+        the selected band changes, not on every Space -- which is right for
+        the picker and is why starting needs its own answer rather than a
+        looser condition there.
+        """
+        import wsprbands
+        # A run can reach here with no current band: the picker stores an
+        # explicit "none" and `_open_wspr` only fills this in when the area
+        # is entered. The band checks above have already established that
+        # something is selected, so take the first.
+        if not self.wspr_band:
+            bands = self._wspr_bands()
+            if bands:
+                self.wspr_band = bands[0]
+        band = self.wspr_band
+        hz = wsprbands.dial_hz(band) if band else 0
+        if not hz:
+            return
+        rig = self._log_rig()
+        if rig is None:
+            # Said, rather than passed over. Without rig control the run is
+            # still worth having -- it will decode whatever the radio happens
+            # to be on -- but the operator has to know that is what it is.
+            self._wspr_note(f"no rig control — set the dial to "
+                            f"{render.frequency(hz)} for {band} by hand")
+            return
+        if self._rig_goto(rig, hz):
+            self._wspr_note(f"{band} — {render.frequency(hz)}")
+        else:
+            self._wspr_note(f"the radio did not reach {band} — "
+                            f"check it is on {render.frequency(hz)}")
 
     def _wspr_preflight_modes(self):
         """Put the radio into a data mode before the run starts.
@@ -8700,8 +8748,16 @@ def main(stdscr, settings):
         # through — do not leave the radio keyed. This runs before curses
         # tears the screen down, and is allowed to fail silently: an exception
         # here would mask the one that brought us here.
+        #
+        # `stop_transmit`, not `abort`. This said "do not leave the radio
+        # keyed" while calling the one that cannot: `main.abort` ends a
+        # transmission in progress and leaves PTT asserted when there is
+        # none, which is the 2026-11-24 fault in the place where it would be
+        # hardest to notice -- the deck's exit IS a systemd restart, so a
+        # carrier left up here comes back to a screen that never knew about
+        # it. Worth the second or so it spends confirming.
         try:
-            deck.fldigi.abort()
+            deck.fldigi.stop_transmit()
         except Exception:
             pass
         # And do not leave a file server listening. The deck's exit is a

@@ -798,6 +798,38 @@ without the power switch. `Ctrl-T` refuses outright when
 models `trx_state` and the loaded modem, including a radio that acknowledges
 every stop and holds the carrier anyway.
 
+### Starting WSPR did not tune the radio, 2026-11-24
+
+Several bands selected, WSPR started, and the VFO never moved to the dial of
+the band the deck said it was on.
+
+**The same bug `_wspr_preflight_modes` was written to fix, one field over.**
+That docstring says it plainly for the mode: "The mode was only ever claimed
+on a band CHANGE... Starting a run on the band already selected therefore
+claimed nothing, and the first slot refused... two minutes after the operator
+thought they had started." The mode half was fixed and the frequency half was
+not.
+
+The dial was only ever set by `_wspr_tune`, reached from a band change in the
+picker or from the scheduler's `tune` action -- and `wsprsched.tick` emits
+actions only within two seconds of a slot boundary, with a slot being two
+minutes. So a run started on the band already selected left the radio where
+the operator had it, for up to two minutes, under a screen reporting a live
+session. Receiving the wrong frequency, convincingly.
+
+`Deck._wspr_preflight_dial` now runs from `_wspr_start`, **before**
+`_wspr_preflight_modes`: the radio keeps a mode per band, so being on the
+band is what makes setting the mode write the right register. It also fills
+in `wspr_band` when the picker's explicit "none" left it empty, and it
+reports a radio that would not move and a missing rigctld rather than passing
+over either. `tests/test_wspr_preflight_dial.py`, 24 checks, pins the order
+by reading `_wspr_start`'s source so a later tidy-up cannot swap them.
+
+**The picker's tune is deliberately conditional** -- it fires when the
+selected band changes, not on every Space -- and that is right for the
+picker. The lesson is that "set it on change" and "set it on start" are two
+requirements, and satisfying the first reads as satisfying both.
+
 ### The operator findings round, verified on the panel 2026-11-23
 
 Nine numbered findings from `docs/scratch_notes.md`, all built and then
