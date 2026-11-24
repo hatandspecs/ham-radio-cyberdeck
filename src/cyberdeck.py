@@ -260,6 +260,14 @@ SETTLE_QUALITY = 20.0   # 0-100, used only when fldigi's squelch is off
 # the moment it begins.
 TX_IDLE_POLLS = 5
 
+# The other direction, which had nothing watching it at all: fldigi keyed
+# while this side believes it is receiving. That is a stuck carrier, and on
+# 2026-11-24 it ran until the radio's power was pulled. Given at POLL_MS =
+# 200 this is about two seconds before the deck acts by itself, and then a
+# fresh attempt every STUCK_NOTICE_S for as long as it lasts.
+STUCK_TX_POLLS = 10
+STUCK_NOTICE_S = 5.0
+
 # How long the mode and carrier must hold still before they are written to the
 # state file. Tuning moves the carrier continuously, and persisting every step
 # would write the card hundreds of times per contact for no benefit; waiting
@@ -467,6 +475,10 @@ class Deck:
         # radio is still keyed despite it. See _watch_drain().
         self._handed_at = None
         self._drain_warned = 0.0
+        # A carrier that is up with no over behind it. See
+        # _watch_stuck_carrier(), which is the only thing that stops one.
+        self._stuck_polls = 0
+        self._stuck_warned = 0.0
         # The last of what has been decoded, for the tuning screen's preview.
         # Held separately from the transcript because it has to survive the
         # transcript being cleared and has to be cheap to take the tail of.
@@ -715,6 +727,7 @@ class Deck:
         self._finish_startup()
         self._persist_settled()
         self._watch_drain(sending)
+        self._watch_stuck_carrier(sending)
 
         holding = self._settling_after_over(sending)
 
@@ -735,9 +748,12 @@ class Deck:
         # would carry the transient over into the next over's TX line.
 
         if self.session.tx_timed_out():
-            self.fldigi.abort()
-            self.session.abort()
-            self.session.note(f"transmit timed out after {self.cfg['TX_TIMEOUT']}s")
+            # The same verified stop Ctrl-C takes, for the same reason: this
+            # is the backstop, and a backstop that announces success without
+            # reading the radio back is not one. `_panic_unkey` leaves the
+            # timer armed when it cannot confirm, so this fires again.
+            self._panic_unkey(
+                f"transmit timed out after {self.cfg['TX_TIMEOUT']}s")
 
     def _quit(self):
         """Ctrl-Q. Returns False to leave the main loop.
@@ -6153,6 +6169,134 @@ class Deck:
         self.session.note(f"still transmitting {int(waited)}s after hand back "
                           f"— Ctrl-C drops the carrier")
 
+    def _panic_unkey(self, why="aborted"):
+        """Ctrl-C. Stop transmitting, and do not claim it until it is true.
+
+        **This supersedes everything on this screen.** It is the key an
+        operator reaches for with a transmitter running, so it does not ask
+        about modes, state or whose turn it is -- it stops the radio and then
+        reads the radio back.
+
+        The old version sent `main.abort` and announced "transmit aborted"
+        whether or not the call arrived, which on 2026-11-24 it did not: the
+        radio stayed keyed through a dozen Ctrl-Cs, each one printing a
+        confirmation. Worse, `session.abort()` clears `_tx_started`, and
+        `tx_timed_out()` is False while that is None -- so every unsuccessful
+        Ctrl-C disarmed TX_TIMEOUT, the one backstop that would otherwise
+        have intervened. The session is dropped to receive here ONLY when
+        fldigi has confirmed receive. When it has not, the timer stays armed,
+        `_watch_stuck_carrier` keeps escalating, and the operator is told in
+        the only terms that are useful: the radio may still be on the air.
+        """
+        # How much actually went out before the abort. Intent and reality
+        # differ here and the difference matters, so it is kept rather than
+        # dropped with the transient progress line.
+        partial = self._tx_echo.strip()
+        stopped, detail = self.fldigi.stop_transmit()
+        if stopped:
+            self.session.abort()
+            self._tx_echo = ""
+            self._stuck_polls = 0
+            self._stuck_warned = 0.0
+            self.session.note(f"{why} — sent: {partial}" if partial
+                              else f"{why} — radio confirmed in receive")
+            return True
+        # Deliberately NOT session.abort(): that disarms TX_TIMEOUT, and a
+        # transmitter nobody can confirm has stopped is exactly when it is
+        # wanted. Say so in the imperative; this is the operator's radio.
+        self.session.note(
+            f"RADIO MAY STILL BE KEYED — {detail}. ^R resets digimodes; "
+            f"if the carrier stays up, switch the radio off.")
+        return False
+
+    def _reset_digimodes(self):
+        """Ctrl-R. Put the digimode side back to a state that can be reasoned
+        about, without restarting the deck.
+
+        Asked for from the panel on 2026-11-24, after a session that reached
+        a state with no way out of it: the radio keyed, the modem on `NULL`,
+        the deck reporting receive, and Ctrl-C unable to change any of it.
+        The individual faults that produced it are fixed in
+        `fldigi_client.unpark_decoder`, `start_over` and `stop_transmit`, and
+        this exists anyway -- a subsystem talking to a separate process over
+        a socket can always be wrong in a way nobody predicted, and the
+        answer to that should not be the power switch.
+
+        Everything it touches, in the order it matters: stop the transmitter,
+        empty both buffers so neither over nor transcript carries anything
+        from before, get a real modem loaded, and clear this side's idea of
+        what is happening.
+        """
+        stopped, detail = self.fldigi.stop_transmit()
+        self.fldigi.clear_tx()
+        self.fldigi.clear_rx()
+        # What the operator last chose, then what the deck booted with, then
+        # the configured default. `force_unpark` falls back again, to the
+        # first non-NULL modem fldigi offers, so this cannot end with nothing.
+        wanted = (self._saved_mode or self._boot_mode
+                  or self.cfg.get("DEFAULT_MODE", "") or "")
+        modem = self.fldigi.force_unpark(wanted)
+
+        self.session.abort()
+        self._tx_echo = ""
+        self._tx_seen = False
+        self._tx_idle = 0
+        self._handed_at = None
+        self._drain_warned = 0.0
+        self._stuck_polls = 0
+        self._stuck_warned = 0.0
+        self._settling = False
+        self._settle_good = 0
+        self._rx_tail = ""
+        self.scroll = 0
+
+        said = ["digimodes reset"]
+        said.append("radio in receive" if stopped
+                    else f"RADIO MAY STILL BE KEYED — {detail}")
+        said.append(f"modem {modem}" if modem else "no modem loaded")
+        self.session.note(" — ".join(said))
+        return stopped
+
+    def _watch_stuck_carrier(self, sending):
+        """fldigi is keyed and no over is running. Nothing else notices this.
+
+        The poll loop reconciles the other direction -- this side thinking it
+        is transmitting while fldigi is not, see TX_IDLE_POLLS -- and for a
+        long time that was the only direction with a watcher, because it is
+        the one that merely annoys. This is the one that transmits.
+
+        It is reached by a failed Ctrl-C, by an over that fldigi keyed and
+        then lost (the NULL-modem case), and in principle by anything that
+        asserts PTT behind the deck's back. The response is the same in every
+        case and does not try to tell them apart: ask again, every
+        STUCK_NOTICE_S, and say plainly that the radio is on the air until it
+        is not.
+
+        A hand back in progress is not this: that is a legitimate drain and
+        `_watch_drain` has it.
+        """
+        if (not sending or self.session.state == TX
+                or self._handed_at is not None):
+            self._stuck_polls = 0
+            self._stuck_warned = 0.0
+            return
+        self._stuck_polls += 1
+        if self._stuck_polls < STUCK_TX_POLLS:
+            return
+        now = time.monotonic()
+        if self._stuck_warned and now - self._stuck_warned < STUCK_NOTICE_S:
+            return
+        self._stuck_warned = now
+        stopped, detail = self.fldigi.stop_transmit()
+        if stopped:
+            self._stuck_polls = 0
+            self._stuck_warned = 0.0
+            self.session.note("radio was keyed with no over running — unkeyed")
+        else:
+            self.session.note(
+                f"RADIO STILL KEYED with no over running — {detail}. "
+                f"^R resets digimodes; switch the radio off if it holds.")
+
     def _settling_after_over(self, sending):
         """True while decodes arriving after an over should be discarded.
 
@@ -6735,13 +6879,30 @@ class Deck:
             elif self._fldigi_sending and self.session.state == RX:
                 self.session.note("still sending the last over — wait for RX, "
                                   "or Ctrl-C to cut it short")
+            elif self.fldigi.modem_is_null():
+                # Keying into NULL puts a carrier up and modulates nothing.
+                # `_digi_mode_ok` above reads the RADIO's mode and passes,
+                # because the radio is right -- it is fldigi that is parked.
+                # That combination is what sent a carrier out with nothing on
+                # it on 2026-11-24, so it is refused here by name.
+                self.session.note(
+                    "fldigi has no modem loaded (NULL) — nothing would go "
+                    "out. ^R resets digimodes, or pick a mode from F3.")
             else:
                 text = self.session.start_over()
                 if text is not None:
                     self._tx_echo = ""
                     self._handed_at = None
                     self._drain_warned = 0.0
-                    self.fldigi.start_over(text)
+                    # Checked, because the alternative is this side believing
+                    # an over is running that was never keyed -- or, worse,
+                    # the radio keyed with text that never arrived. See
+                    # `fldigi_client.start_over`.
+                    if not self.fldigi.start_over(text):
+                        if self.session.resync_to_receive():
+                            self.session.note(
+                                "fldigi did not take the over — nothing was "
+                                "sent and the radio was not keyed")
         elif ch == 25:                       # Ctrl-Y
             if self.session.hand_back():
                 self._handed_at = time.monotonic()
@@ -6750,22 +6911,15 @@ class Deck:
                     self.session.note("fldigi did not take the hand back — "
                                       "Ctrl-C to drop the carrier")
         elif ch == 3:                        # Ctrl-C
-            # Record how much actually went out before the abort. This is the
-            # one case where intent and reality differ and the difference
-            # matters, so it is kept rather than dropped with the transient
-            # progress line.
-            partial = self._tx_echo.strip()
-            self.fldigi.abort()
-            self.session.abort()
-            if partial:
-                self.session.note(f"aborted — sent: {partial}")
-            self._tx_echo = ""
+            self._panic_unkey()
         elif ch == 7:                        # Ctrl-G, log the station heard
             self._log_from_transcript()
         elif ch == 12:                       # Ctrl-L
             self.scr.clearok(True)
         elif ch == 24:                       # Ctrl-X
             self._clear_transcript()
+        elif ch == 18:                       # Ctrl-R
+            self._reset_digimodes()
         # On the conversation screen the arrows edit the line, as they would
         # in any terminal: left and right move the cursor, up and down recall
         # what was sent before.

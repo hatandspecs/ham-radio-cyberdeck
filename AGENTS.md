@@ -722,6 +722,82 @@ dummy load attached and nothing transmitting.
 **None of this was visible from the laptop.** The fake rig answers
 instantly, in whatever mode it is told, with no filter.
 
+### The stuck transmitter, 2026-11-24 — read this before touching the TX path
+
+**The worst fault this project has produced.** A PSK31 contact, two message
+memories composed, `Ctrl-T`: the radio keyed, the over appeared in the
+transcript, and nothing went on the air. `Ctrl-C` a dozen times, each one
+printing "transmit aborted", none of them unkeying the radio. A band change
+eventually cleared it; the next attempt did the same; the radio was switched
+off at the front panel.
+
+Four defects, each independently sufficient to make the deck lie about a live
+transmitter. None was operator error.
+
+1. **`unpark_decoder` cleared `_parked_modem` BEFORE the
+   `modem.set_by_name` it depended on.** `_call` swallows every error, so a
+   failed unpark left fldigi on `NULL`, returned the modem name as though it
+   had worked -- the deck said "rig back in a data mode, decoding BPSK31
+   again" -- and, with the bookkeeping already gone, **never retried**. This
+   is the root cause of "keyed and sending nothing": `_digi_mode_ok` reads
+   the RADIO's mode, which was correct, and never asked what modem fldigi
+   had. Keying into `NULL` puts a carrier up and modulates nothing, so there
+   was also nothing to drain and therefore no event that ends an over.
+2. **`start_over` called `main.tx` unconditionally.** A timed-out
+   `text.add_tx` followed by a successful `main.tx` keys the radio with an
+   empty widget -- and that sequence is *likely*, not coincidental, because
+   `_call` builds a fresh proxy after a failure.
+3. **`abort()` never sent `main.rx`, and returned `None`.** `main.abort`
+   ends a transmission *in progress*; with nothing in progress PTT stayed
+   asserted. `receive_now()` -- written for exactly this, docstring "acts on
+   the modem directly" -- **had zero callers anywhere in `src/`.** Dead code
+   on the one path that stops a transmitter.
+4. **A failed `Ctrl-C` disarmed the backstop.** `session.abort()` clears
+   `_tx_started`, and `tx_timed_out()` is False while that is None. Every
+   unsuccessful `Ctrl-C` re-disarmed `TX_TIMEOUT`, the only thing that would
+   otherwise have intervened. Pressing it repeatedly made things *worse*.
+
+And one structural gap behind all of it: the poll loop reconciled **one
+direction only** -- this side thinking it transmits while fldigi does not
+(`TX_IDLE_POLLS`). The reverse, fldigi keyed while this side believes it is
+receiving, had nothing watching it at all. That is the direction that
+transmits.
+
+**What is there now.** `fldigi_client.stop_transmit()` escalates
+`main.abort` -> `text.clear_tx` -> `main.rx` and then **reads
+`main.get_trx_state` back**, repeating while fldigi still says TX, and
+returns `(stopped, detail)`. `Deck._panic_unkey` is what `Ctrl-C` and the
+`TX_TIMEOUT` backstop both call; it drops the session to receive **only on a
+confirmed stop**, and on failure leaves the timer armed and says `RADIO MAY
+STILL BE KEYED`. `Deck._watch_stuck_carrier` covers the missing direction.
+`Ctrl-R` (`_reset_digimodes`) is the operator's way out of a wrong state
+without the power switch. `Ctrl-T` refuses outright when
+`fldigi.modem_is_null()`.
+
+**The rules this leaves.**
+
+* **`_call` returning normally means nothing.** It swallows `OSError`,
+  `socket.timeout` and `xmlrpc.client.Error`, returns the default, and sets
+  `connected`. Any call whose failure matters must check `self.connected`, or
+  read the state back, or both. `hand_back()` already did this and was the
+  only one.
+* **Never clear local bookkeeping before the remote call it describes.**
+  Clear it after the call is confirmed, so a failure retries instead of
+  becoming permanent and invisible.
+* **Never announce a physical outcome that was not read back.** "Transmit
+  aborted" on an unverified abort is worse than silence: it taught the
+  operator the key worked.
+* **A safety interlock must not be disarmed by the failure of the thing it
+  guards.**
+* **`modem()` is not `modem_loaded()`.** `modem()` reports what the operator
+  chose and deliberately hides a park. Anything that decides whether
+  transmitting will put signal on the air must ask `modem_loaded()` /
+  `modem_is_null()`.
+
+`tests/test_stuck_tx.py` (71 checks) drives all of this against a stub that
+models `trx_state` and the loaded modem, including a radio that acknowledges
+every stop and holds the carrier anyway.
+
 ### The operator findings round, verified on the panel 2026-11-23
 
 Nine numbered findings from `docs/scratch_notes.md`, all built and then

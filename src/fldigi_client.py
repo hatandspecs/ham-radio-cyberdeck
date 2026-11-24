@@ -17,10 +17,19 @@ Two properties matter more than the API surface:
 """
 
 import socket
+import time
 import xmlrpc.client
 
 DEFAULT_URL = "http://127.0.0.1:7362/"
 DEFAULT_TIMEOUT = 2.0
+
+# How hard `stop_transmit` tries before it admits the radio may still be
+# keyed. Three rounds of (abort, clear, rx) with a read-back between them,
+# which at a 0.15 s verify poll is under a second of the interface's time --
+# acceptable for the one action whose whole job is to stop a transmitter.
+STOP_TRIES = 3
+STOP_VERIFY_S = 0.45
+STOP_VERIFY_STEP_S = 0.15
 
 # fldigi's inline control for "return to receive once the buffer has drained".
 # Appending this rather than calling main.rx() is what lets an over finish
@@ -154,10 +163,28 @@ class Fldigi:
 
         Order matters: the text goes into fldigi's TX widget first, so that
         keying and sending are one action from the operator's point of view.
+
+        **Keying is conditional on the text having landed, and that is the
+        whole point.** `main.tx` used to go out unconditionally. `_call`
+        swallows every error and builds a fresh proxy for the next attempt,
+        so one timed-out `text.add_tx` followed by a successful `main.tx` put
+        the radio on the air with an empty TX widget: carrier up, nothing
+        modulated, and -- because nothing was draining -- no completion event
+        to end the over. Reported from the panel 2026-11-24.
+
+        Empty text is refused for the same reason rather than keying on a
+        buffer with nothing in it.
+
+        Returns whether the radio was asked to key, so the caller can tell
+        the operator when it was not.
         """
-        if text:
-            self._call("text.add_tx", text)
+        if not text:
+            return False
+        self._call("text.add_tx", text)
+        if not self.connected:
+            return False
         self._call("main.tx")
+        return self.connected
 
     def send_more(self, text):
         """Append to what is already going out, mid-over."""
@@ -194,9 +221,60 @@ class Fldigi:
 
         Clearing after the abort rather than before: the order that matters
         is the one that stops the transmitter first.
+
+        **Prefer `stop_transmit`.** This is the first two thirds of it: it
+        asks fldigi to stop and never checks that it did, which is how a
+        transmitter stayed keyed through a dozen Ctrl-Cs on 2026-11-24. Kept
+        because the order it establishes is tested and worth keeping, and
+        because `stop_transmit` is built out of it.
         """
         self._call("main.abort")
         self._call("text.clear_tx")
+
+    def stop_transmit(self, tries=STOP_TRIES):
+        """Stop transmitting, then CONFIRM the radio has unkeyed.
+
+        Returns `(stopped, detail)` -- `stopped` is True only when fldigi has
+        been read back and said it is in receive. The caller is expected to
+        treat False as "the transmitter may still be running" and say so:
+        nothing else in the deck can tell.
+
+        **Why this exists.** `abort()` sent `main.abort` and `text.clear_tx`
+        and returned None, and nothing checked it. `main.abort` ends a
+        transmission *in progress*; with an empty or stalled TX widget there
+        is nothing for it to end, and PTT stayed asserted. The call that
+        unconditionally returns the modem to receive is `main.rx` -- written
+        here as `receive_now` and, until now, never called from anywhere in
+        the deck. So the escalation is:
+
+            main.abort      stop the transmission
+            text.clear_tx   drop the tail, so the next over is its own
+            main.rx         return to receive whether or not there was one
+            main.get_trx_state   and then ASK, rather than assume
+
+        and the whole thing repeats while fldigi still says it is keyed,
+        because a single round that failed on a timeout should not be the
+        last word on a live transmitter.
+        """
+        detail = "not asked"
+        for attempt in range(max(1, tries)):
+            self._call("main.abort")
+            self._call("text.clear_tx")
+            self._call("main.rx")
+            if not self.connected:
+                detail = f"fldigi did not answer ({self.last_error})"
+                continue
+            waited = 0.0
+            while waited < STOP_VERIFY_S:
+                state = str(self.trx_state()).upper()
+                if state.startswith("R"):
+                    return True, f"confirmed in receive after {attempt + 1}"
+                if not self.connected:
+                    break
+                time.sleep(STOP_VERIFY_STEP_S)
+                waited += STOP_VERIFY_STEP_S
+            detail = f"fldigi still reports {str(self.trx_state()).strip()}"
+        return False, detail
 
     def receive_only(self, on=True):
         """Inhibit transmit entirely (§9)."""
@@ -290,16 +368,75 @@ class Fldigi:
 
         Nothing happens, and "" comes back, when the decoder was not parked --
         so this is safe to call on every poll, which is how it is called.
+
+        **The park is forgotten only once fldigi confirms the modem is back,
+        and that ordering is the whole fix.** This used to clear
+        `_parked_modem` BEFORE the `modem.set_by_name` it depends on. `_call`
+        swallows every error, so a failed unpark left fldigi on `NULL`,
+        returned the modem's name as though it had worked -- the deck said
+        "rig back in a data mode, decoding PSK31 again" -- and, with the
+        bookkeeping already cleared, never retried. From then on `modem()`
+        reported `NULL`, `_digi_mode_ok` kept passing because it reads the
+        RIG's mode and not the modem, and `Ctrl-T` keyed the radio into a
+        modem with nothing to modulate.
+
+        That is the 2026-11-24 stuck-transmitter report, from the bottom up.
+        Reading the modem back costs one call per poll while parked, and only
+        while parked.
         """
         name = self._parked_modem
         if not name:
             return ""
-        self._parked_modem = ""
         self._call("modem.set_by_name", name)
+        if not self.connected:
+            return ""          # still parked; the next poll tries again
+        back = str(self.modem_loaded() or "")
+        if not back or back == "?" or back.upper() == "NULL":
+            return ""          # fldigi did not take it; stay parked
+        self._parked_modem = ""
         if self._parked_carrier:
             self._call("modem.set_carrier", int(self._parked_carrier))
         self._parked_carrier = 0
-        return name
+        return back
+
+    def modem_is_null(self):
+        """Whether fldigi actually has the NULL modem loaded.
+
+        The question `modem()` deliberately cannot answer: it reports what the
+        operator chose, which while parked is the modem put aside rather than
+        the `NULL` in use. Transmitting into NULL keys the radio and
+        modulates nothing, so the paths that key ask this directly.
+        """
+        name = str(self.modem_loaded() or "")
+        return bool(name) and name.upper() == "NULL"
+
+    def force_unpark(self, fallback=""):
+        """Get a real modem loaded, whatever the park bookkeeping says.
+
+        The reset path. `unpark_decoder` is careful and conditional by
+        design; this is for the operator who has decided the digimode side is
+        wrong and wants it put back. Tries the parked modem, then `fallback`,
+        then the first modem fldigi offers that is not NULL. Returns the name
+        loaded, or "".
+        """
+        wanted = [n for n in (self._parked_modem, fallback) if n]
+        if not wanted or self.modem_is_null():
+            for n in (self.modem_names() or []):
+                if str(n).upper() != "NULL":
+                    wanted.append(str(n))
+                    break
+        for name in wanted:
+            self._call("modem.set_by_name", name)
+            if not self.connected:
+                continue
+            back = str(self.modem_loaded() or "")
+            if back and back != "?" and back.upper() != "NULL":
+                self._parked_modem = ""
+                if self._parked_carrier:
+                    self._call("modem.set_carrier", int(self._parked_carrier))
+                self._parked_carrier = 0
+                return back
+        return ""
 
     @property
     def decoder_parked(self):
