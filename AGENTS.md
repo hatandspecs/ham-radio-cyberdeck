@@ -1245,6 +1245,45 @@ rejected outright. **A substring check against a screen that might be an
 error message is not an assertion.** It now checks the header's shape and
 that no `unknown setting` appears.
 
+**And it caught me again on 2026-11-24.** A throwaway probe script got
+`STATION` wrong -- `GRID` instead of `ANTENNA` -- so the deck refused to start
+and printed the rejection where the screen should have been. Both probes came
+back `LOG SCHEMA: False`, which is exactly the answer a working deck would
+have given for the behavior under test. Copy the fixture constants; do not
+retype them from memory.
+
+### Three stale assertions in `test_log_panel.py`, fixed 2026-11-24
+
+The suite's one failing file. None of the three was a product bug; all three
+were the test asserting a world that had moved.
+
+* **`"2/2" in body`** for the field-picker page heading. The heading is
+  `SELECT FIELDS -- from CONTEST  2/3`: `activities.field_choices()` reached
+  32 entries against `render.FIELDS_PER_PAGE = 14`, so there are three pages.
+  The check is named "and the heading says which page" and a frozen total
+  fails the next time a field is added rather than the next time paging
+  breaks. It now derives the count. Note `test_log_panel.py:684` already had
+  this right -- `"0 of " in body`, no total.
+* **The schema picker after naming an activity**, two checks. Commit
+  `76db0da` (2026-10-23) deliberately took the picker out of that flow, and
+  `_start_named_activity`'s docstring says why: the schema is a property of
+  how contacts are typed, an activity is a property of when and where they
+  happened, and an operator naming the second park of the day wants the
+  schema they already have. `F3` opens the picker when it is wanted. The test
+  was last touched 2026-10-17, six days before the change, so the assertions
+  outlived the behavior by a month. `test_own_refs.py` was updated at the
+  time and kept passing, which is why nothing caught it sooner.
+
+The rewrite asserts the designed behavior instead: naming lands on the log
+screen with no picker in the way, `F3` from that screen opens it with
+`n new` on the footer, and Esc closes it to the log screen rather than back
+to the activities list.
+
+**The lesson is about which direction a failing assertion points.** All three
+read as "the deck is broken." Two were a feature working as designed and one
+was the data outgrowing a literal. A test that fails the day a field is added
+is not protecting anything.
+
 ### What still needs the deck
 
 * ~~`rigctld` while fldigi is stopped.~~ **VERIFIED 2026-10-17 and it

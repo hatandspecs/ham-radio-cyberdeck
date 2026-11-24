@@ -268,7 +268,11 @@ check("and that the list pages", "page" in body, body[-120:])
 body, _ = build([RING_FWD, F1["linux"]] + COPY_CONTEST + [RIGHT],
                 "the copied fields are on, on their own page")
 check("the copied fields are on", "\u2588" in body, body[:400])
-check("and the heading says which page", "2/2" in body, body[:80])
+# Derived, not written down: the field list grows, and a page count frozen
+# into the assertion fails the next time a field is added rather than the
+# next time paging breaks. It said "2/2" and the list reached 32 fields.
+FIELD_PAGES = -(-len(activities.field_choices()) // render.FIELDS_PER_PAGE)
+check("and the heading says which page", f"2/{FIELD_PAGES}" in body, body[:80])
 
 body, _ = build([RING_FWD, F1["linux"]] + COPY_CONTEST
                 + field_keys("name") + ["\r"],
@@ -746,20 +750,41 @@ check("nothing is written", "[GENERAL]" not in text, text)
 check("and the refusal is on the screen, not only in the transcript",
       "GENERAL is the built-in" in body, body[:400])
 
-print("\nnaming a new activity asks which type it uses")
+print("\nnaming a new activity does NOT ask which schema it uses")
 
+# This used to open the schema picker straight after the name, on the
+# reasoning that a new activity is usually new because the operating is
+# different. `_start_named_activity` says why it stopped: the schema is a
+# property of how contacts are typed and an activity is a property of when
+# and where they happened, so an operator naming the second park of the day
+# wants the schema they already have. `F3` opens the picker when it IS
+# wanted, which is the case below. These three checks asserted the old flow
+# for a month after it changed.
 body, left = with_activity([RING_FWD, F2["linux"], "n", "F", "D", "\r"],
-                           "name an activity, then the type picker")
-check("the schema picker comes up next", "LOG SCHEMA" in body, body[:200])
+                           "name an activity, and stay on the log screen")
+check("the name took", "FD" in body, body[:120])
+check("the deck says the activity started", "FD started" in body, body)
+check("and no schema picker is in the way", "LOG SCHEMA" not in body,
+      body[:200])
+check("nor the activities list it was named from", "ACTIVITIES" not in body,
+      body[:200])
+
+# `F3` is the route the docstring names, and it has to work from the log
+# screen the naming left the operator on -- not only from the logging menu,
+# which is where the other picker tests above enter it with `v`.
+body, left = with_activity([RING_FWD, F2["linux"], "n", "F", "D", "\r",
+                            F3["linux"]],
+                           "F3 opens the picker when it is wanted")
+check("the schema picker comes up on F3", "LOG SCHEMA" in body, body[:200])
 check("with the create paths on it", "n new" in body, body[-160:])
 
 # Esc out of the picker must not land back on the activities list: that list
 # is the screen the operator has already finished with.
 body, left = with_activity([RING_FWD, F2["linux"], "n", "F", "D", "\r",
-                            "\x1b", "\x1b"],
+                            F3["linux"], "\x1b"],
                            "Esc out of the picker")
 check("it backs out onto the log screen, not the activities list",
-      "ACTIVITIES" not in body, body[:200])
+      "ACTIVITIES" not in body and "LOG SCHEMA" not in body, body[:200])
 
 print("\nreading back and correcting a contact already logged")
 # The arrows pick a logged contact; Tab and Shift-Tab move between fields,
