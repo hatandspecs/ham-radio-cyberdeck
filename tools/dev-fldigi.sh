@@ -6,6 +6,14 @@
 # crashes on a genuinely empty configuration directory — an assertion failure
 # during first-run setup, reproduced twice — so a working config is seeded from
 # the developer's own install rather than generated (§14).
+#
+# **DISPLAY alone does not hide it on a Wayland desktop.** FLTK 1.4 is
+# Wayland-native and prefers WAYLAND_DISPLAY over DISPLAY, so `DISPLAY=:99
+# fldigi` connected straight to the compositor and opened a real window on the
+# developer's screen while Xvfb sat empty — found on Fedora 45 on 2026-11-23,
+# by the window appearing rather than by anything failing. WAYLAND_DISPLAY is
+# cleared and FLTK_BACKEND pinned, because either alone leaves this resting on
+# FLTK's preference order staying what it is today.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,7 +53,8 @@ sleep 1
 
 Xvfb "$DISPLAY_NUM" -screen 0 1024x768x16 >/dev/null 2>&1 &
 sleep 2
-DISPLAY="$DISPLAY_NUM" fldigi --config-dir "$CONFIG_DIR" \
+WAYLAND_DISPLAY= FLTK_BACKEND=x11 DISPLAY="$DISPLAY_NUM" \
+  fldigi --config-dir "$CONFIG_DIR" \
   --xmlrpc-server-address 127.0.0.1 --xmlrpc-server-port "$PORT" \
   > "${CONFIG_DIR}/fldigi.log" 2>&1 &
 

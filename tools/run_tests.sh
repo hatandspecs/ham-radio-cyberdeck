@@ -11,6 +11,27 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${HERE}/.." && pwd)"
 cd "$PROJECT_DIR" || exit 1
 
+# **`pyte` before fldigi**, because without it fourteen files fail at the
+# import and are reported FAILED exactly as a real break would be -- which
+# cost a session in 2026-11 before anyone read the traceback. It lives in the
+# `cyberdeck-dev` environment; see environment.yml, which also pins python to
+# the 3.13 the deck runs rather than whatever the system has.
+if ! python3 -c "import pyte" 2>/dev/null; then
+  cat >&2 <<'MSG'
+pyte is missing, so the pseudo-terminal tests cannot run. They would be
+reported as FAILED rather than skipped, which is worse than stopping here.
+
+    conda env create -f environment.yml     # first time
+    conda activate cyberdeck-dev
+MSG
+  exit 1
+fi
+
+# The python the tests will actually use, printed rather than assumed: the
+# deck runs 3.13 and the system python here is further ahead, so a suite that
+# passes says less than it looks like it does when they differ.
+echo "python $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')  (the deck runs 3.13.5)"
+
 if ! python3 -c "
 import xmlrpc.client, sys
 try:

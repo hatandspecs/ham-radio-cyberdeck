@@ -1,0 +1,39 @@
+# Development and test environment for the cyberdeck.
+#
+# **The deck needs none of this.** `src/` is the standard library and its own
+# modules, with one exception -- `btpair.py` imports `gi` (PyGObject) to talk
+# to BlueZ, which comes from the system on both the laptop and the card. The
+# deploy is plain .py files into /opt/cyberdeck run by Raspbian's python3;
+# there is no environment on the deck and this file must never become a
+# dependency of running it.
+#
+# So this exists for two reasons, and the second is the real one:
+#
+#   1. `pyte` is needed by the tests that drive the real program through a
+#      pseudo-terminal and read the screen back. It is the only package the
+#      test suite wants.
+#
+#   2. **The python version.** Measured 2026-11-23: the deck runs 3.13.5 on
+#      Raspbian 13, and this laptop's /usr/bin/python3 is 3.15.2 on Fedora 45.
+#      Testing a stdlib-only codebase two minor versions ahead of the machine
+#      it ships to is exactly the arrangement that hides a stdlib behaviour
+#      change until it reaches the panel. Pinning to 3.13 is most of the
+#      value here; `pyte` is the small part.
+#
+# `gi` is deliberately absent. conda-forge has pygobject, but it arrives with
+# its own GLib stack and the thing being tested is the system's BlueZ. Keep
+# `test_pair.py` on a python that can see the system packages, or accept that
+# it is the one file this environment cannot run.
+#
+#   conda env create -f environment.yml
+#   conda activate cyberdeck-dev
+#   tools/run_tests.sh            # needs fldigi too: tools/dev-fldigi.sh
+#
+name: cyberdeck-dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - pip:
+      - pyte

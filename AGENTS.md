@@ -663,6 +663,110 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
   `tests/test_log_panel.py` defaults to `linux`, so an xterm F1 is simply
   typed into the callsign field.
 
+### What the FTX-1 actually does over CAT, measured 2026-11-23
+
+Three premises in this codebase were guesses, and all three were wrong. Each
+was found by driving the real radio through rigctld from the deck, with a
+dummy load attached and nothing transmitting.
+
+- **A band change takes 2.38 seconds to read back. A mode change takes 0.21
+  to 0.26.** The code slept `0.25` after `set_frequency` and `0.1` after
+  `set_mode`, so it set the mode while the radio was still moving and read
+  the PREVIOUS band's mode back. A probe built on those stale reads concluded
+  the radio had no per-band mode memory, which took two more measurements
+  and the CAT manual to sort out. **Poll until the radio agrees** -- `Deck._rig_goto` and
+  `Deck._rig_set_mode` do, and every rig call site goes through them.
+
+- **Per-band modes ARE reachable over CAT, through `BS` and not through
+  frequency.** This entry said the opposite for most of a day, on this
+  measurement: set LSB on 40 m, set PKTUSB on 20 m, tune back to 40 m, read
+  PKTUSB. True, and it does not mean what it was taken to mean. It cannot
+  tell "one global mode" apart from "the register was written but a
+  frequency change does not recall it", and the second is what is happening.
+
+  `BS` -- BAND SELECT in the CAT manual, set-only, `BS` + side + two digits
+  -- is the CAT equivalent of pressing a band button, and it recalls the
+  band's stacking register, frequency and mode together:
+
+  ```
+  BS003;  MD01;   ->  40 m, LSB
+  BS005;  MD0C;   ->  20 m, DATA-U
+  BS003;          ->  reads 7070700 and MD01
+  ```
+
+  Note the frequencies: each band gave back its own, including one set
+  hours earlier. `set_frequency` recalls neither frequency nor mode, and
+  the deck had only ever used `set_frequency`. `src/bandmodes.py` is built
+  on this and carries the evidence in its module docstring.
+
+  **The lesson is the measurement, not the finding.** A test that can only
+  distinguish its hypothesis from one alternative has not distinguished it
+  from the others, and this one was written up as settled fact in three
+  places. The manual was in the next repository the whole time
+  (`../ftx1-tuner-sweep/refs/FTX-1_CAT_OM_ENG_2508-C.pdf`) and answers it
+  in one table.
+
+  `_wspr_claim_mode` and `_wspr_release_modes` still walk band by band by
+  tuning, which recalls no register -- so they set one global mode several
+  times over. Redundant rather than wrong, left alone deliberately, and the
+  thing to fix if that machinery is ever touched.
+
+- **`set_mode(name, 0)` leaves the IF filter where it is.** It does not ask
+  for the mode's normal passband, whatever `rigctld_client.set_mode`'s
+  docstring says. The radio keeps a filter per mode, its DATA-U entry was
+  **500 Hz**, and digital audio sits at about 1500 Hz -- so once the radio
+  recalled that filter nothing the deck did ever widened it, and this was
+  true of WSPR on `main`. Always pass a width: `Deck.RIG_PASSBAND_HZ`.
+  Reported from the operator watching the radio's own display.
+
+**None of this was visible from the laptop.** The fake rig answers
+instantly, in whatever mode it is told, with no filter.
+
+### Two invariants the code states and one place each broke it
+
+Both found by the operator on the panel, 2026-11-23, after the deploy passed
+its preflight. **The preflight cannot catch a crash or a wrong jump that
+needs a keystroke**, which is the whole argument for the key-press pass.
+
+- **"On every area, F2 and F3 are that area's two main sub-views."** The
+  rule is written in `_handle_log`'s own comment and all four screens follow
+  it. `_handle_menu` did not: it ran the DIGIMODES pair from inside every
+  menu, because the block was written when digimodes was the only menu and
+  never learned the other three areas. So `F2` on a deck & rig menu closed
+  it, left the area, and drew the digimode tuner. The Esc path immediately
+  below it had already been taught not to cross an area boundary. Now
+  `Deck._menu_subview`, keyed on `_area()`.
+
+- **`WSPR_BANDS=` means "unset, use the default", not "none selected".**
+  The picker used to refuse to deselect the last band, which made switching
+  bands with Space a three-press detour through a rotation nobody wanted.
+  Space is a checkbox now and the last band comes off like any other; WSPR
+  refuses to START with nothing selected, which is the honest place to say
+  it. A deliberate nothing is stored as `WSPR_BANDS_NONE`, because an
+  existing deck with an empty value must keep its 40 m rather than come up
+  bandless. `wsprsched` already tolerated an empty band list.
+
+**Both are shapes rather than one-off bugs.** A key handled centrally has to
+ask which area it is in, and a config value that means "unset" cannot also
+mean "empty on purpose".
+
+### Deploying: the restart is the operator's, by design
+
+`/opt/cyberdeck` is owned by `deck:deck`, so the modules copy in over ssh
+with no sudo. The restart does not: `polkit/10-cyberdeck-services.rules`
+grants `manage-units` over **`cyberdeck-fldigi.service` only**, and says in
+its own comment that extending it to `cyberdeck-ui` would let the terminal
+restart itself. `sudo` needs a tty. So a deploy ends with the new files on
+the card and the OLD code still running, which is a safe place to stop --
+the deck keeps working until somebody types:
+
+```
+sudo systemctl restart cyberdeck-ui
+```
+
+Back the old modules up first (`cp -a /opt/cyberdeck ~/cyberdeck.bak`), so
+the revert before a restart is a file copy rather than a rebuild.
+
 ## What is being worked on now
 
 ### Seven features from `docs/next_steps.md`, built 2026-10-22
@@ -900,6 +1004,54 @@ grant that does not prompt could only have come from the rule.
 | **No inhibit indicator** | Transmit was refused with nothing on screen to say why, while every other screen carries it. In the header, displacing `next: TX` — which under an inhibit is a false statement |
 | **KM empty** | WSPR carries a grid and no distance. `src/grid.py` computes it, **validated against this station's own wsprnet rows**: inside 0.5 km on every six-character path from 498 to 6855 km. Not stored — both figures are derivable from the two grids already in each record |
 | **The screen was tight** | The spot row used 44 of 66 columns with no gaps. Respaced, with KM and AZ |
+
+### Reach for a conda env before concluding a package is missing
+
+This machine has four, and `python3` is not any of them. Conda's base is
+`/usr`, so the plain interpreter is the bare system one and an unactivated
+shell gets it by default. Both traps below are that, and neither fails loudly.
+
+```
+conda env list                       # general_assignment_solver, openems_env,
+                                     # repeater_monitoring, terminal_map
+```
+
+**All four carry matplotlib and numpy** (checked 2026-11-23: 3.10.9 to
+3.11.2). `/usr/bin/python3` carries numpy and not matplotlib.
+
+- **A plot can silently not happen.** `choke_s2p.py --plot` under the system
+  python prints "matplotlib not installed, skipping the plot", writes no
+  file, and **exits 0** -- so a missing figure looks like a successful run.
+  Check the PNG exists rather than the exit code, or use
+  `/home/natale/.conda/envs/openems_env/bin/python`. (That tool lives in the
+  hamradio-source repo; the trap is the machine's, so it is in both.)
+
+- **`pyte` is the one package only `repeater_monitoring` has**, and the pty
+  tests need it. `tools/run_tests.sh` calls plain `python3`, so on a bare run
+  fourteen files fail at `import pyte` and report as FAILED exactly like a
+  real break. Run the suite as
+  `PATH=/home/natale/.conda/envs/repeater_monitoring/bin:$PATH tools/run_tests.sh`.
+  Budget about an hour: `test_log_panel` alone takes eight minutes and several
+  others take two to five, because they drive the real program through a pty
+  with real settling delays.
+
+### `DISPLAY=:99` does not hide an FLTK 1.4 program on Wayland
+
+`tools/dev-fldigi.sh` claimed to run fldigi "against a virtual X server that
+is never displayed". On Fedora 45 that was false and had been for a while:
+fldigi links `libfltk.so.1.4`, FLTK 1.4 is Wayland-native, and it **prefers
+`WAYLAND_DISPLAY` over `DISPLAY`**. So `DISPLAY=:99 fldigi` connected to the
+compositor and put a real window on the developer's desktop while Xvfb sat
+there with nothing on it.
+
+Nothing failed. The tests passed throughout, because XML-RPC does not care
+which display the GUI is on. It was found on 2026-11-23 by the operator
+noticing a window and asking whether it was supposed to be there.
+
+The script now clears `WAYLAND_DISPLAY` and sets `FLTK_BACKEND=x11`. Both,
+deliberately: either alone leaves the isolation resting on FLTK's preference
+order staying what it is today. **Any other FLTK program launched headless
+from this repo needs the same two.**
 
 ### Building the slide deck: there is no `npx` on this machine
 

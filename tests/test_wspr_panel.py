@@ -256,14 +256,22 @@ body = deck([TO_WSPR, F3["linux"], " ", ESC],
 check("the deck reports a rotation rather than a single band",
       "hop" in body.lower(), body[-300:])
 
-print("\nthe only selected band cannot be unselected")
-# Something has to be selected; an empty rotation has nothing to tune to.
+print("\nthe only selected band CAN be unselected")
+# It could not be, and that made switching bands with Space a three-press
+# detour through a rotation nobody wanted: select the one you want, then
+# come back and deselect the one you had. Space is a checkbox and the last
+# one comes off like any other -- WSPR refuses to START with nothing
+# selected, which is the honest place to say it.
+#
 # The cursor opens on 80 m, row 0, while the only selected band is the
-# configured 40 m -- so this walks to 40 m first. Space on 80 m would ADD
-# it, which is the first version of this case and tested nothing.
+# configured 40 m -- so this walks down to 40 m first. Space on 80 m would
+# ADD it, which is the first version of this case and tested nothing.
 body = deck([TO_WSPR, F3["linux"], "\x1b[B", " ", ESC],
             "Space on 40 m, the only selected band", settle=3.4)
-check("it says why it refused", "only band" in body, body[-300:])
+check("it comes off rather than being refused",
+      "only band" not in body, body[-300:])
+check("and the deck says WSPR now needs one",
+      "no band selected" in body, body[-300:])
 
 print("\nband hopping is a toggle, highlighted when it is on")
 body = deck([TO_WSPR], "one band, no hopping", settle=3.0)

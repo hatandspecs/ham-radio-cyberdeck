@@ -208,6 +208,11 @@ AREA_OF = {
 # either would discard it silently.
 AREA_LOCKED = (CONFIRM, PAIR, WIFI, NOKB)
 
+# What `WSPR_BANDS` holds when the operator has deselected every band. A
+# sentinel rather than an empty string because the empty string already means
+# "unset, use the default" -- see `Deck._wspr_bands`.
+WSPR_BANDS_NONE = "none"
+
 # Settings a menu can change, which therefore have to outlive a restart. The
 # conf file is where each one STARTS; the state file is what it is now. Keep
 # this in step with the menus: a setting that is changeable and not listed here
@@ -645,6 +650,13 @@ class Deck:
         # that aborts stays readable throughout.
         if getattr(self, "tuner_run", None) is not None:
             self._poll_tuner()
+
+        # A band-mode walk, if one is running. Same place and same reason as
+        # the sweep above: ten band changes at about 2.4 seconds each is far
+        # too long to hold the panel, and `^X` has to stay readable for all
+        # of it.
+        if getattr(self, "band_walk", None) is not None:
+            self._poll_band_modes()
 
         # The export page, if one is up. Here for the same reason, and for
         # one more: this is the poll that closes it. A file server that only
@@ -1767,6 +1779,16 @@ class Deck:
     def _handle_settings(self, ch):
         rows = self._settings_rows()
         edits = list(range(len(rows)))
+        # **The abort is read first.** A band-mode walk moves the VFO ten
+        # times over half a minute, and an operator who started one and then
+        # wanted the radio back should not have to wait it out or find the
+        # key behind a menu. It still homes the radio -- see
+        # `bandmodes.Walk.abort`.
+        walk = getattr(self, "band_walk", None)
+        if ch == 24 and walk is not None and walk.running:     # Ctrl-X
+            walk.abort("stopped by hand")
+            self.set_message = "stopping — putting the radio back"
+            return True
         if ch == curses.KEY_F1:
             self._open_menu("deck")
         elif ch == curses.KEY_F2:
@@ -2599,10 +2621,28 @@ class Deck:
         return os.path.join(base, "wspr")
 
     def _wspr_bands(self):
-        """The bands to hop through, as labels. One means no hopping."""
+        """The bands to hop through, as labels. One means no hopping, and
+        none means none.
+
+        **Empty is a real answer, and `WSPR_BANDS=` is not how it is
+        spelled.** The picker used to refuse to deselect the last band --
+        "something has to be selected" -- which made switching bands with
+        Space a three-keypress detour through a rotation the operator did
+        not want. Space is a checkbox now and the last one comes off like
+        any other.
+
+        That needs "nothing selected" to be storable, and the empty string
+        was already taken: `WSPR_BANDS=` has always meant "nothing chosen
+        yet, use the default", and a deck upgrading into this must not find
+        its 40 m gone. So the picker writes `WSPR_BANDS_NONE` for a
+        deliberate nothing, and an unset config still defaults.
+        """
         import wsprbands
+        raw = str(self.cfg.get("WSPR_BANDS", "") or "").strip()
+        if raw.lower() == WSPR_BANDS_NONE:
+            return []
         out = []
-        for part in str(self.cfg.get("WSPR_BANDS", "") or "").split(","):
+        for part in raw.split(","):
             label = wsprbands.normalise(part)
             if label and label not in out:
                 out.append(label)
@@ -2648,8 +2688,9 @@ class Deck:
         """Enter the WSPR area. Does NOT start it."""
         self._wspr_build()
         self.screen = WSPR
-        if not self.wspr_band:
-            self.wspr_band = self._wspr_bands()[0]
+        bands = self._wspr_bands()
+        if not self.wspr_band and bands:
+            self.wspr_band = bands[0]
         # The current session's spots, once, when there is nothing to show.
         # `wspr_spots` holds what this RUN decoded, so a deck powered on into
         # a session with a night behind it drew an empty list under a header
@@ -2675,6 +2716,11 @@ class Deck:
             return
         if not self.cfg.get("LOCATOR"):
             self._wspr_note("set a locator — WSPR sends the grid")
+            return
+        # Nothing selected in the picker. Refused here rather than in the
+        # picker, which is why the picker no longer clings to the last band.
+        if not self._wspr_bands():
+            self._wspr_note("no band selected — F3, then Space or a number")
             return
         # A run the operator did not name is still a run, so it gets the
         # default name and a pinned start here rather than writing spots
@@ -2927,9 +2973,10 @@ class Deck:
     # The code slept 0.25 s after a band change, so it set the mode while the
     # radio was still moving and then read the PREVIOUS band's mode back. A
     # probe built on those reads concluded the radio had no per-band mode at
-    # all, which took a second measurement to disprove -- and a third to
-    # establish that it really has none, for a different reason. Poll for the
-    # answer rather than sleeping a number.
+    # all. It took two more measurements to get that right: the radio does
+    # keep a mode per band, and `BS` reaches it where a frequency change
+    # does not -- `bandmodes` carries the evidence. Poll for the answer
+    # rather than sleeping a number.
     RIG_FREQ_SETTLE_S = 6.0
     RIG_MODE_SETTLE_S = 3.0
 
@@ -2988,44 +3035,77 @@ class Deck:
         return "LSB" if hz < 10_000_000 else "USB"
 
     def _set_rig_mode_now(self, kind):
-        """Put the radio into a data mode, or into SSB for the band it is on.
+        """Put every HF band into a data mode, or into SSB. Starts a walk.
 
-        **This sets ONE mode, not one per band**, and the menu line says so.
-        It was specified as "set every HF band", which this radio cannot do
-        over CAT: measured on 2026-11-23, setting LSB on 40 m and then PKTUSB
-        on 20 m and returning to 40 m gives PKTUSB. There is a single mode as
-        far as rigctld can see. The radio almost certainly does keep a mode
-        per band in its own band-stacking registers, recalled by pressing a
-        band button on the front panel -- but a CAT frequency change does not
-        recall them, so the deck can neither read nor write them.
+        **It really is every band, and it took a corrected measurement to
+        get here.** The first version of this walked the bands with
+        `set_frequency`, which on this radio recalls nothing, so it achieved
+        nothing except leaving the radio wherever the last band put it. The
+        second version therefore set one mode and said the radio could not
+        do per-band modes over CAT. That was wrong, and wrong in a way the
+        measurement behind it could not see: a frequency change is not a
+        band change. `BS` is, and through `BS` the band registers take a
+        mode and give it back. `bandmodes` carries the evidence.
 
-        Walking the bands setting a mode on each therefore achieves nothing
-        except leaving the radio in whatever the last band was given, which
-        is what the first version of this did and what was watched happening
-        on the radio.
+        The walk is stepped from the poll loop because it is half a minute
+        long and the panel must stay alive throughout -- see
+        `bandmodes.Walk`. Everything mode-shaped stays here: the sideband
+        rule, the data mode's name, the passband, and the verification that
+        the radio actually arrived.
         """
+        import bandmodes
+        if getattr(self, "band_walk", None) is not None \
+                and self.band_walk.running:
+            self._screen_note("already setting the band modes — ^X stops it")
+            return
+        # A walk changes band ten times. WSPR mid-run would file the next
+        # slot from whichever band the walk happened to be on, and a tuner
+        # sweep is transmitting on a frequency the walk would move out from
+        # under it.
+        if self.wspr_running:
+            self._screen_note("stop WSPR before setting the band modes")
+            return
+        run = getattr(self, "tuner_run", None)
+        if run is not None and run.running:
+            self._screen_note("a tuner sweep is running — ^X stops it first")
+            return
         rig = self._log_rig()
         if rig is None:
             self._screen_note("no CAT connection — cannot set the rig mode")
             return
-        try:
-            hz = rig.frequency() or 0
-            before = (rig.mode()[0] or "").upper()
-        except Exception:
-            self._screen_note("the radio did not answer")
+
+        def set_mode_for(hz):
+            want = self._digi_data_mode() if kind == "data" else self._ssb_for(hz)
+            return (self._rig_set_mode(rig, want), want)
+
+        walk = bandmodes.Walk(rig, "data" if kind == "data" else "ssb",
+                              set_mode_for)
+        if not walk.start():
+            self._screen_note(walk.message or "could not start")
             return
-        want = self._digi_data_mode() if kind == "data" else self._ssb_for(hz)
-        if self._rig_set_mode(rig, want):
-            self._screen_note(f"rig {before or '?'} -> {want}, "
-                              f"{self.RIG_PASSBAND_HZ} Hz filter")
-        else:
-            now = ""
-            try:
-                now = (rig.mode()[0] or "").upper()
-            except Exception:
-                pass
-            self._screen_note(f"the radio would not take {want} — "
-                              f"still {now or 'unreadable'}")
+        self.band_walk = walk
+        self._screen_note("setting %d bands — ^X stops it"
+                          % len(walk.bands))
+
+    def _poll_band_modes(self):
+        """One step of a band-mode walk, from the poll loop. Never blocks."""
+        walk = getattr(self, "band_walk", None)
+        if walk is None:
+            return
+        walk.tick()
+        if walk.running:
+            # Progress goes to deck & rig and nowhere else. `_screen_note`
+            # writes to whatever screen is showing, and a walk ticking away
+            # for half a minute would otherwise count itself up over the
+            # WSPR screen or the log of an operator who had moved on.
+            at = walk.progress()
+            if at and self.screen == SET:
+                done, total, label = at
+                self.set_message = "band modes %d/%d — %s" % (done, total,
+                                                              label)
+            return
+        self._screen_note(walk.message or "band modes set")
+        self.band_walk = None
 
     def _wspr_preflight_modes(self):
         """Put the radio into a data mode before the run starts.
@@ -3036,11 +3116,14 @@ class Deck:
         data mode" -- two minutes after the operator thought they had
         started.
 
-        **One mode, not one per band.** This walked every band in the
-        rotation at first, on the premise `_wspr_claim_mode` states: that
-        the radio remembers a mode per band. Measured on 2026-11-23, this
-        radio does not, over CAT -- see `_set_rig_mode_now`. So the walk was
-        eight band changes to set one thing eight times.
+        **One mode, and one is right here.** This walked every band in the
+        rotation at first, setting the mode on each by tuning to it -- which
+        recalls no band register and so set one global mode eight times over.
+        The radio does keep a mode per band and `BS` does reach it
+        (`bandmodes`), but a WSPR run needs the mode on the band it is about
+        to use, and `_wspr_set_band` claims it on every change. Walking all
+        eight here would move the VFO across the bands half a minute before
+        a slot boundary for no gain.
 
         What is remembered here is given back by `_wspr_release_modes` on
         stop, so the run borrows the mode exactly as a band change already
@@ -7014,6 +7097,64 @@ class Deck:
         opts = menus.selectable(menu)
         return opts[0] if opts else 0
 
+    def _menu_subview(self, ch, m):
+        """F2 and F3 from inside a menu: the two sub-views of THIS area.
+
+        "On every area, F2 and F3 are that area's two main sub-views" is the
+        rule `_handle_log` states in its own comment, and all four screens
+        follow it: tuner and mode picker on digimodes, display and system on
+        deck & rig, activity and activity type on logging, session list and
+        band picker on WSPR.
+
+        **This used to run the digimodes pair from inside every menu.** The
+        block was written when the only menu was the digimode one, and it
+        never learned the other three areas, so `F2` on a deck & rig menu
+        closed it, left the area, and landed on the digimode tuner -- which
+        is how it was found. The Esc path just below was taught not to cross
+        an area boundary; these two keys were still doing it.
+
+        The digimode area is the one case that looks at WHICH menu is open,
+        because its `F3` doubles as the way back out of the mode picker:
+        hunting an unidentified signal means going tune, mode, tune, mode,
+        and Esc-then-F3 each time is the wrong shape for that.
+
+        An area with no pair of its own consumes both keys. Falling through
+        would hand them to a meaning borrowed from another area, which is
+        the bug this method exists to fix.
+        """
+        area = self._area()
+        f2 = ch == curses.KEY_F2
+        if area == AREA_DIGI:
+            if f2:
+                self._close_menu()
+                # A fresh preview, as from the chat screen: carrying the last
+                # visit's decodes in shows text from a different frequency.
+                self._rx_tail = ""
+                self.screen = TUNE
+            elif m in ("mode", "modes_all"):   # already here: F3 is the way out
+                self._close_menu()
+                self.screen = CHAT
+            else:
+                self._open_menu("mode")
+        elif area == AREA_SETTINGS:
+            self._open_menu("display" if f2 else "system")
+        elif area == AREA_LOG:
+            if f2:
+                self._close_menu()
+                self._open_activities()
+            else:
+                self._open_menu("activity")
+        elif area == AREA_WSPR:
+            if f2:
+                # It refuses mid-run with a note on the screen underneath, so
+                # the menu closes first either way -- exactly as pressing F2
+                # on the WSPR screen behaves.
+                self._close_menu()
+                self._open_wspr_sessions()
+            else:
+                self._open_menu("wspr_band")
+        return True
+
     def _handle_menu(self, ch):
         f, m = self.fldigi, self.menu
         # Case-folded for the same reason as the tuning screen: every
@@ -7043,23 +7184,9 @@ class Deck:
             key = menu["items"][sel][0]
             ch = ord(key) if len(key) == 1 else ch
 
-        # F2 and F3 reach every screen, so the three views — conversation,
-        # tuning, mode — form one flat set the operator can move between in a
-        # single keystroke, rather than a tree that has to be climbed back out
-        # of. Hunting an unidentified signal means going tune, mode, tune,
-        # mode; Esc-then-F3 each time is the wrong shape for that.
-        if ch == curses.KEY_F3:
-            if m in ("mode", "modes_all"):  # already here: F3 is the way out
-                self._close_menu()
-                self.screen = CHAT
-            else:
-                self._open_menu("mode")
-            return True
-        if ch == curses.KEY_F2:
-            self._close_menu()
-            self._rx_tail = ""             # a fresh preview, as from the chat screen
-            self.screen = TUNE
-            return True
+        # F2 and F3 are this AREA's two sub-views. See `_menu_subview`.
+        if ch in (curses.KEY_F2, curses.KEY_F3):
+            return self._menu_subview(ch, m)
 
         if ch == 27:                                   # Esc
             # Up to this menu's parent, or out to the screen underneath when
@@ -7349,10 +7476,9 @@ class Deck:
                     return True
                 bands = self._wspr_bands()
                 if label in bands:
-                    if len(bands) == 1:
-                        self._wspr_note(f"{label} is the only band — "
-                                        "something has to be selected")
-                        return True
+                    # Including the last one. WSPR refuses to start with
+                    # nothing selected, which is a better place to say so
+                    # than a picker that will not let go of a band.
                     bands.remove(label)
                 else:
                     bands.append(label)
@@ -7370,10 +7496,16 @@ class Deck:
                 order = [l for _k, l, _h in wsprbands.BANDS]
                 bands.sort(key=order.index)
                 was = self.wspr_band
-                self.cfg["WSPR_BANDS"] = ",".join(bands)
+                self.cfg["WSPR_BANDS"] = (",".join(bands) if bands
+                                          else WSPR_BANDS_NONE)
                 if self.wspr is not None:
                     self.wspr.bands = bands
-                if self.wspr_band not in bands:
+                if not bands:
+                    # Nothing selected means the deck is on no band, and
+                    # saying 40 m while nothing is chosen is the fault this
+                    # is meant to avoid rather than a kindness.
+                    self.wspr_band = ""
+                elif self.wspr_band not in bands:
                     self.wspr_band = bands[0]
                 self._save_state()
                 # **Tune, here, on the selection.** It only set the band and
@@ -7385,15 +7517,20 @@ class Deck:
                 # Unselecting the band in use tunes too: it changes which
                 # band the deck is on, and a deck that says 40 m while the
                 # radio sits on 20 m is the same fault in a second place.
-                if not picked_set or self.wspr_band != was:
+                if self.wspr_band and (not picked_set
+                                       or self.wspr_band != was):
                     dial = wsprbands.dial_hz(self.wspr_band)
                     self._wspr_tune(self.wspr_band)
                     where = f"{self.wspr_band} — {render.frequency(dial)}"
                 else:
                     where = ""
                 if picked_set:
-                    rot = (f"hop: {', '.join(bands)}" if len(bands) > 1
-                           else f"hop off — {bands[0]} only")
+                    if not bands:
+                        rot = "no band selected — WSPR needs one to start"
+                    elif len(bands) > 1:
+                        rot = f"hop: {', '.join(bands)}"
+                    else:
+                        rot = f"hop off — {bands[0]} only"
                     self._wspr_note(f"{rot}{'   ' + where if where else ''}")
                 else:
                     self._wspr_note(where)

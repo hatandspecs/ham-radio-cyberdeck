@@ -644,6 +644,7 @@ KEYS = {
         "arrows  move between settings",
         "Enter   edit the setting under the cursor",
         "Esc     cancel an edit",
+        "^X      stop a band-mode walk, and go back",
         "",
         "Everywhere on the deck:",
         "F4   next color scheme",
@@ -689,23 +690,17 @@ def keys_menu(area):
             "footer": "Esc back"}
 
 
-# **One mode, not one per band.** This was specified as "set every HF band to
-# SSB or to Data-U", and that is not a thing this radio can be asked for over
-# CAT: measured 2026-11-23, setting a mode on one band and returning to it
-# later gives whatever was set last anywhere. The radio keeps per-band modes
-# in its own band-stacking registers, recalled by a front-panel band button,
-# and a CAT frequency change does not recall them.
-#
-# So the menu offers what the radio can actually do: set the mode now. SSB
-# picks the sideband from the frequency the radio is on, which is the part of
-# the original request that still applies.
+# **Every HF band, not the band in use.** It walks them, which takes about
+# half a minute and is why the footer says so: the deck stays usable
+# throughout and `^X` stops it. The count differs between the two because
+# 30 m has no SSB and 60 m is upper sideband only -- see `bandmodes.NO_SSB`.
 RIG_MODE = {
     "title": "SET THE RIG MODE",
     "items": [
-        ("1", "Data-U   for digimodes and WSPR"),
-        ("2", "SSB      LSB below 10 MHz, USB above"),
+        ("1", "Data-U   all 10 HF bands, for digimodes and WSPR"),
+        ("2", "SSB      8 HF bands, LSB below 10 MHz, USB above"),
     ],
-    "footer": "Esc back   \u2191\u2193 move   Enter select",
+    "footer": "Esc back   \u2191\u2193 move   Enter select   ~30 s, ^X stops",
 }
 
 
