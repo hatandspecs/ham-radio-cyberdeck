@@ -722,6 +722,38 @@ dummy load attached and nothing transmitting.
 **None of this was visible from the laptop.** The fake rig answers
 instantly, in whatever mode it is told, with no filter.
 
+### The operator findings round, verified on the panel 2026-11-23
+
+Nine numbered findings from `docs/scratch_notes.md`, all built and then
+**checked on the deck with the radio on a 20 W dummy load at 5 W**. Every
+one passed on the hardware. What the session changed, and what it taught:
+
+| Finding | Outcome |
+|---|---|
+| Inhibit demanded USB | Mode gate off `^B` entirely; `^T` on digimodes gates on DATA-U only. Both halves tested: refused in USB, allowed in DATA-U. |
+| Band first on the digimode menu | Band, Tune Settings, Mode, Memories. |
+| Auto tuner blocked by the inhibit | Freed with the first item. Swept 12 m CW/data, 5 steps, works. |
+| Check each band's mode before WSPR | Overtaken: the deck can now SET them. See `bandmodes`. |
+| Set every HF band's mode | Built on `BS`, after the first answer was "impossible". Data-U and SSB walks both verified on the radio. |
+| Clear transcript / Quit on the system menu | Both removed. Quit skipped its own confirmation and read as a crash. |
+| Carrier nudge off-grid | `^A`/`^D` snap to multiples of `CARRIER_GRID`. |
+| Log form prefill | A first keystroke replaces a pristine prefill; every edit sets `touched`. |
+| Keys list per screen | `menus.keys_menu(area)`, on all four areas. |
+
+**Two things cost the most and neither was a coding problem.** The IF filter
+narrowing to 500 Hz was invisible from the laptop because the fake rig has
+no filter, and it had been degrading WSPR on `main` for as long as the
+preflight had existed. The "no per-band mode over CAT" conclusion was a
+measurement that could not distinguish its hypothesis from the true one,
+written up as fact in three places; the manual that settles it was in
+`../ftx1-tuner-sweep/refs/` the whole time.
+
+**The deploy preflight passed and three faults were still waiting.** All
+three needed a keystroke: `F2` from a menu, Space on the last WSPR band, and
+the band walk doing one band. A preflight that imports the modules and reads
+the menu structures cannot find any of them. **Budget a key-press pass on
+the panel after every deploy**, and drive the screens that changed.
+
 ### Two invariants the code states and one place each broke it
 
 Both found by the operator on the panel, 2026-11-23, after the deploy passed
