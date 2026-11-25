@@ -2768,7 +2768,16 @@ class Deck:
         self._wspr_preflight_dial()
         self._wspr_preflight_modes()
         self.wspr.start(time.time())
-        self.wspr_spots = []
+        # **Reload from the log, do not clear.** Clearing here was right for
+        # a new session and wrong for a continued one: resuming a session
+        # loaded its spots, starting the run wiped them, and the screen then
+        # showed an empty list under a header counting thousands heard --
+        # the same disagreement `_wspr_load_spots` was written to fix, one
+        # step later in the sequence. The counts come from the log, so the
+        # list has to as well. A genuinely new session has no records yet
+        # and this loads zero, which is what clearing did.
+        self._wspr_load_spots()
+        self._wspr_loaded = True
         self.wspr_sel = None
         self.wspr_dbfs = None
         self._wspr_note(f"WSPR started on {self.wspr_band} — "

@@ -798,6 +798,34 @@ without the power switch. `Ctrl-T` refuses outright when
 models `trx_state` and the loaded modem, including a radio that acknowledges
 every stop and holds the carrier anyway.
 
+### Continuing a session lost its spots, 2026-11-24
+
+An existing WSPR session resumed, and the spot section of the WSPR screen
+empty while the header counted everything that session had heard.
+
+**`_wspr_resume` was not the fault.** It calls `_wspr_load_spots` and fills
+the list correctly. **`_wspr_start` then cleared it**, with a bare
+`self.wspr_spots = []` that was right for a new session and wrong for a
+continued one. "Continue this session" is resume followed by start, so the
+second step threw away what the first step loaded.
+
+It is the same disagreement `_wspr_load_spots` was written to fix one step
+earlier in the sequence: the counts come from the log and the list did not,
+so a screen reporting thousands heard drew nothing.
+
+**The rule this leaves: anything that resets the spot list reloads it from
+the log rather than emptying it**, because the log is where the counters
+beside it come from. `_wspr_start` now calls `_wspr_load_spots()`, which
+returns zero for a genuinely new session and is therefore correct in both
+cases. The remaining bare clears are right where they are: `_wspr_set_session`
+(a new name pins a new start, so the previous session's spots must not carry
+over), `_wspr_clear_session` and `_wspr_clear_all` (the records are gone).
+
+`tests/test_wspr_resume_spots.py` (14 checks) drives the **real**
+`_wspr_start` with the radio and audio stubbed, not a copy of its tail, and
+was confirmed to fail against the unfixed code on three checks before the fix
+went in. It also pins the source against a bare clear returning.
+
 ### Starting WSPR did not tune the radio, 2026-11-24
 
 Several bands selected, WSPR started, and the VFO never moved to the dial of
