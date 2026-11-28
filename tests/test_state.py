@@ -228,9 +228,14 @@ if __name__ == "__main__":
     # card 1 after the codec became card 2, so the stale value beat the
     # fixed default and the audio stayed dead. These belong in the conf,
     # where a card that moves is a one-line edit.
-    HARDWARE = ("WSPR_DEVICE", "WSPR_RX_CARD", "WSPR_RX_CONTROL",
-                "WSPR_RX_AGC")
-    for key in sorted(k for k in _config.SCHEMA if k.startswith("WSPR_")):
+    HARDWARE = ("WSPR_DEVICE", "WSPR_RX_DEVICE", "WSPR_RX_CARD",
+                "WSPR_RX_CONTROL", "WSPR_RX_AGC", "DIGI_TX_CONTROL")
+    # `DIGI_` too, and for the same reason: the calibration screens set the
+    # drive and the gain, so they are preferences, while the control name is
+    # an address. Covered here so a new level setting cannot be introduced
+    # without deciding which of the two it is.
+    for key in sorted(k for k in _config.SCHEMA
+                      if k.startswith(("WSPR_", "DIGI_"))):
         if key in HARDWARE:
             check(f"{key} is NOT remembered",
                   key not in _deck._REMEMBERED, key)
@@ -267,12 +272,15 @@ if __name__ == "__main__":
         screen = run(keys=[TO_WSPR, F1, "a"], state_path=path, settle=3.0,
                      settle_s="0.2")
         body = "\n".join(screen.display)
-        # The AUDIO submenu's spelling, which is "TX audio 25%  RX gain
+        # The AUDIO submenu's spelling, which is "TX level 25%  RX gain
         # 40%" -- the main WSPR menu writes the same values as "TX 25%  RX
         # 40%", and asserting that form here failed against a screen that
-        # was entirely correct.
+        # was entirely correct. **"TX level", not "TX audio"**: both areas
+        # name this knob the same way now, because it is the same job.
+        # The gain may carry a trailing `?` where there is no codec to
+        # read, which is why these are substring checks.
         check("the transmit level comes back from the state file",
-              "TX audio 25%" in body, body)
+              "TX level 25%" in body, body)
         check("and so does the capture gain", "RX gain 40%" in body, body)
         # Neither is 50 or 70, which is what the conf alone would give.
         check("not the configured defaults",

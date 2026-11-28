@@ -410,11 +410,17 @@ check("while the next slot's intention is on the slot row",
       "next: TX" in running, running)
 
 print("\nboth audio levels are on the screen, with what was measured")
-seg = render.wspr_levels(25, 70, -26.0)
+# **-35, not -26.** The healthy example has to sit inside the band the
+# meter marks, and the ceiling moved to -30 on 2026-11-27. -26 reads "hot"
+# now, which is the meter working rather than the screen breaking.
+# `rx_live` because the row reports what the codec reads, not what config
+# stores -- a level shown from configuration cannot diagnose the audio it
+# describes, which is what it is on screen for.
+seg = render.wspr_levels(25, 70, -35.0)
 flat = "".join(t for t, _a in seg)
 check("the transmit level", "TX audio 25%" in flat, flat)
 check("the capture gain", "RX gain 70%" in flat, flat)
-check("and the measured level", "-26 dBFS" in flat, flat)
+check("and the measured level", "-35 dBFS" in flat, flat)
 check("a healthy reading is not marked",
       "reverse" not in [a for t, a in seg], str(seg))
 check("and says nothing about quiet or hot",

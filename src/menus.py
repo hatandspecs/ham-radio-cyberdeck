@@ -77,6 +77,11 @@ DIGI = {
         ("2", "Tune Settings"),
         ("3", "Mode"),
         ("4", "Memories"),
+        # Audio levels, beside the other things that decide whether a
+        # signal is readable. Here and not under deck & rig because the
+        # levels are a digimode property: WSPR owns the same codec and
+        # keeps its own pair, set separately and restored when it stops.
+        ("5", "Audio levels"),
     ],
     "footer": "Esc back   \u2191\u2193 move   Enter select   ^O ^P screen",
 }
@@ -93,9 +98,12 @@ def digi_menu(log_hotkey=""):
     import decall
     label = decall.MODE_LABELS.get(log_hotkey, "")
     items = list(DIGI["items"])
-    items.append(("5", f"^G logs the last station heard: {label}"
+    # **6 and 7, because Audio levels took 5.** These were 5 and 6, so
+    # adding that entry without renumbering here drew "Audio levels" on a
+    # key that cycled the log hotkey instead.
+    items.append(("6", f"^G logs the last station heard: {label}"
                   if label else "^G logs the last station heard"))
-    items.append(("6", "Keys on this screen"))
+    items.append(("7", "Keys on this screen"))
     return {**DIGI, "items": items}
 
 # The deck and the radio: what this station is, what it is attached to, and
@@ -855,6 +863,58 @@ def wspr_menu(state=None):
     }
 
 
+def digi_audio_menu(state=None):
+    """Transmit drive and capture gain for the digimodes.
+
+    Two levels that look like a pair and behave differently, because of
+    what holds the sound card. fldigi runs for as long as the digimodes are
+    up, and that splits these three ways rather than two.
+
+    **Opening the capture STREAM needs the card exclusively; moving a mixer
+    CONTROL does not.** So the gain can be SET here and takes effect on
+    fldigi's next buffer, but it cannot be MEASURED here, because measuring
+    means recording and fldigi has the stream. Those are different limits
+    and the receive screen states them separately.
+
+    **There is nothing separate to calibrate for receive.** It is the same
+    ALSA control `WSPR_RX_GAIN` sets -- one codec, one capture gain -- so
+    the number to aim for is the one the WSPR receive screen shows, where
+    there is a meter.
+
+    **The drive is the playback mixer**, where WSPR's transmit level is a
+    scale on the file it renders: fldigi plays through the codec like any
+    other program, so a mixer level is the only place to set it. It IS
+    measurable, against the radio's power meter, which is why its screen
+    has a figure and the receive one does not.
+    """
+    st = dict(state or {})
+    # No measured figure here. The radio's power meter is logarithmic and
+    # CAT reports the needle's position, so the deck has no wattage to
+    # show -- see `docs/audio_gain_staging.md`. The levels are what this
+    # row is for; the radio's own meters are the instrument.
+    live = st.get("rx_live")
+    gain = ("gain unreadable" if live is None
+            else f"RX gain {int(live)}%")
+    return {
+        "title": "DIGIMODE AUDIO",
+        "items": [
+            (" ", f"   TX level {st.get('tx_drive', 30)}%   {gain}"),
+            (" ", ""),
+            # The one entry here that can refuse says so before it is
+            # pressed: WSPR borrows the capture gain for a session and puts
+            # back what it found, so a change made mid-session vanishes
+            # later with nothing to say why.
+            (" ", "" if not st.get("wspr_running") else
+                  "   WSPR has the capture gain: stop it to set RX"),
+            (" ", ""),
+            ("c", "Calibrate transmit        a carrier, + and - to set"),
+            ("m", "Calibrate receive         + and - to set, no meter"),
+        ],
+        "footer": "Esc back   ↑↓ move   "
+                  "the levels are set in those screens",
+    }
+
+
 def wspr_audio_menu(state=None):
     """Transmit level, capture gain, and the tone that sets the first.
 
@@ -870,6 +930,36 @@ def wspr_audio_menu(state=None):
     dbfs = st.get("dbfs")
     heard = ("no reading yet" if dbfs is None
              else f"{float(dbfs):.0f} dBFS")
+    # **The gain comes from the CODEC, not from configuration**, and it is
+    # ONE number. The stored value is what the deck believes, and it parts
+    # company with the hardware whenever `alsamixer`, a WSPR session
+    # mid-borrow or a restored state file moves the control. Showing both
+    # when they disagreed produced "i don't get what rx gain 52% (set
+    # 100%) means" -- fair, since the stored value is an implementation
+    # detail and the codec is the truth. A trailing `?` marks a control
+    # that could not be read at all.
+    # **WSPR's gain and the digimodes' gain are set INDEPENDENTLY, over one
+    # shared control.** There is one capture mixer on one codec, so they
+    # cannot both be applied at once; WSPR applies its own value when a
+    # session starts and restores what it found when the session ends.
+    # `wsprgain.Gain` does the borrowing and `config.DIGI_RX_GAIN` records
+    # the station's level for the rest of the time.
+    #
+    # So what is true on screen depends on whether WSPR is running:
+    # with a session up, the codec IS WSPR's level and reading it is
+    # honest; with WSPR off, the codec is at the DIGIMODE level and WSPR's
+    # own figure has not been applied to anything. Showing the codec in
+    # that case said 74% on one screen and 100% on another for what the
+    # operator reasonably read as one setting.
+    # **The codec, plainly.** Each area applies its own levels on entry --
+    # `Deck._apply_area_levels` -- so while the operator is in this area
+    # the control holds this area's value and reading it is both honest and
+    # unambiguous. This carried an "(on start)" marker for a while, from
+    # when the value was only applied at session start and the codec might
+    # still be holding the digimodes' level.
+    live = st.get("rx_live")
+    gain = (f"RX gain {st.get('rx_gain', 100)}%?" if live is None
+            else f"RX gain {int(live)}%")
     # **The levels are reported here and changed in the calibration
     # screens.** Stepping them from this menu was a third way to do the same
     # thing, with no meter in sight -- and a level set without watching
@@ -877,14 +967,33 @@ def wspr_audio_menu(state=None):
     return {
         "title": "WSPR AUDIO",
         "items": [
-            (" ", f"   TX audio {st.get('tx_level', 50)}%"
-                  f"     RX gain {st.get('rx_gain', 70)}%"
-                  f"     {heard}"),
+            # Three spaces, not five: the panel is 66 columns and a menu
+            # draws inside its own padding, so the wider spelling reached
+            # exactly 66 and truncated the dBFS reading off the end --
+            # reported from the deck as "no rea..." cut off. The reading is
+            # the most useful thing on the row, so it is the last thing
+            # that may be lost.
+            (" ", f"   TX level {st.get('tx_level', 25)}%"
+                  f"   {gain}   {heard}"),
             (" ", ""),
-            ("c", "Calibrate transmit        a tone, + and - to set"),
+            # **The requirement, stated before a key is pressed**, and it
+            # is now the opposite of what it was. The screens take the
+            # codec off fldigi for themselves, so they do not need a
+            # session -- they need the absence of one, because a running
+            # session's capture window holds the card for 114 seconds of
+            # every 120 and the probe is refused for most of that.
+            (" ", "   stop WSPR first: its windows hold the audio"
+                  if st.get("running") else ""),
+            (" ", ""),
+            # The same two entries, the same keys and the same wording as
+            # the digimode audio menu: one procedure, two areas.
+            ("c", "Calibrate transmit        a carrier, + and - to set"),
             ("m", "Calibrate receive         a meter, + and - to set"),
         ],
-        "footer": "Esc back   ↑↓ move   Enter select   "
+        # Shortened for the same 66 columns: with "Enter select" the footer
+        # ran to 71 and the half that fell off was the sentence that
+        # matters. The arrows line already implies Enter.
+        "footer": "Esc back   ↑↓ move   "
                   "the levels are set in those screens",
     }
 

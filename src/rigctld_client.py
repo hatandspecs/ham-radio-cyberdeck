@@ -183,6 +183,7 @@ class Rigctld:
 
     BACKENDS = {"1": "field", "2": "SPA-1"}
 
+
     def power_control(self):
         """(watts, back end) from the radio's own PC command, or (0, "").
 

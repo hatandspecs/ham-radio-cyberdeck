@@ -273,13 +273,16 @@ def _by_key(menu, key):
     return dict(menu["items"])[key]
 
 
+# **By key, using the helper above, which this block was ignoring.** It
+# reached for `items[4]` while the comment on `_by_key` warned against
+# exactly that, and `Audio levels` taking key 5 moved the ^G line to key 6
+# and broke all four checks here.
 for mode in decall.MODES:
-    item = menus.digi_menu(mode)["items"][4]
-    equals(f"{mode} is on key 5", item[0], "5")
+    label = _by_key(menus.digi_menu(mode), "6")
     check(f"{mode} is spelled out, not named",
-          decall.MODE_LABELS[mode] in item[1], item[1])
+          decall.MODE_LABELS[mode] in label, label)
 check("and ^G is named there, since no footer has room for it",
-      "^G" in _by_key(menus.digi_menu(decall.LOG_NOW), "5"))
+      "^G" in _by_key(menus.digi_menu(decall.LOG_NOW), "6"))
 
 print("\nF5 on the log screen opens the map of the contacts")
 # Checked here rather than in test_mapscreen because this file is the one

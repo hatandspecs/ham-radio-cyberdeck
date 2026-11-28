@@ -174,6 +174,13 @@ where they are documented beside their values — see
 
 ## 7. Transmit safety
 
+> **Audio levels:** see
+> [`audio_gain_staging.md`](audio_gain_staging.md). The digimodes have
+> no software gain stage the deck can reach -- fldigi's own output level
+> is not settable over XML-RPC -- so `DIGI_TX_DRIVE` on the shared ALSA
+> playback mixer is the only transmit lever here.
+
+
 The full treatment is `platform_design.md` §9. The three properties that shape
 this application:
 
@@ -190,6 +197,15 @@ this application:
   SSB everything it decodes is noise. Decoding resumes by itself; arming
   transmit stays `Ctrl-B`, because a running decoder puts nothing on the air
   and an armed transmitter does.
+
+**The drive calibration screen raises a carrier**, so it goes through
+`Deck._digi_tx_preflight` first, which refuses on the inhibit and on a radio
+returning no power reading at all. That matters more than it looks: the
+carrier is `main.tune`, which was observed NOT to be stopped by fldigi's
+`rx_only`, so the deck's own interlock is the only thing in front of it. Esc
+and `^C` both drop the carrier, and leaving the screen drops it
+unconditionally rather than only when the screen raised it. See
+`wspr_design.md` §6a2 for why there is no automatic version.
 
 **A dropped CAT read is not a mode change.** `rig.mode()` returns `""` on a
 timeout, and treating that as an answer sent the display to the modem — so

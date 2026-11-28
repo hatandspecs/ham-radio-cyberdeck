@@ -496,6 +496,13 @@ Transmit off is a receive-only monitor; all three on is a beacon.
 
 ## 6a1. The two audio levels, and why they are set differently
 
+> **The full gain chain, both directions, is in
+> [`audio_gain_staging.md`](audio_gain_staging.md).** This section covers
+> why the two levels use different mechanisms; that file covers every
+> stage in series, including the two on the radio that the deck does not
+> own, and the measured values for this station.
+
+
 **Transmit is a digital amplitude. Receive is the ALSA mixer.** The asymmetry
 is not an inconsistency; it follows from what each side can reach without
 affecting the digimodes.
@@ -531,6 +538,36 @@ another's is not, and `amixer` speaks percent on all of them.
 capture is measured and its dBFS shown, marked when it falls outside roughly
 -32 to -18. That is the WSJT-X analog the operator asked for, and without it
 a gain control is a knob with no meter.
+
+## 6a2. An automatic calibration was built and removed (2026-11-27)
+
+Both levels are set by hand, from the screens §6b describes. An automatic
+version existed for one day and the operator removed it: easy enough to set
+by hand, and "overcomplicated and kludgey for what it is worth."
+
+**The reason is structural rather than a defect.** A capture window is 114 s
+of every 120 s slot (§2) and a window is never killed for a meter reading,
+so a receive ladder could take only one reading per six-second gap and
+needed minutes to reach an answer a hand reaches in seconds. The transmit
+side worked and was quick, but did not on its own justify the machinery.
+
+What the attempt established, and what §6a1 and §6b now rely on:
+
+* **ALC is not an instrument on this radio.** hamlib's `ALC` read 1.00 at
+  every drive level in one sweep and 0.28, 0.28, 0.00 in another five
+  minutes later. `RFPOWER_METER_WATTS` is orderly, and is what the digimode
+  transmit screen reads.
+* **The acceptable receive band is -40 to -30 dBFS.** The floor is measured
+  (§6a1): -37 to -35 decodes here. The ceiling is the operator's, as the
+  range consistent with how WSJT-X is set. A -30 floor has been wrong twice.
+* **25% transmit and 100% capture are this deck's measured defaults**, and
+  are now the shipped ones.
+* **PSK31 reads 1 to 3 dB below the tune carrier a drive was set against**,
+  because tune is 100% duty and PSK31's envelope is not. Judge a drive by
+  whether the ALC stays out, not by the wattage.
+* **Opening the capture stream needs the card exclusively; moving a mixer
+  control does not.** That is why the digimode receive screen can set the
+  gain while fldigi runs but cannot show a meter.
 
 ## 6b. Calibrating the audio
 

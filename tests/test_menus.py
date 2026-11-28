@@ -205,7 +205,19 @@ check("and the menu it opens is still built",
 # The two area menus carry what belongs to their own area and nothing else.
 equals("the digimode menu is the digimode settings",
        [l for _k, l in menus.DIGI["items"]],
-       ["Band", "Tune Settings", "Mode", "Memories"])
+       ["Band", "Tune Settings", "Mode", "Memories", "Audio levels"])
+# Audio levels is last of the five and NOT under deck & rig, because the
+# levels are a digimode property: WSPR owns the same codec and keeps its
+# own pair, set separately and restored when it stops.
+equals("audio levels is key 5", menus.DIGI["items"][4][0], "5")
+# The two appended entries must follow it rather than collide with it.
+# They were 5 and 6 while audio levels was being added, which made `5`
+# cycle the log hotkey from a line labelled "Audio levels".
+_items = menus.digi_menu("")["items"]
+equals("the appended entries start after it",
+       [k for k, _l in _items[5:]], ["6", "7"])
+equals("and nothing is listed twice",
+       len({k for k, _l in _items}), len(_items))
 # Band is first because it is the one chosen most often and the one a session
 # starts with. The keys follow the order: `1` is Band.
 equals("and Band is key 1", menus.DIGI["items"][0][0], "1")

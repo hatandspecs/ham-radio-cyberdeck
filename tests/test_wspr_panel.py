@@ -291,23 +291,26 @@ check("stopped, it says so rather than showing a clock",
 print("\nthe hop check is offered, and refuses without rig control")
 # The mode check moved to the band picker; its case is below.
 
-print("\ncalibration is refused with a reason while WSPR is off")
-# **Both calibrations open the sound card, and fldigi holds it while WSPR is
-# off** -- so with WSPR off they produced a capture-device error from inside
-# a screen that looked ready. The menu item now says why before it is
-# entered, which is the only part this file can drive: starting WSPR for
-# real stops fldigi and takes the codec, which no test here does.
+print("\ncalibration OPENS with WSPR off, taking the codec for itself")
+# **The gate inverted on 2026-11-28.** It used to require a running WSPR
+# session, because only a session stops fldigi and frees the card. But a
+# session is a competitor: its capture window holds the card for 114 s of
+# every 120, so the receive probe was refused about 95% of the time and the
+# screen read "not listening" with no audio, while a transmit tone was cut
+# short at 30 s with PTT left asserted. The screen now stops fldigi itself
+# -- `_wspr_take_audio`, the same call a session makes -- and refuses when
+# a session IS running. See `tests/test_digical.py` for the unit-level
+# version; this drives the real application.
 for key, what in (("c", "transmit"), ("m", "receive")):
     body = deck([TO_WSPR, F1["linux"], "a", key],
                 f"{key} with WSPR off ({what})", settle=3.6)
-    check(f"{what}: it is refused rather than opened",
-          "WSPR CALIBRATE" not in body, body[:140])
-    check(f"{what}: and says WSPR must be on",
-          "WSPR must be on" in body, body[-300:])
-    # The menu is closed first, or the message lands underneath it -- the
-    # fault that made "calibrate transmit audio" read as doing nothing.
-    check(f"{what}: with the menu closed so it can be read",
-          "Calibrate transmit" not in body, body)
+    check(f"{what}: it opens rather than refusing",
+          "CALIBRATE" in body, body[:200])
+    check(f"{what}: and does not ask for a session",
+          "WSPR must be on" not in body, body[-300:])
+    # The menu is closed on the way in, so the screen is what is showing.
+    check(f"{what}: with the menu closed behind it",
+          "Calibrate transmit  " not in body, body)
 
 print("\nthe arrows select and scroll the spot list")
 body = deck([TO_WSPR, "\x1b[B"], "down arrow on an empty list", settle=3.0)
@@ -331,7 +334,9 @@ equals("13 items, with one to spare under the threshold",
 body = deck([TO_WSPR, F1["linux"]], "the menu keeps its values", settle=3.0)
 # The deck under test runs on its own defaults, so these are the configured
 # levels rather than the ones handed to `wspr_menu` above.
-for want in ("20%", "1 h", "wspr.log", "TX 50%  RX 70%"):
+# 25 and 100 are the shipped defaults as of 2026-11-27, measured on this
+# deck. See `config.WSPR_TX_LEVEL`.
+for want in ("20%", "1 h", "wspr.log", "TX 25%  RX 100%"):
     check(f"the menu still shows {want!r}", want in body, body)
 
 print("\nthe audio levels are one submenu, which is one job")
@@ -339,8 +344,10 @@ body = deck([TO_WSPR, F1["linux"], "a"], "a opens the audio menu",
             settle=3.2)
 check("it opens", "WSPR AUDIO" in body, body[:120])
 # Both levels on one line, with the measured dBFS beside the gain it judges.
-check("the transmit level is there", "TX audio 50%" in body, body)
-check("and the capture gain", "RX gain 70%" in body, body)
+# "TX level", not "TX audio": the two areas name this the same way now,
+# because it is the same knob doing the same job from the operator's side.
+check("the transmit level is there", "TX level 25%" in body, body)
+check("and the capture gain", "RX gain 100%" in body, body)
 check("and no reading until something has been captured",
       "no reading yet" in body, body)
 check("and the two calibration screens that set them",
@@ -348,21 +355,10 @@ check("and the two calibration screens that set them",
 check("which is where the levels are set, not here",
       "the levels are set in those" in body, body[-200:])
 
-print("\nboth levels cycle from that menu, and the menu line shows it")
-# `t` and `r` step the levels. They are not advertised on the menu, which
-# offers the calibration screens instead -- the level belongs next to a
-# meter. They work, and the line above reports the new value immediately.
-body = deck([TO_WSPR, F1["linux"], "a", "t"], "t cycles the TX level",
-            settle=3.4)
-check("the transmit level moved off 50", "TX audio 60%" in body, body)
-check("and the capture gain did not move with it",
-      "RX gain 70%" in body, body)
-body = deck([TO_WSPR, F1["linux"], "a", "r"], "r cycles the RX gain",
-            settle=3.4)
-check("the capture gain moved off 70", "RX gain 75%" in body, body)
-check("and the transmit level did not move with it",
-      "TX audio 50%" in body, body)
-
+# The `t` and `r` steppers that used to be checked here are gone, removed
+# 2026-11-27: undisplayed keys that changed a level, which an operator who
+# found them could not account for. The calibration screens are the only
+# route to a level now.
 print("\nEsc from the audio menu goes back to the WSPR menu, not out")
 body = deck([TO_WSPR, F1["linux"], "a", ESC], "Esc from the audio menu",
             settle=3.4)

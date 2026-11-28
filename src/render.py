@@ -1946,7 +1946,8 @@ def wspr_slot(seconds_in, capture=True, to_next=None, next_tx=None,
     return out
 
 
-def wspr_levels(tx_level=None, rx_gain=None, dbfs=None, measuring=False):
+def wspr_levels(tx_level=None, rx_gain=None, dbfs=None,
+                measuring=False):
     """The two audio levels and what the last capture measured.
 
     Transmit is a digital amplitude WSPR renders at; receive is the capture
@@ -1962,6 +1963,21 @@ def wspr_levels(tx_level=None, rx_gain=None, dbfs=None, measuring=False):
     out = []
     if tx_level is not None:
         out.append((f" TX audio {int(tx_level)}%", ""))
+    # **`rx_live` is what the CODEC reads, and it wins.** This row showed
+    # `WSPR_RX_GAIN`, which is what the deck last stored rather than what
+    # the hardware is set to, and the two part company exactly when the
+    # audio is wrong -- which is when the figure is being read. One number,
+    # because showing both when they differed asked the operator to decide
+    # which to believe.
+    # **WSPR's OWN gain, from config, and no codec read here.** This row
+    # is the WSPR area's settings view -- the dBFS beside it is the last
+    # completed capture, not a live figure either -- so WSPR's configured
+    # level is the right thing to show and needs no marker. The codec read
+    # belongs where it diagnoses: the audio menu, which says whether the
+    # value is applied yet, and the calibration screen, which is only open
+    # with a session up and so reads the applied value directly. It was
+    # briefly here too and pushed the row past the width the layout holds
+    # it to.
     if rx_gain is not None:
         out.append(("  ", ""))
         out.append((f"RX gain {int(rx_gain)}%", ""))
@@ -1998,11 +2014,16 @@ METER_CEIL_DB = 0.0
 # healthy level as "low", which is a meter telling the operator to chase
 # gain that does not exist.
 METER_GOOD_LO = -40.0
-# The TOP is left well above the operator's -35, deliberately. A band that
-# opens up puts a much louder signal in, and -35 as a ceiling would flag a
-# strong afternoon on 20 m as "high" when `wsprd` is entirely happy there.
-# What the ceiling is for is catching a level near clipping.
-METER_GOOD_HI = -12.0
+# **The ceiling is -30, the operator's choice on 2026-11-27**, as the range
+# consistent with how WSJT-X is normally set and bracketing this deck's
+# measured -33 at full gain. It was -12, which left the band 28 dB wide:
+# wide enough that "good" was no advice at all, and wide enough that an
+# automatic calibration aiming at the quietest acceptable level would have
+# settled near -39 and handed back the quiet-receive complaint it was built
+# to fix. The floor above stays measured; a -30 FLOOR has been wrong twice
+# and must not come back.
+METER_GOOD_HI = -30.0
+
 
 
 def wspr_meter(dbfs, cells=WSPR_METER_CELLS):
@@ -2038,7 +2059,8 @@ def wspr_meter(dbfs, cells=WSPR_METER_CELLS):
     return out
 
 
-def wspr_cal_screen(width, height, state=None, message="", footer=""):
+def wspr_cal_screen(width, height, state=None, message="", footer="",
+                    area="WSPR"):
     """The calibration screen: one level, one meter, and plus and minus.
 
     Two kinds, transmit and receive, because they are the same job against
@@ -2048,9 +2070,14 @@ def wspr_cal_screen(width, height, state=None, message="", footer=""):
     """
     st = dict(state or {})
     kind = str(st.get("kind") or "tx").lower()
+    # **`area` is why the digimodes reuse this instead of getting their own
+    # screen.** The job is identical -- a level, a meter, and two keys --
+    # and the areas differ only in which level and which meter. A second
+    # screen would have been a second place for `+` to drift.
+    wspr = str(area).upper() == "WSPR"
     out = []
-    title = (" WSPR CALIBRATE — TRANSMIT" if kind == "tx"
-             else " WSPR CALIBRATE — RECEIVE")
+    which = "TRANSMIT" if kind == "tx" else "RECEIVE"
+    title = f" {area} CALIBRATE — {which}"
     right = str(st.get("band") or "")
     pad = max(1, width - len(title) - len(right) - 1)
     out.append([((title + " " * pad + right + " ")[:width], "reverse")])
@@ -2058,10 +2085,25 @@ def wspr_cal_screen(width, height, state=None, message="", footer=""):
     out.append([(" " * width, "")])
 
     level = st.get("level")
-    label = "TX audio level" if kind == "tx" else "RX capture gain"
-    out.append(_pad([(f"   {label}  ", ""),
-                     (f" {int(level) if level is not None else 0}% ",
-                      "reverse")], width))
+    # **One name in both areas.** The mechanisms differ underneath -- WSPR
+    # scales the samples it renders, the digimodes set the playback mixer --
+    # but from the operator's side it is the same knob doing the same job,
+    # and naming it differently made two screens out of one procedure. Each
+    # area keeps its own value and asserts it on arrival, so there is no
+    # ambiguity about which level is on screen.
+    label = "TX level" if kind == "tx" else "RX capture gain"
+    # **Percent AND decibels**, because percent alone makes the step size
+    # unreadable. A mixer control here has 37 raw steps over 37 dB, so one
+    # press is exactly 1.0 dB -- but as a percentage that is a jump of
+    # about 2.7, which reads as coarse and arbitrary: 24, 27, 30. The dB
+    # says what the press actually did. The software transmit scale is in
+    # the same unit for the same reason, computed from the percentage.
+    level_db = st.get("level_db")
+    row = [(f"   {label}  ", ""),
+           (f" {int(level) if level is not None else 0}% ", "reverse")]
+    if level_db is not None:
+        row.append((f"   {float(level_db):+.1f} dB", "dim"))
+    out.append(_pad(row, width))
     out.append([(" " * width, "")])
 
     if kind == "tx":
@@ -2070,29 +2112,92 @@ def wspr_cal_screen(width, height, state=None, message="", footer=""):
         # back -- not to draw a meter the deck cannot measure.
         watts = st.get("watts")
         dbm, exact = st.get("dbm"), st.get("dbm_exact")
-        out.append(_pad(wspr_power(watts, dbm, exact,
-                                   st.get("ceiling", 0),
-                                   st.get("power_fallback")), width))
+        # **One number, the only one the radio can be trusted for.**
+        # `set` comes from the radio's `PC` command in real watts.
+        #
+        # There was a meter reading here as well, the needle's position
+        # over CAT. It went because it could not be acted on: this radio's
+        # power meter is logarithmic, so the deflection is not a wattage,
+        # and a bare 0.102 on screen told the operator nothing they could
+        # use. "i'd actually get rid of the meter read out entirely.
+        # simplify." The procedure below needs the radio's own two
+        # needles, not a number from the deck.
+        set_w = st.get("set_watts")
+        out.append(_pad([("   set  ", ""),
+                         (f" {float(set_w):.1f} W " if set_w
+                          else " unknown ", "" if set_w else "dim")], width))
+        if wspr:
+            # **Only WSPR carries a dBm**, because a WSPR message ENCODES
+            # its transmit power and so it has to be snapped to a value the
+            # protocol can express. Nothing in the digimodes transmits a
+            # power figure, which is why that row is absent there rather
+            # than reading "no dBm" for ever.
+            out.append(_pad(wspr_power(watts, dbm, exact,
+                                       st.get("ceiling", 0),
+                                       st.get("power_fallback")), width))
         out.append([(" " * width, "")])
-        state_line = ("   transmitting — watch the radio's power meter"
-                      if st.get("keyed") else
-                      "   not transmitting")
+        state_line = ("   transmitting" if st.get("keyed")
+                      else "   not transmitting")
         out.append([(state_line[:width].ljust(width),
                      "bright" if st.get("keyed") else "dim")])
         out.append([(" " * width, "")])
-        for hint in ("   Set the radio's drive so its meter reads what",
-                     "   the deck reports; watch the dBm highlight."):
+        # **Name the instrument.** "its meter" left the operator choosing
+        # between the radio's power meter, its ALC and the deck's own
+        # figure: "it's not clear what meter i should be looking at. it
+        # should specify which meter."
+        # **No verdict and no meter, deliberately.** A dB-precise "N under
+        # the set power, raise the level" lived here for an afternoon. It
+        # divided the meter deflection by the set wattage as though both
+        # were watts; this radio's meter is a needle position on a
+        # logarithmic scale, so the comparison was arithmetic the
+        # instrument cannot carry, and it reported a radio making about 5 W
+        # as making 10.2. The raw deflection replaced it and then went too,
+        # because a bare 0.102 could not be acted on either. **The deck
+        # trusts the radio's meters rather than models it cannot confirm.**
+        out.append([(" " * width, "")])
+        # **The operator's own procedure, which is closable and uses only
+        # instruments that can be trusted.** It replaces "keep the ALC out
+        # of it", which named no target: the ALC is out of it at every
+        # level below the knee, so that gave no way to tell a correct
+        # setting from one 20 dB too quiet. Finding the knee and stepping
+        # back off it does, and the power meter confirms the result.
+        hints = ["   Raise the level until the radio's ALC just engages,",
+                 "   then back off one step. Confirm the radio's power",
+                 "   meter reads the power its control is set to."]
+        if not wspr:
+            # The one line that is NOT shared, because the coupling is
+            # real: this screen moves the playback mixer, which WSPR's
+            # rendered audio also plays through.
+            hints.append("   Shared with WSPR's output: recheck it after.")
+        for hint in hints:
             out.append([(hint[:width].ljust(width), "dim")])
     else:
-        out.append(_pad(wspr_meter(st.get("dbfs")), width))
+        if wspr or st.get("dbfs") is not None:
+            out.append(_pad(wspr_meter(st.get("dbfs")), width))
+            out.append([(" " * width, "")])
+            state_line = ("   listening" if st.get("listening")
+                          else "   not listening")
+            out.append([(state_line[:width].ljust(width),
+                         "bright" if st.get("listening") else "dim")])
+        else:
+            # **No empty meter where one can never fill.** Outside WSPR the
+            # deck cannot record -- fldigi holds the capture stream -- so an
+            # unfilled bar reading "no audio yet" promises a figure that is
+            # not coming and reads as the deck failing to hear the radio.
+            out.append([("   no meter here".ljust(width), "dim")])
+            out.append([(" " * width, "")])
+            out.append([("   same control as WSPR's capture gain"
+                         .ljust(width), "dim")])
         out.append([(" " * width, "")])
-        state_line = ("   listening" if st.get("listening")
-                      else "   not listening")
-        out.append([(state_line[:width].ljust(width),
-                     "bright" if st.get("listening") else "dim")])
-        out.append([(" " * width, "")])
-        for hint in ("   Aim for the marked stretch of the meter.",
-                     "   Too loud decodes worse than too quiet."):
+        # The band as a NUMBER as well as a marked stretch: a bar says
+        # "not there yet" without saying what "there" is.
+        hints = ((f"   Target {METER_GOOD_LO:.0f} to {METER_GOOD_HI:.0f}"
+                  " dBFS, the marked stretch above.",
+                  "   Too loud decodes worse than too quiet.")
+                 if wspr else
+                 ("   One control, shared with WSPR, so a percentage",
+                  "   reads the same here as it does on its meter."))
+        for hint in hints:
             out.append([(hint[:width].ljust(width), "dim")])
 
     while len(out) < height - 2:
@@ -2209,7 +2314,8 @@ def wspr_screen(spots, width, height, state=None, message="", footer=""):
 
     out.append(_pad(wspr_levels(st.get("tx_level"), st.get("rx_gain"),
                                 st.get("dbfs"),
-                                measuring=bool(st.get("measuring"))), width))
+                                measuring=bool(st.get("measuring"))),
+                    width))
 
     groups = [[(f"heard {st.get('heard', 0)}", "dim")],
               [(f"sent {st.get('sent', 0)}", "dim")],

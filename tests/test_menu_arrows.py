@@ -92,7 +92,11 @@ check("and it lists the send key", "^T" in body, body[:600])
 
 # The ^G line still cycles what the key does, reached by its own key rather
 # than by the wrap. `prefill` is the default and one press moves it on.
-body = show("F1 5 — the ^G line", run(keys=[DIGI, F1, "5"]))
+# **Key `6`, not `5`.** Audio levels took `5` when it was added to the
+# digimode menu, moving the ^G line and the keys list down one each. This
+# check caught it: `5` opened the audio submenu while the test still
+# asserted the menu had stayed open and the hotkey had cycled.
+body = show("F1 6 — the ^G line", run(keys=[DIGI, F1, "6"]))
 check("the menu is still open", "DIGIMODES" in body, body[:200])
 check("and the ^G line moved on",
       decall.MODE_LABELS[decall.PREFILL_STAY] in body, body[:500])

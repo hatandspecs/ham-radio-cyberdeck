@@ -148,18 +148,104 @@ SCHEMA = {
     # By NAME. The card INDEX moves between reboots -- the codec was card 1
     # and became card 2 when HDMI probed first -- and an index that moves
     # points the capture at the wrong hardware entirely.
+    # **A separate capture device, because `plughw` AVERAGES the channels.**
+    # The FTX-1's codec presents a two-channel capture and feeds audio on
+    # the left only: measured 2026-11-26 at ch0 -16.8 dBFS against ch1
+    # -65.7. `plughw` converts stereo to mono by averaging, which halves
+    # the live channel against the dead one and costs about 6 dB -- and the
+    # loss happens after the capture mixer, so no amount of gain recovers
+    # it. An ALSA device using `route_policy copy` takes channel 0 instead
+    # and gives the 6 dB back. Blank means "use WSPR_DEVICE", so a deck
+    # with no such device behaves as before.
+    #
+    # The device itself lives in the operator's `~/.asoundrc` on the deck,
+    # not here: it is machine configuration, and `docs/wspr_deploy.md`
+    # carries the stanza. On this deck it is named `ftx1rx`.
+    "WSPR_RX_DEVICE":  ("", str, "ALSA device for WSPR capture only; blank "
+                                 "uses WSPR_DEVICE. Use one that takes a "
+                                 "single channel rather than averaging"),
     "WSPR_DEVICE":     ("plughw:CARD=Device,DEV=0", str,
                         "ALSA device for WSPR capture and playback; address "
                         "the card by name, since indexes move"),
     # Transmit amplitude, WSPR's own. Not the playback mixer, which fldigi
     # shares: a level set there turns the digimodes down with it.
-    "WSPR_TX_LEVEL":   (50, int, "WSPR transmit audio level, percent of "
+    # **9 and 100 are MEASURED on this deck, 2026-11-28.** With
+    # `WSPR_TX_DRIVE` at 50%, the operator found the ALC dead flat at 9%
+    # and just moving at 10%, at about 5 W on the radio's meter -- so 9% is
+    # the setting and the threshold is one step above it. 100% capture puts the receive
+    # level near -33 dBFS, inside the band `render.METER_GOOD_LO/HI` marks.
+    # They were 50 and 70, generic numbers that suited nothing here.
+    # See `docs/audio_gain_staging.md`.
+    "WSPR_TX_LEVEL":   (9, int, "WSPR transmit audio level, percent of "
                                  "full scale; lower it if the ALC engages"),
     # And the capture side, which IS the shared mixer -- WSPR owns the codec
     # exclusively while it runs, so it sets this on start and puts it back
     # on stop rather than changing the station's level.
-    "WSPR_RX_GAIN":    (70, int, "WSPR capture gain, percent; restored when "
-                                 "WSPR stops"),
+    "WSPR_RX_GAIN":    (100, int, "WSPR capture gain, percent; restored "
+                                  "when WSPR stops"),
+    # The digimode pair. Separate keys from WSPR's two because they are set
+    # against different instruments, even though the capture one is the same
+    # ALSA control.
+    #
+    # **The drive is the PLAYBACK mixer**, where WSPR's transmit level is a
+    # scale on the file it renders. fldigi plays through the codec like any
+    # other program, so a mixer level is the only place to set it -- and
+    # that level is shared with anything else that plays.
+    #
+    # The default is deliberately low: on the FTX-1 the radio clamped above
+    # about half scale and PSK31 came out distorted at the shipped level, so
+    # a first run that is quiet and clean beats one that splatters.
+    "DIGI_TX_DRIVE":   (30, int, "digimode transmit drive, percent of the "
+                                 "playback mixer; lower it if the ALC "
+                                 "engages"),
+    # WSPR's own playback-mixer level, the counterpart to DIGI_TX_DRIVE.
+    # Applied on entering the WSPR area, so the two areas' transmit paths
+    # stay independent over one shared control.
+    #
+    # **This is where the attenuation belongs, not in WSPR_TX_LEVEL.** The
+    # mixer gives about 1 dB per step across 37 steps; the software scale
+    # is a percentage of amplitude whose bottom end is 1%. With the mixer
+    # pinned open the operator's ALC threshold landed at 1% software -- the
+    # minimum -- leaving one usable setting and no headroom. 32% is about
+    # -25 dB on this codec, which puts the threshold mid-scale on the
+    # software knob. Re-derive it if the radio's USB MOD GAIN changes.
+    # **50%, the operator's figure, 2026-11-27.** See
+    # `docs/audio_gain_staging.md` for the whole chain and why this stage
+    # carries the coarse attenuation.
+    "WSPR_TX_DRIVE":   (50, int, "WSPR playback mixer level, percent; the "
+                                 "coarse attenuation, with WSPR_TX_LEVEL "
+                                 "the fine adjustment"),
+    # **The same control `WSPR_RX_GAIN` sets**, and deliberately a second
+    # key. WSPR takes the codec exclusively and restores the gain when it
+    # stops, so its value is a per-session loan; this one is the station's
+    # level the rest of the time, and the two differ mid-session. There is
+    # nothing separate to calibrate: one codec, one capture gain.
+    "DIGI_RX_GAIN":    (100, int, "digimode capture gain, percent; the "
+                                  "station's level outside a WSPR session"),
+    # **`Speaker`, measured on this codec 2026-11-27.** `PCM` is the common
+    # name elsewhere and does not exist here -- the deck answered "no
+    # playback control named 'PCM'". The codec has exactly three controls:
+    #
+    #     Speaker             pvolume pswitch              <- this one
+    #     Mic                 pvolume cvolume pswitch cswitch
+    #     Auto Gain Control   pswitch
+    #
+    # **`Mic` reports a playback volume too, and it is the wrong one.**
+    # That is the microphone monitor path and it ships `[off]`; picking it
+    # by searching for "a control with pvolume" would set a muted sidetone
+    # and leave the drive untouched. Capture is `Mic`'s cvolume, which is
+    # what `WSPR_RX_CONTROL` addresses.
+    #
+    # **This control is shared with WSPR's transmit audio.** WSPR scales
+    # the samples it renders rather than touching this mixer, precisely so
+    # it does not disturb what fldigi plays through -- but both streams
+    # still pass through `Speaker` on the way out. So changing the digimode
+    # drive moves WSPR's absolute output as well, even though
+    # `WSPR_TX_LEVEL` is untouched. Recheck the WSPR transmit level after
+    # changing this one.
+    "DIGI_TX_CONTROL": ("Speaker", str, "ALSA playback control for the "
+                                        "digimode transmit drive; shared "
+                                        "with WSPR's output"),
     # A NAME, and a string: `amixer -c` takes either an index or a card id,
     # and the id is the one that survives a reboot.
     "WSPR_RX_CARD":    ("Device", str, "ALSA card for the capture mixer, by "

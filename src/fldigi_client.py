@@ -210,6 +210,33 @@ class Fldigi:
         self._call("main.rx")
         return self.connected
 
+    def tune(self):
+        """Start fldigi's tune carrier. Returns whether the call went out.
+
+        A steady carrier at 100% duty cycle, which is what setting a
+        transmit drive against the radio's power meter needs: a varying
+        envelope would have the operator comparing the loudest moment of
+        one reading against the quietest of the next. It is also why PSK31
+        then reads lower than the drive was set at -- PSK31's envelope
+        drops to zero on every phase reversal, so its average runs 1 to
+        3 dB under a steady tone.
+
+        **Stop it with `stop_transmit`, not `abort`.** Tune is not a
+        transmission with a buffer behind it, so `main.abort` has nothing
+        to end and PTT stays asserted -- the 2026-11-24 stuck-transmitter
+        case exactly. `stop_transmit` reads the state back and says whether
+        the radio actually unkeyed.
+
+        **This is not gated by fldigi's `rx_only`.** `main.tune` was
+        observed to key the radio with receive-only set, which
+        `docs/digimodes_design.md` §7 records as the reason that flag is
+        set but never relied on. So every caller must ask the deck's own
+        interlock first; `Deck._digi_tx_preflight` is the only gate there
+        is.
+        """
+        self._call("main.tune")
+        return self.connected
+
     def abort(self):
         """Drop the carrier now, and throw away what had not gone out yet.
 

@@ -17,6 +17,7 @@ ordinary laptop — start fldigi, run `./src/cyberdeck.py`, nothing else needed.
 | `docs/` | Runbook and operating tutorial |
 | `docs/screens/` | Rendered screenshots of every screen |
 | `docs/logging_tutorial.md` | Operating the contact log, with screenshots (its images predate the entry form and are stale) |
+| `docs/audio_gain_staging.md` | **Every audio gain stage, transmit and receive, and which the deck owns.** Read before changing any level. Carries the radio's `USB MOD GAIN` 50 / `USB OUT LEVEL` 100, why the coarse attenuation lives in the ALSA mixer and not in the software scale, and why the deck does not report watts |
 | `docs/wspr_operating_tutorial.md` | **Operating WSPR**, and pulling the spot log off the deck (§11). Screens are the generated ones, so they stay true |
 | `docs/logging_tutorial.md` §6 | Pulling contacts off the deck and importing to QRZ by hand |
 | `docs/qso_log_design.md` | The logger's design and every decision in it — §7f one log and sessions, §7g the schema decides the columns, §7h danger zone, §7i what follows an activity |
@@ -1173,6 +1174,199 @@ grant that does not prompt could only have come from the rule.
 | **KM empty** | WSPR carries a grid and no distance. `src/grid.py` computes it, **validated against this station's own wsprnet rows**: inside 0.5 km on every six-character path from 498 to 6855 km. Not stored — both figures are derivable from the two grids already in each record |
 | **The screen was tight** | The spot row used 44 of 66 columns with no gaps. Respaced, with KM and AZ |
 
+### Audio levels are set BY HAND, and an automatic version was removed
+
+Both levels in each area are set from a calibration screen with `+` and `-`
+against a meter. **An automatic version of this existed for one day**,
+2026-11-26 to 2026-11-27, and the operator had it removed: "it seems easy
+enough to manually set them with the existing funcitonality. I think i'd
+rather preserve the manual level setting funcitonality and rip out the
+automatic functionality which seems overcomplicated and kludgey for what it
+is worth." **Do not rebuild it.** The reason it was not worth it is
+structural, not a bug that could be fixed: a receive ladder has to wait for
+the six-second gaps between WSPR's 114-second capture windows, so it took
+minutes to do what a hand takes seconds to do.
+
+**It was never committed, so it is not in the history.** Do not go looking
+for it; the findings worth keeping are listed below. The manual screens and
+their tests are `Deck._open_digi_cal` and the rest of the `_digi_cal_*`
+family, `render.wspr_cal_screen` with an `area`, and
+`tests/test_digical.py`.
+
+What survives from it, and is worth keeping:
+
+- **`25%` transmit and `100%` capture are the measured defaults** for this
+  deck and an FTX-1, 2026-11-27. 25% keeps the ALC out; 100% puts receive at
+  about -33 dBFS. They were 50 and 70, which suited nothing.
+- **The acceptable receive band is -40 to -30 dBFS**, in
+  `render.METER_GOOD_LO/HI`. The floor is measured: on 2026-10-17 at 100%
+  gain with 40 m open this codec read -37 to -35 and decoded, 43 receivers
+  in one slot, and a -32 floor flagged that as "low" -- a meter telling the
+  operator to chase gain that does not exist. The ceiling is the operator's
+  choice, 2026-11-27, as the range consistent with how WSJT-X is set; it had
+  been -12, which called a 28 dB spread "good" and so said nothing.
+  **A -30 floor has now been wrong twice.** Do not reintroduce it.
+- **ALC is not an instrument on this radio.** hamlib's `ALC` read 1.00 at
+  every drive level in one sweep and 0.28, 0.28, 0.00 in another five
+  minutes later. `Rigctld.meter_watts` reads `RFPOWER_METER_WATTS`, which is
+  orderly and repeatable, and is what the digimode transmit screen shows.
+- **Measured FTX-1 drive curve**, 5 W on 40 m: drive 5 -> 0.24 W, 7 -> 0.64,
+  9 -> 2.24, 11 -> 3.50, then clamped: 13 -> 3.86, 15 -> 4.04, 17 -> 4.22.
+  Five dB more drive bought 0.4 dB more output. Set drive about 1 dB below
+  where output stops rising, not at it.
+- **PSK31 reads lower than a tune carrier and that is correct.** Tune is
+  100% duty; PSK31's envelope drops to zero on every phase reversal, so its
+  average runs 1 to 3 dB below the carrier a drive was set against. Judge
+  the setting by whether the ALC stays out, not by the wattage. A 20 W
+  radio showing under 10 W on PSK31 is not necessarily mis-set.
+- **Opening the capture STREAM needs the card exclusively; moving a mixer
+  CONTROL does not.** Verified against a card whose capture was RUNNING
+  under fldigi: `amixer sget` returned the level and `sset` changed it. So
+  the digimode receive gain IS settable while fldigi runs and takes effect
+  on its next buffer; what is impossible is MEASURING it, which needs a
+  recording. `park_decoder` does not help -- NULL modem, card still held.
+  The receive screen therefore sets the gain and says plainly that it has no
+  meter. **Do not "fix" that by stopping fldigi behind the operator's back.**
+- **Audio gain staging is in `docs/audio_gain_staging.md` and that file is
+  authoritative.** The short version: four stages in series on transmit, the
+  deck owns the first two, and **the coarse attenuation belongs in the ALSA
+  playback mixer (`*_TX_DRIVE`, ~1 dB per step over 37 steps), not in the
+  software scale (`WSPR_TX_LEVEL`, floor of 1%)**. Pinning the mixer open
+  for one afternoon moved the operator's ALC threshold to 1% -- the minimum
+  the control has -- leaving one usable setting and no headroom. The
+  radio's `USB MOD GAIN` is 50 and its `USB OUT LEVEL` is **100, raised
+  from the shipped 50**; the deck's levels are set relative to both, so
+  putting either back means finding the deck's levels again.
+- **The radio's power meter is not a wattmeter and the deck no longer
+  pretends otherwise.** Its face is logarithmic -- 0 to 10 in the first few
+  percent of travel, 150 at full scale -- and CAT reports the needle's
+  position, which hamlib's `RFPOWER_METER_WATTS` multiplies by 100.
+  `Rigctld.power_meter` returns the deflection and the screens say to use
+  the radio's own meters. `PC;` via `power_control` is the one reliable
+  number on this path, in real watts.
+- **Each area asserts its OWN audio levels on arrival, and the two are
+  fully decoupled.** `Deck._apply_area_levels`, called from `_ring` and
+  from `_open_wspr`. There is one capture mixer and one playback mixer on
+  one codec, so the areas cannot both hold them; whichever the operator is
+  in owns both. Each keeps its own stored pair and restores it on entry:
+  `WSPR_RX_GAIN` + `WSPR_TX_LEVEL`, `DIGI_RX_GAIN` + `DIGI_TX_DRIVE`.
+  Without this the WSPR audio menu read 74% with WSPR off and 100% with it
+  on, because the value was only applied at session start.
+- **Entering WSPR pins the playback mixer OPEN** (`WSPR_PLAYBACK_PCT`,
+  100%). WSPR scales the samples it renders, so the mixer belongs out of
+  its way; with it open, WSPR's output is decided by `WSPR_TX_LEVEL`
+  alone. Left alone it rode on whatever the digimodes had set `Speaker`
+  to, which coupled the two transmit levels while the receive ones were
+  independent. **This supersedes `wsprgain`'s docstring reasoning** that
+  WSPR must never touch the playback mixer because fldigi shares it: that
+  held when nothing re-asserted the digimodes' value, and they now set
+  their own on arrival. **`WSPR_TX_LEVEL` had to be recalibrated when this
+  landed**, because pinning the mixer open makes WSPR louder.
+- **One procedure, two areas.** The calibration screens are one function,
+  `render.wspr_cal_screen` with an `area`; both menus carry the same keys,
+  the same labels (`TX level`, `RX capture gain`) and the same footer. The
+  only wording that differs is the receive entry, because the deck can
+  measure a dBFS for WSPR and cannot for the digimodes -- fldigi holds the
+  capture stream. `tests/test_digical.py` asserts the symmetry so it
+  cannot drift apart.
+- **Both transmit screens show SET and MAKING, and a verdict.** The set
+  figure is the power control's position and does not move when an audio
+  level does; the measured figure is the only thing that confirms a change
+  had any effect. The verdict closes the loop -- "5.2 dB under the set
+  power, raise the level" / "matched" -- because the operator's job has one
+  unknown, the deck's audio output, and one target, the power the radio is
+  set to. `render.PWR_MATCH_DB` is 0.5, above this radio's ~0.2 dB meter
+  resolution so the verdict does not flicker.
+- **Levels step by the finest the hardware has, not by a ladder.** The
+  transmit level is a software scale and moves by exactly 1%. The capture
+  gain is an ALSA control with about 35 raw steps, so a percentage target
+  rounds to the value already set -- `wsprgain.Gain.step` asks amixer for
+  a relative move instead. A ladder of percentages made `+` and `-` toggle
+  between 41% and 49% from a start of 46%, with nothing in between
+  reachable.
+- **`Enter` toggles the carrier on both transmit screens.** It used to
+  start a tone that only its own 40-second limit or `^C` ended.
+- **The WSPR information line expires** after `WSPR_NOTE_S`, read through
+  `Deck._wspr_note_now` and never from `wspr_message` directly. The rows
+  around it carry what is still true, so a note is by definition about
+  something that just happened and one left up reads as current when it is
+  not.
+- **The calibration carrier has its own time limit**, `DIGICAL_CARRIER_S`.
+  It is keyed with no over behind it, which is exactly what a stuck
+  carrier looks like to `_watch_stuck_carrier`, so that watchdog dropped it
+  after two seconds and made the screen useless. It is not exempt -- it has
+  a longer leash and the same unkey at the end of it.
+- **The playback control on this codec is `Speaker`, not `PCM`**, measured
+  2026-11-27. The codec has three controls and only three: `Speaker`
+  (pvolume), `Mic` (pvolume + cvolume) and `Auto Gain Control` (pswitch).
+  **`Mic` reports a playback volume too and it is the wrong one** -- that
+  is the microphone monitor, shipped `[off]`, so choosing by "has a
+  pvolume" sets a muted sidetone and leaves the drive untouched. Capture is
+  `Mic`'s cvolume, which is what `WSPR_RX_CONTROL` addresses.
+- **`Speaker` is SHARED with WSPR's transmit audio**, and this is the one
+  real coupling between the two areas' levels. WSPR scales the samples it
+  renders rather than touching the mixer, exactly so it does not disturb
+  what fldigi plays through -- but both streams still pass through
+  `Speaker` on the way out, so moving the digimode drive moves WSPR's
+  absolute output as well even though `WSPR_TX_LEVEL` is unchanged. The
+  digimode transmit screen says so on screen. **Recheck WSPR transmit
+  after changing the digimode drive.**
+- **The digimode drive is the PLAYBACK mixer** (`DIGI_TX_DRIVE` over
+  `Speaker`), because fldigi plays through the codec like any other
+  program. WSPR's
+  transmit level is a scale on the file it renders instead, since nothing
+  else plays that file -- using the mixer there would turn the digimodes
+  down with it. `wsprgain.Gain` takes a `direction` for this.
+- **The carrier for a drive measurement is fldigi's tune**, stopped with
+  `stop_transmit` and never `abort`: tune is not a transmission with a
+  buffer behind it, so `main.abort` has nothing to end and PTT stays closed.
+  That is the 2026-11-24 stuck-carrier path. **`main.tune` is also NOT
+  gated by fldigi's `rx_only`** (§7 of digimodes_design.md), so
+  `Deck._digi_tx_preflight` is the only interlock in front of it and every
+  path that raises a carrier must go through it.
+- **A level on screen must come from the HARDWARE, not from config.** Every
+  gain figure reads the codec through `amixer`, cached, because a draw path
+  may not shell out uncached. `DIGI_RX_GAIN` was once declared, remembered
+  and displayed while being read by nothing -- a number the hardware was not
+  using, which is the exact fault the feature existed to end. And show ONE
+  number: showing the codec value beside the stored one when they differed
+  produced "i don't get what rx gain 52% (set 100%) means", which was a fair
+  question.
+- **The two calibration screens are ONE function**,
+  `render.wspr_cal_screen`, with an `area` argument. Keeping them one screen
+  is what stops `+` and `-` coming to mean different things in the two
+  areas. The WSPR-only furniture is suppressed outside WSPR: no dBm column,
+  since nothing in the digimodes encodes a transmit power, and no empty
+  meter bar where the deck cannot record.
+- **`DIGI_TX_DRIVE` and `DIGI_RX_GAIN` are in `_REMEMBERED`;
+  `DIGI_TX_CONTROL` is not.** Levels reachable from a screen are
+  preferences; a control name is a hardware address and a stale one beats a
+  corrected default. `tests/test_state.py` enforces the same split over
+  `DIGI_` as over `WSPR_`, so a new level setting cannot be added without
+  classifying it.
+- **The digimode F1 menu numbering**: Audio levels is `5`, the log hotkey
+  `6`, the keys list `7`. While audio levels was being added, `5` was drawn
+  as "Audio levels" and still cycled the log hotkey.
+- **A refusal reached from a menu must CLOSE THE MENU before it writes its
+  reason.** Otherwise the note lands on a message line hidden under the open
+  menu and the key looks dead. This is the "Calibrate transmit audio does
+  nothing" entry in the panel-findings table above; it was fixed once and
+  reintroduced in 2026-11, reported as "neither autoset rx or tx does
+  anything for wspr", where the truth was that WSPR has to be on first.
+  **Better still, state the requirement on the menu rather than waiting to
+  refuse** -- the WSPR audio menu now carries "WSPR must be ON for both"
+  when it is off, after the operator reported "i press the c hotkey and
+  nothing happens, with no explaination. the flow is bad."
+- **`RFPOWER_METER_WATTS` answers 0.0 on an unkeyed radio; None means it
+  could not be read.** `_digi_tx_preflight` refuses on None, so a test fake
+  that returns None when unkeyed makes it refuse on a working radio.
+- **The hidden `t` and `r` steppers are gone too**, removed 2026-11-27 with
+  the automatic pair, at the operator's request after asking "why do the t
+  and r keys exist? is this just for testing or something? I don't get it."
+  They stepped the two WSPR levels from the audio menu without being listed
+  on it. The calibration screens are now the only route to a level, which
+  is the principle the project already held: a level belongs beside a meter.
+
 ### Reach for a conda env before concluding a package is missing
 
 This machine has four, and `python3` is not any of them. Conda's base is
@@ -1194,14 +1388,32 @@ conda env list                       # general_assignment_solver, openems_env,
   `/home/natale/.conda/envs/openems_env/bin/python`. (That tool lives in the
   hamradio-source repo; the trap is the machine's, so it is in both.)
 
-- **`pyte` is the one package only `repeater_monitoring` has**, and the pty
-  tests need it. `tools/run_tests.sh` calls plain `python3`, so on a bare run
-  fourteen files fail at `import pyte` and report as FAILED exactly like a
-  real break. Run the suite as
-  `PATH=/home/natale/.conda/envs/repeater_monitoring/bin:$PATH tools/run_tests.sh`.
+- **The pty tests need `pyte`, and `tools/run_tests.sh` calls plain
+  `python3`**, so on a bare run fourteen files fail at `import pyte` and
+  report as FAILED exactly like a real break. **Prefer `cyberdeck-dev`:**
+
+      PATH=/home/natale/.conda/envs/cyberdeck-dev/bin:$PATH tools/run_tests.sh
+
+  **Corrected 2026-11-26:** this said `pyte` was in `repeater_monitoring`
+  alone and told you to use it. Both have it now, and `cyberdeck-dev` is the
+  right one -- `environment.yml` pins it to the 3.13 the deck runs, and it
+  measures 3.13.18 against `repeater_monitoring`'s 3.14.5. A suite that
+  passes on a different interpreter from the deck's says less than it looks
+  like it does, which is the point `run_tests.sh` makes by printing the
+  version it used.
   Budget about an hour: `test_log_panel` alone takes eight minutes and several
   others take two to five, because they drive the real program through a pty
-  with real settling delays.
+  with real settling delays. **A 120-second shell timeout is useless here**;
+  run it in the background and wait.
+- **fldigi is a test FIXTURE, not stray process -- do not kill it.**
+  `tools/run_tests.sh` refuses to start without it, because the pty files
+  drive the real application against a real modem. If it has to be
+  restarted, `tools/dev-fldigi.sh stop` then `tools/dev-fldigi.sh`, which
+  seeds the config and waits for XML-RPC. **And never reach for `pkill -f`
+  on it**: the pattern matches the killing shell's own command line, so
+  `pkill` takes out its caller and the command exits 144 with nothing done
+  -- that is how the fixture came to be killed on 2026-11-26 while the
+  suite that needed it never ran.
 
 ### `DISPLAY=:99` does not hide an FLTK 1.4 program on Wayland
 

@@ -34,6 +34,16 @@ DEFAULT_CARD = "Device"
 DEFAULT_CONTROL = "Mic"
 DEFAULT_GAIN = 70
 
+# The playback side, for the digimode transmit drive. Same codec, same
+# `amixer`, opposite direction: `capture` and `playback` are the words
+# amixer wants, and a control set without one gets whichever side it
+# happens to have. The digimode drive has to be a mixer level because
+# fldigi plays through the codec like any other program, so there is
+# nowhere else to set it -- unlike WSPR, which scales the samples it
+# renders itself.
+DEFAULT_PLAYBACK = "PCM"
+CAPTURE, PLAYBACK = "capture", "playback"
+
 # The codec's AGC switch. Measured ON as shipped, and it has to be off:
 # WSPR is constant envelope, so compressing it discards nothing useful and
 # corrupts the SNR `wsprd` reports -- which is then uploaded to wsprnet as
@@ -45,15 +55,17 @@ DEFAULT_AGC = "Auto Gain Control"
 _PCT = re.compile(r"\[(\d{1,3})%\]")
 
 
-def get_command(card=DEFAULT_CARD, control=DEFAULT_CONTROL):
+def get_command(card=DEFAULT_CARD, control=DEFAULT_CONTROL,
+                direction=CAPTURE):
     """What to run to read the control."""
-    return ["amixer", "-c", str(card), "sget", str(control), "capture"]
+    return ["amixer", "-c", str(card), "sget", str(control), str(direction)]
 
 
-def set_command(pct, card=DEFAULT_CARD, control=DEFAULT_CONTROL):
+def set_command(pct, card=DEFAULT_CARD, control=DEFAULT_CONTROL,
+                direction=CAPTURE):
     """What to run to set it, as a percentage."""
     return ["amixer", "-c", str(card), "sset", str(control),
-            f"{int(pct)}%", "capture"]
+            f"{int(pct)}%", str(direction)]
 
 
 def switch_command(on, card=DEFAULT_CARD, control=DEFAULT_AGC):
@@ -90,6 +102,30 @@ def parse_level(text):
     return max(0, min(100, int(m.group(1))))
 
 
+#: `[-20.00dB]` in amixer's per-channel line. Present on controls that
+#: have a dB scale and absent on those that do not.
+_DB = re.compile(r"\[(-?\d+(?:\.\d+)?)dB\]")
+
+
+def parse_db(text):
+    """The control's level in dB, or None if it does not report one.
+
+    **This is the unit that means something on a mixer control.** This
+    codec's playback control has 37 raw steps spanning 37 dB, so one step
+    is 1.0 dB -- but expressed as a percentage that is a jump of about
+    2.7%, which reads as coarse and irregular: 24, 27, 30. Reported from
+    the deck as "- and + do not move the level by 1 unit, usually by 3 or
+    4". The step is not irregular; the percentage is the wrong unit for it.
+    """
+    m = _DB.search(str(text or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
 def level_of(path, stride=None):
     """`(rms, peak, dbfs)` for a captured WAV, or None if it cannot be read.
 
@@ -118,9 +154,10 @@ class Gain:
     """
 
     def __init__(self, card=DEFAULT_CARD, control=DEFAULT_CONTROL, run=None,
-                 agc=DEFAULT_AGC):
+                 agc=DEFAULT_AGC, direction=CAPTURE):
         self.card = card
         self.control = control
+        self.direction = direction
         self.agc = agc
         self._run = run or self._real_run
         self.previous = None       # what was there before the session
@@ -139,12 +176,21 @@ class Gain:
 
     def read(self):
         """The control's current percentage, or None."""
-        code, out, err = self._run(get_command(self.card, self.control))
+        code, out, err = self._run(
+            get_command(self.card, self.control, self.direction))
         if code != 0:
             self.last_error = (err or out or "amixer failed").strip()
             return None
         self.last_error = ""
         return parse_level(out)
+
+    def read_db(self):
+        """The control's level in dB, or None. See `parse_db`."""
+        code, out, err = self._run(
+            get_command(self.card, self.control, self.direction))
+        if code != 0:
+            return None
+        return parse_db(out)
 
     def apply(self, pct):
         """Set the control, remembering what was there. Returns why, or "".
@@ -156,7 +202,7 @@ class Gain:
         if self.previous is None:
             self.previous = self.read()
         code, out, err = self._run(
-            set_command(pct, self.card, self.control))
+            set_command(pct, self.card, self.control, self.direction))
         if code != 0:
             self.last_error = (err or out or "amixer failed").strip()
             # A control name that does not exist on this codec is the
@@ -164,10 +210,40 @@ class Gain:
             # wording ("Unable to find simple control") does not say which
             # setting to change.
             if "find simple control" in self.last_error:
-                self.last_error = (f"no capture control named "
+                self.last_error = (f"no {self.direction} control named "
                                    f"{self.control!r} on card {self.card}")
             return self.last_error
         self.applied = int(pct)
+        self.last_error = ""
+        return ""
+
+    def step(self, up):
+        """Move the control by ONE of its own steps. Returns why, or "".
+
+        **Relative, because a percentage cannot address this hardware.**
+        `Speaker` on this codec has about 37 raw steps, so one step is
+        roughly 2.7% and most 1% targets round to the value already set.
+        Walking a ladder of percentages is worse: from 46% the neighbouring
+        rungs of a 40/50 ladder round to 41% and 49%, so `+` and `-` just
+        toggled between those two and nothing in between was reachable --
+        reported from the deck as "- and + only toggle the tx drive between
+        41% and 49%".
+
+        `amixer` takes `N+` and `N-` for exactly this, and it clamps at the
+        ends itself, so there is no arithmetic here to get wrong.
+        """
+        if self.previous is None:
+            self.previous = self.read()
+        code, out, err = self._run(
+            ["amixer", "-c", str(self.card), "sset", str(self.control),
+             "1+" if up else "1-", str(self.direction)])
+        if code != 0:
+            self.last_error = (err or out or "amixer failed").strip()
+            if "find simple control" in self.last_error:
+                self.last_error = (f"no {self.direction} control named "
+                                   f"{self.control!r} on card {self.card}")
+            return self.last_error
+        self.applied = parse_level(out)
         self.last_error = ""
         return ""
 

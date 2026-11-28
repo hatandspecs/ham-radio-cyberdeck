@@ -89,6 +89,13 @@ WSPR = "wspr"
 # while pressing a key, and a menu cannot show a reading that moves.
 WSPRCAL = "wsprcal"
 
+# And the digimodes' own, which is the SAME screen with a different level
+# and a different meter -- `render.wspr_cal_screen` takes an `area`. Its own
+# constant rather than a mode of WSPRCAL because Esc goes back to the
+# digimode audio menu, and because either may be reached while the other
+# area owns the codec.
+DIGICAL = "digical"
+
 AREA_SETTINGS, AREA_LOG, AREA_DIGI = "settings", "logging", "digimodes"
 AREA_WSPR = "wspr"
 
@@ -193,6 +200,7 @@ AREA_OF = {
     FIELDS: AREA_LOG, ORDER: AREA_LOG,
     CHAT: AREA_DIGI, TUNE: AREA_DIGI,
     WSPR: AREA_WSPR, WSPRCAL: AREA_WSPR, WSPRMAP: AREA_WSPR,
+    DIGICAL: AREA_DIGI,
     WSPRSES: AREA_WSPR,
     LOGMAP: AREA_LOG,
     ALLOC: AREA_ALLOC,
@@ -236,10 +244,17 @@ _REMEMBERED = ("LOG_LINES", "DUPE_CHECK", "CALLBOOK", "OPERATING",
                # cycles"; the rest were silently the same bug.
                "WSPR_TX_LEVEL", "WSPR_RX_GAIN", "WSPR_BANDS",
                "WSPR_TX_PERCENT", "WSPR_TIMEOUT_MIN", "WSPR_UPLOAD",
-               "WSPR_LOG_PATH", "WSPR_SESSION", "WSPR_SESSION_START")
+               "WSPR_LOG_PATH", "WSPR_SESSION", "WSPR_SESSION_START",
+               # The digimode audio pair, by the same rule: both are set
+               # from a calibration screen, so a power cycle that forgot
+               # them would read as the deck forgetting a level the
+               # operator had just measured. `DIGI_TX_CONTROL` is NOT
+               # here -- it is a hardware address, and a stale one beats a
+               # corrected default.
+               "DIGI_TX_DRIVE", "DIGI_RX_GAIN", "WSPR_TX_DRIVE")
 
-# **Deliberately NOT remembered: WSPR_DEVICE, WSPR_RX_CARD, WSPR_RX_CONTROL
-# and WSPR_RX_AGC.** They are hardware addresses, not preferences -- none of
+# **Deliberately NOT remembered: WSPR_DEVICE, WSPR_RX_DEVICE, WSPR_RX_CARD,
+# WSPR_RX_CONTROL and WSPR_RX_AGC.** They are hardware addresses, not preferences -- none of
 # them is reachable from a menu, which is the rule `_REMEMBERED` follows --
 # and persisting them is actively harmful. Remembering them once meant a
 # state file written when the codec was card 1 kept pointing a new build at
@@ -268,6 +283,16 @@ TX_IDLE_POLLS = 5
 STUCK_TX_POLLS = 10
 STUCK_NOTICE_S = 5.0
 
+# How long the digimode calibration screen's carrier may run. It is keyed on
+# purpose with no over behind it, so `_watch_stuck_carrier` sees exactly what
+# a stuck carrier looks like and dropped it after about two seconds --
+# reported from the deck as "enter keys the transmitter for about 3 seconds
+# and then it turns itself off", which made the screen useless for its one
+# job. The watchdog is not switched off for it: it gets a limit of its own,
+# long enough to read a meter and set a level, short enough that a carrier
+# left up by an operator who walked away still ends.
+DIGICAL_CARRIER_S = 90.0
+
 # How long the mode and carrier must hold still before they are written to the
 # state file. Tuning moves the carrier continuously, and persisting every step
 # would write the card hundreds of times per contact for no benefit; waiting
@@ -279,6 +304,16 @@ STATE_SETTLE_S = float(os.environ.get("CYBERDECK_STATE_SETTLE_S", "10"))
 # operator is told, and how often to repeat it. Not a limit: a long over at
 # 31 baud takes minutes to go out and that is correct. TX_TIMEOUT is the limit.
 DRAIN_NOTICE_S = 20.0
+
+# How long a WSPR information line stays before it clears itself. The screen
+# carries its own status in rows that are always true -- band, next slot,
+# levels, counts -- so a note is by definition about something that just
+# happened, and one left up reads as current when it is not. Reported from
+# the deck: "the information line in the wspr function ... just holds
+# whatever the last message was, long after that message is relevant."
+# Long enough to read a sentence, short enough not to outlive its subject.
+WSPR_NOTE_S = 15.0
+
 
 
 
@@ -349,6 +384,19 @@ class Deck:
         # taken on every draw. See `_wspr_power`.
         self._wspr_power_cache = (None, None, False)
         self._wspr_power_at = 0.0
+        # The codec's capture level, read on draw paths. Same rule as the
+        # power cache above.
+        self._rx_gain_cache = None
+        self._rx_gain_at = 0.0
+        # The digimode calibration screen: "tx", "rx", or "" when closed.
+        self.digi_cal = ""
+        self.digi_cal_from = ""
+        self.digi_cal_message = ""
+        self._set_watts_cache = None
+        self._set_watts_at = 0.0
+        # When the calibration carrier went up, or 0.0. Its own clock,
+        # because the stuck-carrier watchdog measures something else.
+        self._digi_carrier_at = 0.0
         # Spawned `systemctl` calls waiting to be reaped. Never waited on:
         # a stop that queues behind systemd's own start job takes tens of
         # seconds, and the draw loop cannot be in that queue.
@@ -364,6 +412,7 @@ class Deck:
         # retraces it one step at a time. See `_open_menu`.
         self._menu_stack = []
         self.wspr_message = ""
+        self._wspr_note_at = 0.0
         self.wspr_band = ""
         self.wspr_fldigi_stopped = False
         self.cfg.setdefault("WSPR_BANDS", "")
@@ -1659,6 +1708,71 @@ class Deck:
             return True
         return True
 
+    def _apply_area_levels(self, area):
+        """Put this area's own audio levels onto the hardware.
+
+        **Called on ENTERING an area, not only when a session starts.**
+        There is one capture mixer on one codec, so the two areas cannot
+        both hold it; each asserts its own value when the operator arrives.
+        Without this the WSPR audio menu read 74% with WSPR off and 100%
+        with it on, because 100% was only applied at session start and 74%
+        was what the digimodes had left on the control -- reported from the
+        deck, and a fair complaint: "those levels should be set to whatever
+        the wspr mode left them at as soon as you go to wspr functions
+        screen. likewise for the levels for the digimode function screen."
+
+        Safe to call with fldigi running: moving a mixer control needs no
+        access to the stream, which is the distinction the digimode receive
+        screen rests on. Failures are noted and not raised -- arriving at
+        an area must not fail because a mixer did.
+
+        **The playback mixer is set for WSPR too, from `WSPR_TX_DRIVE`.**
+        It was briefly pinned at full scale on the reasoning that WSPR
+        scales its own samples so the mixer belonged out of the way. That
+        threw away about 20 dB of attenuation and left the software scale
+        to find all of it: the operator's ALC threshold moved to 1% -- the
+        minimum the control has -- so there was exactly one usable setting
+        and no headroom under it. `Speaker` gives about 1 dB per step over
+        37 steps, which is the better place for the attenuation; the
+        software level then has range either side of the threshold.
+
+        That gives each area exactly ONE transmit knob of its own and one
+        receive knob of its own, applied on arrival and saved per area:
+        "full decoupled symmetry between the UI and workflow for setting
+        wspr function audio levels and digimode function audio levels,
+        while the levels themselves are saved for each function and
+        restored upon entering that function, and decoupled from one
+        another."
+
+        **This supersedes the reasoning in `wsprgain`'s docstring** that
+        WSPR must not touch the playback mixer because fldigi shares it.
+        That was true when nothing re-asserted the digimodes' value; they
+        now set their own on arrival, so sharing the control costs nothing.
+        """
+        if area == AREA_WSPR:
+            want = int(self.cfg.get("WSPR_RX_GAIN", 100))
+            drive = int(self.cfg.get("WSPR_TX_DRIVE", 50))
+        elif area == AREA_DIGI:
+            want = int(self.cfg.get("DIGI_RX_GAIN", 100))
+            drive = int(self.cfg.get("DIGI_TX_DRIVE", 30))
+        else:
+            return
+        why = ""
+        try:
+            why = self._wspr_capture_mixer().apply(want)
+        except Exception as exc:
+            why = str(exc)
+        self._rx_gain_at = 0.0              # drop the draw-path cache
+        if why:
+            self._screen_note(f"capture gain: {why}")
+            return
+        # And the playback mixer: the digimodes' own drive, or full scale
+        # for WSPR so that `WSPR_TX_LEVEL` alone decides its output.
+        try:
+            self._digi_playback_mixer().apply(drive)
+        except Exception:
+            pass
+
     def _ring(self, step):
         """Move to the next area, landing where that area was left.
 
@@ -1717,7 +1831,10 @@ class Deck:
                 self.screen = LOG
         elif where == AREA_DIGI and self.screen not in (CHAT, TUNE):
             self.screen = CHAT
-        elif where == AREA_WSPR:
+        if where in (AREA_DIGI, AREA_WSPR):
+            # The area owns its levels for as long as the operator is in it.
+            self._apply_area_levels(where)
+        if where == AREA_WSPR:
             # Through `_open_wspr`, not by setting the screen: the engines
             # are built on entering the area, and a screen set directly drew
             # a WSPR area with no scheduler behind it -- so every toggle
@@ -2617,6 +2734,48 @@ class Deck:
         """Whether WSPR has the deck. The ring reads this, so it is cheap."""
         return self.wspr is not None and self.wspr.wspr
 
+    def _wspr_capture_mixer(self):
+        """The capture mixer object, for reading the level back.
+
+        **The same ALSA control the digimodes use**, because there is one
+        codec and one capture gain: whatever is right for one is right for
+        the other, and the converter does not care which program reads it.
+        WSPR borrows it for a session and restores what it found, which is
+        the only reason the two areas keep separate stored values.
+
+        `agc=""`: silencing the Auto Gain Control is `_wspr_start`'s job for
+        the length of a session, not this object's.
+        """
+        import wsprgain
+        return wsprgain.Gain(
+            card=self.cfg.get("WSPR_RX_CARD", wsprgain.DEFAULT_CARD),
+            control=self.cfg.get("WSPR_RX_CONTROL",
+                                 wsprgain.DEFAULT_CONTROL),
+            agc="")
+
+    def _rx_gain_now(self, cache_s=2.0):
+        """What the codec's capture control reads, or None. Cached.
+
+        **Cached because this is on a draw path.** It shells out to
+        `amixer`, which costs tens of milliseconds, and the WSPR screen
+        redraws several times a second. `_wspr_power` carries the same
+        warning for the same reason: nothing on a draw path may run a
+        subprocess without a cache.
+
+        Read from the hardware rather than from `WSPR_RX_GAIN` because a
+        level displayed from configuration cannot be used to diagnose the
+        audio it describes -- which is what it was wanted for.
+        """
+        now = time.monotonic()
+        if self._rx_gain_at and now - self._rx_gain_at < cache_s:
+            return self._rx_gain_cache
+        try:
+            self._rx_gain_cache = self._wspr_capture_mixer().read()
+        except Exception:
+            self._rx_gain_cache = None
+        self._rx_gain_at = now
+        return self._rx_gain_cache
+
     def _wspr_note(self, text):
         """A message for the WSPR screen. Not the transcript.
 
@@ -2625,6 +2784,27 @@ class Deck:
         its own message line.
         """
         self.wspr_message = text
+        self._wspr_note_at = time.monotonic() if text else 0.0
+
+    def _wspr_note_now(self):
+        """The information line, or "" once it has outlived its subject.
+
+        **Read this, never `wspr_message` directly.** The note is about
+        something that just happened; the rows around it carry what is
+        still true. One left up is worse than none, because it reads as
+        current -- which is how a stale line came to sit on the screen
+        "long after that message is relevant".
+
+        Expiry is checked on read rather than cleared on a timer, so there
+        is nothing to poll and no state to get out of step.
+        """
+        if not self.wspr_message or not self._wspr_note_at:
+            return self.wspr_message or ""
+        if time.monotonic() - self._wspr_note_at > WSPR_NOTE_S:
+            self.wspr_message = ""
+            self._wspr_note_at = 0.0
+            return ""
+        return self.wspr_message
 
     def _wspr_dir(self):
         """Where captures and `wsprd`'s own files go.
@@ -2681,7 +2861,13 @@ class Deck:
         if self.wspr_rx is None:
             self.wspr_rx = wsprrx.Receiver(
                 self._wspr_dir(),
-                device=self.cfg.get("WSPR_DEVICE") or wsprrx.DEFAULT_DEVICE)
+                # `WSPR_RX_DEVICE` first: the capture side needs a device
+                # that takes ONE channel, because `plughw` averages the
+                # codec's dead right channel into the live left one and
+                # costs 6 dB after the mixer. See `config.WSPR_RX_DEVICE`.
+                device=(self.cfg.get("WSPR_RX_DEVICE")
+                        or self.cfg.get("WSPR_DEVICE")
+                        or wsprrx.DEFAULT_DEVICE))
         if self.wspr_tx is None:
             self.wspr_tx = wsprtx.Transmitter(
                 self._wspr_dir(), rig=self._log_rig(),
@@ -2702,6 +2888,10 @@ class Deck:
 
     def _open_wspr(self):
         """Enter the WSPR area. Does NOT start it."""
+        # **Also here, not only in `_ring`.** This is reached from the ring
+        # and from the function keys, and an area entered by either route
+        # should be holding its own levels.
+        self._apply_area_levels(AREA_WSPR)
         self._wspr_build()
         self.screen = WSPR
         bands = self._wspr_bands()
@@ -4141,8 +4331,9 @@ class Deck:
             # The inhibit, which this screen did not show at all: transmit
             # was refused and nothing on screen said why.
             "inhibited": bool(self.session.inhibited),
-            "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
-            "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+            "tx_level": self.cfg.get("WSPR_TX_LEVEL", 25),
+            "rx_gain": self.cfg.get("WSPR_RX_GAIN", 100),
+            "rx_live": self._rx_gain_now(),
             "dbfs": self.wspr_dbfs,
             "measuring": bool(self.wspr_rx and self.wspr_rx.busy_capturing),
         }
@@ -4166,7 +4357,7 @@ class Deck:
                       "^B inhibit ^O ^P")
         for i, line in enumerate(render.wspr_screen(
                 self.wspr_spots, w, h, state=state,
-                message=self.wspr_message, footer=footer)):
+                message=self._wspr_note_now(), footer=footer)):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -4212,7 +4403,33 @@ class Deck:
     CAL_LEVELS = (5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 75, 100)
 
     def _open_wspr_cal(self, kind):
-        """Enter calibration. `kind` is "tx" or "rx"."""
+        """Enter calibration. `kind` is "tx" or "rx".
+
+        **This screen takes the codec for itself, and WSPR must be OFF.**
+        That is the opposite of what it used to require, and the reason is
+        that a running session is a competitor rather than an enabler: its
+        capture window holds the card for 114 seconds of every 120, so the
+        receive probe was refused about 95% of the time and the screen read
+        "not listening" with no audio. The transmit tone fared no better --
+        a slot boundary cut one short at 30 s and left PTT asserted, and the
+        window it collided with came out truncated at 46.9 s.
+
+        With WSPR off the only holder is fldigi, and `_wspr_take_audio`
+        already knows how to stop it. So the screen owns the card outright,
+        the probe runs about once a second, and nothing competes.
+
+        `_wspr_take_audio` and `_wspr_give_audio` are reused rather than
+        copied, because `_wspr_give_audio` carries the rule that fldigi
+        must not be restarted while a dying `arecord` still holds the card
+        -- it comes up answering XML-RPC and deaf. One place knows that.
+        """
+        if self.wspr_running:
+            # **Refused, and the menu closed first** so the reason is not
+            # written underneath it.
+            self._close_menu()
+            self._wspr_note("stop WSPR first — its capture window holds "
+                            "the audio. ^C stops it")
+            return
         self._wspr_build()
         self.wspr_cal = kind
         self.wspr_cal_dbfs = None
@@ -4220,50 +4437,77 @@ class Deck:
         # goes back to the audio menu rather than all the way to the screen.
         self.wspr_cal_from = self.menu or ""
         self._close_menu()
+        # Take the card off fldigi. Spawned, not waited on: nothing on a
+        # keypress path may wait on systemd. The probe asks again each time
+        # it tries, so it starts working a moment later by itself.
+        self._wspr_take_audio()
+        # **Silence the codec's AGC, exactly as a session does.** This is
+        # not optional and it is not tidiness: the control ships ON, and
+        # with it on the codec adds its own gain, so a level set here would
+        # be set against a configuration WSPR does not run in. It showed up
+        # the moment this screen stopped requiring a session -- before
+        # that, `_wspr_start` had always already silenced it. Reported from
+        # the deck as 100% reading -19.8 dBFS where it had read -31.
+        if self.wspr_gain is not None:
+            why = self.wspr_gain.silence_agc()
+            if why:
+                self._wspr_note(f"AGC: {why}")
         if kind == "rx":
-            # The codec is already WSPR's: the menu refuses to open this
-            # with WSPR off, so there is nothing to take here and nothing to
-            # give back. One mechanism owns fldigi, which is `_wspr_start`.
-            why = self.wspr_gain.apply(self.cfg.get("WSPR_RX_GAIN", 70))
+            why = self.wspr_gain.apply(self.cfg.get("WSPR_RX_GAIN", 100))
             if why:
                 self._wspr_note(f"capture gain: {why}")
         self.screen = WSPRCAL
         self._wspr_note("+ and - set the level" + (
-            "; Enter sends a tone" if kind == "tx" else ""))
+            "; Enter toggles the tone" if kind == "tx" else ""))
 
     def _close_wspr_cal(self):
-        """Leave calibration, putting back whatever it took."""
+        """Leave calibration, putting back everything it took."""
         kind, self.wspr_cal = self.wspr_cal, ""
         if self.wspr_tx is not None:
             self.wspr_tx.stop()           # unkeys from any state
         if self.wspr_rx is not None:
             self.wspr_rx.stop_probe()
-        # The gain is NOT restored here: the session still owns the codec
-        # and the level the operator just set is the level it should run at.
-        # `_wspr_stop` puts it back when the session ends.
+        # **The probe is stopped BEFORE fldigi is started again**, and the
+        # order matters: `_wspr_give_audio` warns when something still
+        # holds the card, because an fldigi started on top of a dying
+        # `arecord` comes up answering XML-RPC and deaf.
+        # The AGC goes back the way it was found, like the session does.
+        if self.wspr_gain is not None:
+            self.wspr_gain.restore_agc()
+        self._wspr_give_audio()
+        # The gain is NOT restored: the level the operator just set is the
+        # level WSPR should run at, which is the point of having set it.
+        # `_wspr_stop` restores the station's level when a session ends.
         self.screen = WSPR
         back, self.wspr_cal_from = self.wspr_cal_from, ""
         if back:
             self._open_menu(back, remember=False)
 
     def _wspr_cal_step(self, up):
-        """Move the level being calibrated one step."""
+        """Move the level being calibrated by the finest step it has.
+
+        **One unit, not one rung of a ladder.** This walked `CAL_LEVELS`,
+        which jumps 5, 10, 15, 20, 25, 30, 40... so the operator could not
+        stop between its rungs. Asked for on 2026-11-27: "I'd like gain
+        steps to be in units of 1 throughout."
+
+        The two sides have different finest steps and that is the hardware,
+        not a choice. **Transmit is a software scale**, so it moves by
+        exactly 1%. **Receive is an ALSA control** with about 35 raw steps,
+        so 1% mostly rounds to the value already set and a relative move is
+        the only thing that reaches every reachable value -- one step is
+        about 3% on this codec. `wsprgain.Gain.step` does that.
+        """
         tx = self.wspr_cal == "tx"
-        setting = "WSPR_TX_LEVEL" if tx else "WSPR_RX_GAIN"
-        order = list(self.CAL_LEVELS)
-        now = int(self.cfg.get(setting, 50 if tx else 70))
-        if now in order:
-            at = order.index(now)
-        else:
-            at = min(range(len(order)), key=lambda i: abs(order[i] - now))
-        at = max(0, min(len(order) - 1, at + (1 if up else -1)))
-        nxt = order[at]
-        if nxt == now:
-            self._wspr_note("at the end of the range")
-            return
-        self.cfg[setting] = nxt
-        self._save_state()
         if tx:
+            import wsprtx
+            now = int(self.cfg.get("WSPR_TX_LEVEL", 25))
+            nxt = max(wsprtx.MIN_LEVEL, min(100, now + (1 if up else -1)))
+            if nxt == now:
+                self._wspr_note("at the end of the range")
+                return
+            self.cfg["WSPR_TX_LEVEL"] = nxt
+            self._save_state()
             if self.wspr_tx is not None:
                 self.wspr_tx.level = nxt
                 # **Re-sent at the new level if a tone is running.** The
@@ -4274,17 +4518,45 @@ class Deck:
                     self.wspr_tx.stop()
                     self._wspr_cal_tone()
             self._wspr_note(f"TX audio level {nxt}%")
-        else:
-            note = f"RX capture gain {nxt}%"
-            if self.wspr_gain is not None:
-                why = self.wspr_gain.apply(nxt)
-                if why:
-                    note += f" — {why}"
-            self._wspr_note(note)
+            return
+        if self.wspr_gain is None:
+            self._wspr_note("no capture mixer")
+            return
+        why = self.wspr_gain.step(up)
+        if why:
+            self._wspr_note(f"RX capture gain — {why}")
+            return
+        # Read back rather than trusting arithmetic: amixer rounds to a raw
+        # step and clamps at the ends, so what it set is the only honest
+        # value to store.
+        got = self.wspr_gain.read()
+        if got is not None:
+            self.cfg["WSPR_RX_GAIN"] = int(got)
+            self._save_state()
+            self._rx_gain_at = 0.0          # drop the draw-path cache
+        self._wspr_note(f"RX capture gain {got if got is not None else '?'}%")
 
     def _wspr_cal_tone(self):
-        """Send a calibration tone. Longer than the menu's, to adjust under."""
+        """Start the calibration tone, or stop it if it is running.
+
+        **Enter toggles**, which is what the digimode transmit screen does
+        and what was asked for on 2026-11-27: "i'd like enter to key the tx
+        and enter to unkey the tx." It used to start a tone and nothing
+        stopped it but its own 40-second limit or `^C`, so an operator who
+        had finished reading the meter had to wait it out.
+
+        The time limit stays underneath as a backstop: a tone is bounded by
+        construction so a screen left open cannot hold the transmitter for
+        ever.
+        """
         import wsprtx
+        if self.wspr_tx is None:
+            self._wspr_note("no transmitter")
+            return
+        if self.wspr_tx.keyed:
+            self.wspr_tx.stop()
+            self._wspr_note("tone off")
+            return
         if not self._rig_mode_ok():
             self._wspr_note("rig is not in a data mode — no tone")
             return
@@ -4294,6 +4566,9 @@ class Deck:
         why = self.wspr_tx.test_tone(seconds=wsprtx.CAL_TONE_S)
         if why:
             self._wspr_note(f"tone failed: {why}")
+            return
+        self._wspr_note("tone on — read the radio's POWER meter; "
+                        "Enter again to stop")
 
     def _wspr_cal_poll(self):
         """Keep the receive meter moving. Called from the draw loop."""
@@ -4321,9 +4596,25 @@ class Deck:
             watts, dbm, exact = self._wspr_power()
         state = {
             "kind": "tx" if tx else "rx",
+            # What the radio is actually making, beside what it was asked
+            # for. The audio level is what this screen moves, and the
+            # power control does not budge when the audio does.
+            "set_watts": self._rf_power_set() if tx else None,
             "band": self.wspr_band,
-            "level": self.cfg.get("WSPR_TX_LEVEL", 50) if tx
-            else self.cfg.get("WSPR_RX_GAIN", 70),
+            # **Transmit from config, receive from the CODEC.** The
+            # transmit level is WSPR's own software scale, so config IS the
+            # truth. The capture gain is an ALSA control, and this screen
+            # only opens with WSPR running -- which is exactly when WSPR
+            # has applied its own value to it -- so the codec is both the
+            # truth and WSPR's level. Reading config here instead showed
+            # 100% while the hardware was at 74%, reported from the deck.
+            "level": (self.cfg.get("WSPR_TX_LEVEL", 9) if tx
+                      else (self._rx_gain_now()
+                            if self._rx_gain_now() is not None
+                            else self.cfg.get("WSPR_RX_GAIN", 100))),
+            "level_db": (self._pct_db(self.cfg.get("WSPR_TX_LEVEL", 9))
+                         if tx else
+                         self._mixer_db(self._wspr_capture_mixer())),
             "watts": watts, "dbm": dbm, "dbm_exact": exact,
             "ceiling": self.cfg.get("TX_POWER_MAX", 0),
             "power_fallback": fallback,
@@ -4331,11 +4622,11 @@ class Deck:
             "listening": bool(self.wspr_rx and self.wspr_rx.probing),
             "dbfs": self.wspr_cal_dbfs,
         }
-        footer = ("  + - level  Enter send a tone  ^B inhibit  ^C stop  "
+        footer = ("  + - level  Enter tone on/off  ^B inhibit  ^C stop  "
                   "Esc back" if tx else
                   "  + - level   ^B inhibit   Esc back")
         for i, line in enumerate(render.wspr_cal_screen(
-                w, h, state=state, message=self.wspr_message,
+                w, h, state=state, message=self._wspr_note_now(),
                 footer=footer)):
             self._put(i, 0, line, w)
         try:
@@ -4871,6 +5162,270 @@ class Deck:
                 message=getattr(self, "tuner_message", ""),
                 running=run.progress() if run else None,
                 inhibited=self.session.inhibited)):
+            self._put(i, 0, line, w)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    # ------------------------------------- the digimode calibration screen
+    def _digi_playback_mixer(self):
+        """The playback mixer for the digimode transmit drive.
+
+        `agc=""` on purpose: the Auto Gain Control this codec ships with is
+        a CAPTURE control, so there is nothing to silence on the way out
+        and asking would only report a control that does not exist.
+
+        **The control name is codec-specific.** `PCM` is the common one and
+        is not universal -- this deck answered "no playback control named
+        'PCM'" -- so `DIGI_TX_CONTROL` exists to be corrected from
+        `amixer -c Device scontrols`.
+        """
+        import wsprgain
+        return wsprgain.Gain(
+            card=self.cfg.get("WSPR_RX_CARD", wsprgain.DEFAULT_CARD),
+            control=self.cfg.get("DIGI_TX_CONTROL",
+                                 wsprgain.DEFAULT_PLAYBACK),
+            agc="", direction=wsprgain.PLAYBACK)
+
+    def _digi_tx_preflight(self):
+        """Why a carrier must not be raised, or "".
+
+        **Every path that keys the radio from these screens comes through
+        here.** `main.tune` was observed to key with fldigi's own `rx_only`
+        set, so the deck's interlock is the only gate in front of it.
+        """
+        if self.session.inhibited:
+            return "transmit is inhibited — ^B arms it"
+        if self._rf_power_set() is None:
+            # **The radio's own `PC` setting, not its meter.** Refused up
+            # front rather than discovered with the radio keyed: if the
+            # radio cannot say what power it is set to, the CAT link is
+            # dead and nothing on this screen can be confirmed.
+            return "no power reading from the radio — is rigctld running?"
+        return ""
+
+    def _open_digi_cal(self, kind):
+        """Enter the digimode calibration screen. `kind` is "tx" or "rx"."""
+        self.digi_cal = kind
+        self.digi_cal_message = ""
+        # Remembered BEFORE the menu closes, so Esc goes back to the audio
+        # menu rather than out to the screen underneath.
+        self.digi_cal_from = self.menu or ""
+        self._close_menu()
+        self.screen = DIGICAL
+        if kind == "tx":
+            self._screen_note("+ and - set the drive   "
+                              "Enter starts and stops the carrier")
+        else:
+            self._screen_note("+ and - set the capture gain — fldigi holds "
+                              "the stream, so there is no meter here")
+
+    def _close_digi_cal(self):
+        """Leave the screen, putting the transmitter down on the way out."""
+        self.digi_cal = ""
+        self._digi_carrier_at = 0.0
+        # **Unconditionally**, not only when this screen keyed it. The
+        # carrier is the one thing here that can outlive the screen, and
+        # `stop_transmit` reads the state back rather than assuming.
+        try:
+            self.fldigi.stop_transmit()
+        except Exception:
+            pass
+        back, self.digi_cal_from = self.digi_cal_from, ""
+        # CHAT, not DIGI: `DIGI` is the menu dict in `menus.py`, and the
+        # digimodes' screen is the conversation.
+        self.screen = CHAT
+        if back:
+            self._open_menu(back)
+
+    def _digi_cal_level(self):
+        """The level this screen edits, read from the hardware."""
+        mixer = (self._digi_playback_mixer() if self.digi_cal == "tx"
+                 else self._wspr_capture_mixer())
+        fallback = int(self.cfg.get(
+            "DIGI_TX_DRIVE" if self.digi_cal == "tx" else "DIGI_RX_GAIN",
+            30 if self.digi_cal == "tx" else 100))
+        try:
+            got = mixer.read()
+        except Exception:
+            got = None
+        return fallback if got is None else int(got)
+
+    def _digi_cal_step(self, up):
+        """Move the level by one of the control's own steps, and apply it.
+
+        **One mixer step, not one rung of a ladder.** This walked a ladder
+        of percentages, and on this codec the control has about 37 steps,
+        so from 46% the neighbouring rungs rounded to 41% and 49% and `+`
+        and `-` only toggled between those two. `Gain.step` asks `amixer`
+        for a relative move, which is the finest this hardware offers and
+        needs no assumption about its range. amixer clamps at the ends, so
+        the extremes hold rather than wrapping.
+        """
+        tx = self.digi_cal == "tx"
+        if not tx and self.wspr_running:
+            # WSPR has borrowed the control and restores what it found, so
+            # a change made now disappears later with nothing to say why.
+            self._screen_note("WSPR has borrowed the capture gain — it "
+                              "will be put back when the session ends")
+            return
+        mixer = (self._digi_playback_mixer() if tx
+                 else self._wspr_capture_mixer())
+        why = mixer.step(up)
+        if why:
+            self._screen_note(f"{'drive' if tx else 'capture gain'}: {why}")
+            return
+        # Read back rather than trusting the arithmetic: amixer rounds to a
+        # raw step and clamps at the ends, so what it set is the only
+        # honest value to store.
+        now = self._digi_cal_level()
+        self.cfg["DIGI_TX_DRIVE" if tx else "DIGI_RX_GAIN"] = int(now)
+        if not tx:
+            self._rx_gain_at = 0.0          # drop the draw-path cache
+        self._save_state()
+
+    def _digi_cal_tone(self):
+        """Start or stop the carrier. Transmit side only."""
+        if self.digi_cal != "tx":
+            return
+        try:
+            up = bool(self.fldigi.transmitting())
+        except Exception:
+            up = False
+        if up:
+            self.fldigi.stop_transmit()
+            self._digi_carrier_at = 0.0
+            self._screen_note("carrier down")
+            return
+        why = self._digi_tx_preflight()
+        if why:
+            self._screen_note(why)
+            return
+        if not self.fldigi.tune():
+            self._screen_note("fldigi is not answering")
+            return
+        self._digi_carrier_at = time.monotonic()
+        self._screen_note("carrier up — read the radio's POWER meter; "
+                          "Enter again to stop")
+
+    @staticmethod
+    def _pct_db(pct):
+        """A percentage of full-scale amplitude as dB, or None.
+
+        For the software transmit scale, which has no mixer to ask. 9% is
+        -20.9 dB, and a 1% step near there is about 0.9 dB -- so the two
+        kinds of level step by a similar amount even though one is a
+        percentage of amplitude and the other a mixer position.
+        """
+        try:
+            pct = float(pct)
+        except (TypeError, ValueError):
+            return None
+        if pct <= 0:
+            return None
+        import math
+        return 20.0 * math.log10(pct / 100.0)
+
+    def _mixer_db(self, mixer):
+        """What a mixer control reads in dB, or None. Never raises."""
+        try:
+            return mixer.read_db()
+        except Exception:
+            return None
+
+    def _rf_power_set(self, cache_s=2.0):
+        """What the radio's power control is SET to, in watts, or None.
+
+        **The one power number on this path that can be trusted.** It is
+        the knob's position, read from the radio's own `PC` command in real
+        watts. The radio's power METER cannot be trusted for a wattage --
+        its face is logarithmic and CAT reports the needle's position -- so
+        the deck shows this and sends the operator to the radio's own
+        meters for the rest. See `docs/audio_gain_staging.md`.
+
+        `power_control` rather than hamlib's normalized `RFPOWER` for the
+        reason that method documents: the normalized value needs a static
+        power curve that cannot know which back end is fitted.
+
+        Cached, because this is on a draw path.
+        """
+        now = time.monotonic()
+        if self._set_watts_at and now - self._set_watts_at < cache_s:
+            return self._set_watts_cache
+        got = None
+        rig = self._log_rig()
+        if rig is not None:
+            try:
+                watts, _backend = rig.power_control()
+                got = float(watts) if watts else None
+            except Exception:
+                got = None
+        self._set_watts_cache = got
+        self._set_watts_at = now
+        return got
+
+    def _handle_digi_cal(self, ch):
+        """Keys on the digimode calibration screen.
+
+        The same bindings as `_handle_wspr_cal`, deliberately: this is the
+        same job on a different level, and two screens where `+` means
+        different things is worse than either.
+        """
+        key = chr(ch).lower() if 32 <= ch < 127 else ""
+        if key in ("+", "=") or ch in (curses.KEY_RIGHT, curses.KEY_UP):
+            self._digi_cal_step(True)
+        elif key in ("-", "_") or ch in (curses.KEY_LEFT, curses.KEY_DOWN):
+            self._digi_cal_step(False)
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._digi_cal_tone()
+        elif ch == 3:                                   # Ctrl-C
+            try:
+                self.fldigi.stop_transmit()
+            except Exception:
+                pass
+            self._digi_carrier_at = 0.0
+            self._screen_note("stopped")
+        elif ch == 27:                                  # Esc
+            self._close_digi_cal()
+        return True
+
+    def _draw_digi_cal(self, h, w):
+        """The digimode calibration screen."""
+        tx = self.digi_cal == "tx"
+        keyed = False
+        if tx:
+            try:
+                keyed = bool(self.fldigi.transmitting())
+            except Exception:
+                keyed = False
+        try:
+            modem = str(self.fldigi.modem_loaded() or "")
+        except Exception:
+            modem = ""
+        state = {
+            "kind": "tx" if tx else "rx",
+            "band": modem,
+            "level": self._digi_cal_level(),
+            "level_db": self._mixer_db(
+                self._digi_playback_mixer() if tx
+                else self._wspr_capture_mixer()),
+            "watts": None,
+            "set_watts": self._rf_power_set() if tx else None,
+            "dbm": None, "dbm_exact": False,
+            "ceiling": self.cfg.get("TX_POWER_MAX", 0),
+            "power_fallback": False,
+            "keyed": keyed,
+            "listening": False,
+            # No dBFS: fldigi holds the capture stream, so nothing here can
+            # record. The screen says so rather than drawing a dead meter.
+            "dbfs": None,
+        }
+        footer = ("  + - drive   Enter carrier on/off   ^C stop   Esc back"
+                  if tx else "  + - gain   Esc back")
+        for i, line in enumerate(render.wspr_cal_screen(
+                w, h, state=state, message=self.digi_cal_message,
+                footer=footer, area="DIGIMODE")):
             self._put(i, 0, line, w)
         try:
             curses.curs_set(0)
@@ -6337,6 +6892,31 @@ class Deck:
             self._stuck_polls = 0
             self._stuck_warned = 0.0
             return
+        # **The calibration screen's carrier is deliberate, and bounded.**
+        # It is keyed with no over behind it, which is indistinguishable
+        # from a stuck carrier from here, so this watchdog took it down
+        # after two seconds. It gets `DIGICAL_CARRIER_S` instead -- not an
+        # exemption, a longer leash -- and the same unkey at the end of it.
+        # `getattr`, like `poll` and the Esc handler: deck-level tests
+        # build a `Deck` with `__new__` and give it only the attributes the
+        # path under test touches, so a bare `self.digi_cal` here turned
+        # every stuck-carrier check in those tests into an AttributeError.
+        # `tests/test_stuck_tx.py` caught it.
+        if (getattr(self, "digi_cal", "") == "tx"
+                and getattr(self, "_digi_carrier_at", 0.0)):
+            self._stuck_polls = 0
+            self._stuck_warned = 0.0
+            if (time.monotonic() - self._digi_carrier_at
+                    > DIGICAL_CARRIER_S):
+                self._digi_carrier_at = 0.0
+                try:
+                    self.fldigi.stop_transmit()
+                except Exception:
+                    pass
+                self._screen_note(
+                    f"carrier timed out after {DIGICAL_CARRIER_S:.0f}s — "
+                    "Enter starts it again")
+            return
         self._stuck_polls += 1
         if self._stuck_polls < STUCK_TX_POLLS:
             return
@@ -6507,6 +7087,8 @@ class Deck:
             self._draw_entry(h, w)
         elif self.screen == SET:
             self._draw_settings(h, w)
+        elif self.screen == DIGICAL:
+            self._draw_digi_cal(h, w)
         elif self.screen == WSPRCAL:
             self._draw_wspr_cal(h, w)
         elif self.screen == WSPR:
@@ -6605,6 +7187,12 @@ class Deck:
             import decall
             return menus.digi_menu(
                 self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH))
+        if m == "digi_audio":
+            return menus.digi_audio_menu({
+                "tx_drive": self.cfg.get("DIGI_TX_DRIVE", 30),
+                "rx_live": self._rx_gain_now(),
+                "wspr_running": self.wspr_running,
+                "watts": None})
         if m == "deck":
             return menus.DECK
         if m == "rig_mode":
@@ -6662,7 +7250,11 @@ class Deck:
         if m == "wspr_audio":
             return menus.wspr_audio_menu({
                 "tx_level": self.cfg.get("WSPR_TX_LEVEL", 50),
-                "rx_gain": self.cfg.get("WSPR_RX_GAIN", 70),
+                "rx_gain": self.cfg.get("WSPR_RX_GAIN", 100),
+                "rx_live": self._rx_gain_now(),
+                # So the menu can state the requirement rather than leaving
+                # it to be discovered by pressing a key that refuses.
+                "running": self.wspr_running,
                 "dbfs": self.wspr_dbfs})
         if m == "wspr_danger":
             import wsprlog
@@ -6871,6 +7463,15 @@ class Deck:
         # the only thing a keystroke can mean while it is on screen.
         if self.screen == CONFIRM:
             return self._handle_confirm(ch)
+
+        # **In `handle`, which is the method that takes a key.** The draw
+        # dispatch is spelled `elif self.screen ==` and this one `if`, so a
+        # search for the WSPRCAL line can match the wrong method -- and a
+        # `_draw_*` takes no `ch`, so a handler branch landing there raises
+        # NameError on the first redraw and the deck exits. That happened
+        # on 2026-11-27 and `tests/test_digical.py` now checks for it.
+        if self.screen == DIGICAL:
+            return self._handle_digi_cal(ch)
 
         if self.screen == WSPRCAL:
             return self._handle_wspr_cal(ch)
@@ -7427,10 +8028,15 @@ class Deck:
         # the digimode menu so that anything still asking for it by that name
         # gets the menu it used to get rather than nothing.
         if m in ("digi", "root"):
-            if key == "6":
+            # **7 and 6, because Audio levels took 5.** These were 6 and 5
+            # and are checked BEFORE the submenu table below, so adding
+            # `"5": "digi_audio"` there without renumbering here left `5`
+            # cycling the log hotkey from a line labelled "Audio levels"
+            # and `7` doing nothing. Caught by `tests/test_menu_arrows.py`.
+            if key == "7":
                 self._open_menu("keys")
                 return True
-            if key == "5":
+            if key == "6":
                 import decall
                 nxt = decall.next_mode(
                     str(self.cfg.get("LOG_HOTKEY", decall.PREFILL_SWITCH)))
@@ -7440,9 +8046,18 @@ class Deck:
                 # step. The label redraws with the new one.
                 return True
             dest = {"1": "radio", "2": "tuning", "3": "mode",
-                    "4": "memories"}.get(key)
+                    "4": "memories", "5": "digi_audio"}.get(key)
             if dest:
                 self._open_menu(dest)
+            return True
+
+        if m == "digi_audio":
+            if key == "c":
+                self._open_digi_cal("tx")
+                return True
+            if key == "m":
+                self._open_digi_cal("rx")
+                return True
             return True
 
         if m == "deck":
@@ -7749,50 +8364,19 @@ class Deck:
 
         if m == "wspr_audio":
             if key in ("c", "m"):
-                # **Gated on WSPR being on, with a reason.** Both of these
-                # open the sound card, and fldigi holds it while WSPR is
-                # off -- so with WSPR off they produced a capture-device
-                # error from inside a screen that looked ready. A menu item
-                # that cannot work is told so before it is entered.
-                if not self.wspr_running:
-                    self._close_menu()
-                    self._wspr_note("WSPR must be on to calibrate audio "
-                                    "— F1, then w")
-                    return True
+                # The screen takes the card for itself and refuses if a
+                # session is running, so there is nothing to gate here.
                 self._open_wspr_cal("tx" if key == "c" else "rx")
                 return True
-            if key in ("t", "r"):
-                # Cycled rather than prompted, as the transmit percent is:
-                # both are set by ear against a power meter or a dBFS
-                # reading, which is a "try the next one down" operation and
-                # not a number anybody knows in advance.
-                order = (5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100)
-                setting = ("WSPR_TX_LEVEL" if key == "t"
-                           else "WSPR_RX_GAIN")
-                now = int(self.cfg.get(setting, 50 if key == "t" else 70))
-                nxt = (order[(order.index(now) + 1) % len(order)]
-                       if now in order else
-                       min(order, key=lambda v: abs(v - now)))
-                self.cfg[setting] = nxt
-                self._save_state()
-                if key == "t":
-                    # Straight onto the transmitter, which drops the
-                    # rendered audio so the next beacon uses the new level.
-                    if self.wspr_tx is not None:
-                        self.wspr_tx.level = nxt
-                    self._wspr_note(f"TX audio level {nxt}% — "
-                                    "send a test tone and read the meter")
-                else:
-                    note = f"RX capture gain {nxt}%"
-                    # Only live while WSPR owns the codec; otherwise fldigi
-                    # has it and the deck must not touch a control fldigi is
-                    # using. It applies at the next start.
-                    if self.wspr_running and self.wspr_gain is not None:
-                        why = self.wspr_gain.apply(nxt)
-                        note += f" — {why}" if why else " — set now"
-                    else:
-                        note += " — applies when WSPR starts"
-                    self._wspr_note(note)
+            # **`t` and `r` used to step these two levels from here**,
+            # undisplayed, on the reasoning that the menu should offer the
+            # calibration screens instead because a level belongs beside a
+            # meter. Removed 2026-11-27: an operator who found them asked
+            # "why do the t and r keys exist? is this just for testing or
+            # something? I don't get it", which is the fair response to a
+            # key that does something its own menu does not mention. The
+            # screens are the only route to a level now, which is what the
+            # reasoning said in the first place.
             return True
 
         if m == "wspr_danger":
@@ -8078,6 +8662,13 @@ class Deck:
             self.set_message = text
         elif self.screen in (WIFI, PAIR, NOKB):
             self.wifi_message = text
+        elif self.screen == DIGICAL:
+            # Its own line. The fallthrough at the bottom of this method is
+            # `session.note`, which is the TRANSCRIPT -- a record of what
+            # went over the air, and a capture gain was never part of any
+            # conversation. That is the fault this method exists to fix and
+            # a new screen must not reintroduce it.
+            self.digi_cal_message = text
         elif self.screen in (WSPR, WSPRCAL, WSPRSES):
             self._wspr_note(text)
         elif self.screen == TUNER:
